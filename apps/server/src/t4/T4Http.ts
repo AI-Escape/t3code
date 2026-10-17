@@ -28,6 +28,8 @@ import * as HttpServerResponse from "effect/http/HttpServerResponse";
 
 import * as EnvironmentAuth from "../auth/EnvironmentAuth.ts";
 import * as ThreadLaunch from "../orchestration-v2/ThreadLaunchService.ts";
+import * as ProcessRunner from "../processRunner.ts";
+import * as Project from "../project/ProjectService.ts";
 import * as ThreadManagementService from "../orchestration-v2/ThreadManagementService.ts";
 import * as ScheduledTasks from "../scheduledTasks/ScheduledTaskService.ts";
 import * as T4Config from "./T4Config.ts";
@@ -265,6 +267,33 @@ export const layer = Layer.mergeAll(
       if (modelSelection === undefined)
         return json({ error: "pass modelPreset or modelSelection" }, 400);
       const id = yield* crypto.randomUUIDv4().pipe(Effect.orDie);
+      // V2 creates the worktree after accepting the launch, so a branch that
+      // already exists would fail later; take a fresh one beside it now.
+      let branch = input.branch;
+      if (branch !== undefined) {
+        const projects = yield* Project.ProjectService;
+        const project = Option.getOrUndefined(yield* projects.getById(input.projectId));
+        if (project === undefined) return json({ error: "project not found" }, 404);
+        const processes = yield* ProcessRunner.ProcessRunner;
+        const exists = yield* processes
+          .run({
+            command: "git",
+            args: [
+              "-C",
+              project.workspaceRoot,
+              "show-ref",
+              "--verify",
+              "--quiet",
+              `refs/heads/${branch}`,
+            ],
+            timeout: "15 seconds",
+          })
+          .pipe(
+            Effect.map((out) => out.code === 0),
+            Effect.orElseSucceed(() => false),
+          );
+        if (exists) branch = `${branch}-${id.slice(0, 4)}`;
+      }
       const result = yield* launches.launch({
         commandId: CommandId.make(`t4:launch:${id}`),
         threadId: ThreadId.make(`t4-${id}`),
