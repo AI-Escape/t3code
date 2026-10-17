@@ -10,6 +10,7 @@ import * as Ref from "effect/Ref";
 
 import * as Scheduler from "../scheduling/Scheduler.ts";
 import * as T4Settle from "./T4Settle.ts";
+import * as T4Stalls from "./T4Stalls.ts";
 
 /** Runs `job` at most once per `everyMs`. */
 const throttled = <E, R>(everyMs: number, job: Effect.Effect<void, E, R>) =>
@@ -28,5 +29,6 @@ export const layer = Layer.effectDiscard(
     const scheduler = yield* Scheduler.Scheduler;
     const settle = yield* T4Settle.T4Settle;
     yield* scheduler.register("t4-settle-requests", yield* throttled(60_000, settle.sweep));
+    yield* scheduler.register("t4-stall-recovery", yield* throttled(60_000, T4Stalls.sweep));
   }),
 );
