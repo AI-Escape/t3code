@@ -1081,6 +1081,33 @@ function claudeLiveSelectionFlagSettings(
   };
 }
 
+/**
+ * t4 fork: the provider's `--settings` launch arg (a file path or inline JSON).
+ * The Agent SDK passes a single `--settings` to the CLI and T3 sets its own
+ * (`showThinkingSummaries`, model settings), which replaced the launch arg's
+ * and silently dropped an instance's settings file. Read it here so
+ * `makeClaudeQueryOptions` merges it under T3's keys. An unreadable file is
+ * passed through as a path, as before.
+ */
+export const resolveLaunchArgSettings = Effect.fn("ClaudeAdapterV2.resolveLaunchArgSettings")(
+  function* (fileSystem: FileSystem.FileSystem, launchArgs: string | undefined) {
+    const value = launchArgs === undefined ? undefined : parseCliArgs(launchArgs).flags.settings;
+    if (typeof value !== "string" || value.length === 0) return undefined;
+    const text = value.trimStart().startsWith("{")
+      ? value
+      : yield* fileSystem.readFileString(value).pipe(Effect.orElseSucceed(() => undefined));
+    if (text === undefined) return value;
+    try {
+      const parsed: unknown = JSON.parse(text);
+      return typeof parsed === "object" && parsed !== null && !Array.isArray(parsed)
+        ? (parsed as ClaudeSdkSettings)
+        : value;
+    } catch {
+      return value;
+    }
+  },
+);
+
 export function makeClaudeQueryOptions(input: {
   readonly modelSelection: ModelSelection;
   readonly nativeThreadId: string;
@@ -1111,6 +1138,9 @@ export function makeClaudeQueryOptions(input: {
   const {
     "permission-mode": launchArgPermissionMode,
     "dangerously-skip-permissions": launchArgSkipPermissions,
+    // t4 fork: a `--settings` launch arg reaches the SDK as `sdkSettings`
+    // (resolveLaunchArgSettings), never as a raw arg the SDK would overwrite.
+    settings: _launchArgSettings,
     ...extraArgs
   } = input.settings === undefined ? {} : parseCliArgs(input.settings.launchArgs).flags;
   const requestThinkingSummaries =
@@ -8570,7 +8600,12 @@ export const makeClaudeAdapterV2 = Effect.fn("makeClaudeAdapterV2")(function* (
             turnInput.nativeThreadHasTurns ?? turnInput.providerTurnOrdinal > 1;
           const shouldResume =
             resumeSessionAt !== undefined || openedWithResume || hasPersistedProviderTurn;
+          const launchArgSettings = yield* resolveLaunchArgSettings(
+            fileSystem,
+            adapterOptions.settings.launchArgs,
+          );
           const queryOptions = makeClaudeQueryOptions({
+            ...(launchArgSettings === undefined ? {} : { sdkSettings: launchArgSettings }),
             modelSelection: turnInput.modelSelection,
             nativeThreadId,
             resume: shouldResume,

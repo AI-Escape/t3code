@@ -276,6 +276,60 @@ describe("ClaudeAdapterV2 runtime query policy", () => {
     assert.isUndefined(options.extraArgs?.["dangerously-skip-permissions"]);
   });
 
+  // t4 fork: the SDK passes one --settings, and T3's own settings replaced a
+  // --settings launch arg (an instance's settings file never applied).
+  it("merges a --settings launch arg under T3's own settings", () => {
+    const options = ClaudeAdapterV2.makeClaudeQueryOptions({
+      modelSelection: CLAUDE_TEST_MODEL_SELECTION,
+      nativeThreadId: "launch-arg-settings",
+      resume: false,
+      cwd: "/workspace",
+      settings: {
+        ...DEFAULT_CLAUDE_SETTINGS,
+        launchArgs: "--settings /defaults/claude-settings.json",
+      },
+      sdkSettings: { attribution: { commit: "", pr: "" }, sandbox: { enabled: false } },
+    });
+    assert.isUndefined(options.extraArgs?.["settings"]);
+    assert.deepInclude(options.settings, {
+      attribution: { commit: "", pr: "" },
+      sandbox: { enabled: false },
+      showThinkingSummaries: true,
+    });
+  });
+
+  it.effect("reads a --settings launch arg from a file or inline JSON", () =>
+    Effect.scoped(
+      Effect.gen(function* () {
+        const fileSystem = yield* FileSystem.FileSystem;
+        const dir = yield* fileSystem.makeTempDirectoryScoped({ prefix: "t3-claude-settings-" });
+        const file = `${dir}/claude-settings.json`;
+        yield* fileSystem.writeFileString(file, '{"sandbox":{"enabled":false}}');
+        assert.deepEqual(
+          yield* ClaudeAdapterV2.resolveLaunchArgSettings(fileSystem, `--settings ${file}`),
+          { sandbox: { enabled: false } },
+        );
+        assert.deepEqual(
+          yield* ClaudeAdapterV2.resolveLaunchArgSettings(
+            fileSystem,
+            `--settings '{"attribution":{"commit":""}}'`,
+          ),
+          { attribution: { commit: "" } },
+        );
+        assert.equal(
+          yield* ClaudeAdapterV2.resolveLaunchArgSettings(
+            fileSystem,
+            `--settings ${dir}/missing.json`,
+          ),
+          `${dir}/missing.json`,
+        );
+        assert.isUndefined(
+          yield* ClaudeAdapterV2.resolveLaunchArgSettings(fileSystem, "--effort high"),
+        );
+      }),
+    ).pipe(Effect.provide(NodeServices.layer)),
+  );
+
   it("passes automatic compaction and resume-dialog controls to the SDK", () => {
     const onUserDialog = async () => ({
       behavior: "completed" as const,
