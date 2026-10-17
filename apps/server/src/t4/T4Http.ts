@@ -166,6 +166,67 @@ export const layer = Layer.mergeAll(
     }),
   ),
 
+  // Every pending question and approval across threads, for the dashboard's
+  // approvals list and phone pushes (one call instead of a projection per thread).
+  route("GET", "/api/t4/pending", AuthOrchestrationReadScope, () =>
+    Effect.gen(function* () {
+      const threads = yield* ThreadManagementService.ThreadManagementService;
+      const snapshot = yield* threads.getShellSnapshot({ location: "active" });
+      const waiting = snapshot.threads.filter(
+        (thread) =>
+          thread.pendingRuntimeRequest !== null &&
+          thread.deletedAt === null &&
+          thread.archivedAt === null,
+      );
+      const pending: Array<Record<string, unknown>> = [];
+      for (const thread of waiting) {
+        const records = yield* threads
+          .getProjectThreadRecords({ projectId: thread.projectId, threadId: thread.id }, [
+            "runtimeRequests",
+            "turnItems",
+          ])
+          .pipe(Effect.orElseSucceed(() => null));
+        if (records === null) continue;
+        for (const request of records.runtimeRequests.filter((r) => r.status === "pending")) {
+          const item = records.turnItems.find(
+            (candidate) =>
+              (candidate.type === "user_input_request" || candidate.type === "approval_request") &&
+              candidate.requestId === request.id,
+          );
+          const base = {
+            threadId: thread.id,
+            threadTitle: thread.title,
+            projectId: thread.projectId,
+            requestId: request.id,
+            createdAt: DateTime.formatIso(request.createdAt),
+          };
+          if (request.kind === "user_input" || item?.type === "user_input_request") {
+            const questions = item?.type === "user_input_request" ? item.questions : [];
+            const first = questions[0];
+            pending.push({
+              ...base,
+              kind: "question",
+              title: first?.question ?? first?.header ?? "Question",
+              more: Math.max(0, questions.length - 1),
+              options: (first?.options ?? []).map((option) => option.label),
+            });
+          } else {
+            pending.push({
+              ...base,
+              kind: "permission",
+              title:
+                item?.title ??
+                (item?.type === "approval_request" ? item.requestKind : request.kind),
+              detail: item?.type === "approval_request" ? (item.prompt ?? null) : null,
+              options: [],
+            });
+          }
+        }
+      }
+      return json({ pending });
+    }),
+  ),
+
   // V2's HTTP shell lists active threads only; the dashboard's Archived tab needs these too.
   route("GET", "/api/t4/archived", AuthOrchestrationReadScope, () =>
     Effect.gen(function* () {
