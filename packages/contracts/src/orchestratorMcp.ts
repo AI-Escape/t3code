@@ -60,12 +60,21 @@ const OrchestratorMcpScheduleFromJsonString = Schema.fromJsonString(
     "Compatibility-only JSON encoding of the schedule object. Prefer a structured object.",
 });
 
+/** t4 fork: a one-shot run after a delay, converted to `{type:'once', at}` on save. */
+export const OrchestratorMcpOnceAfterDelaySchedule = Schema.Struct({
+  type: Schema.Literal("once"),
+  delayMs: Schema.Int.check(Schema.isGreaterThan(0)).annotate({
+    description: "Run once after this many milliseconds, e.g. 7200000 for two hours.",
+  }),
+});
+
 const OrchestratorMcpSchedule = Schema.Union([
   ScheduledTaskUpsertSchedule,
+  OrchestratorMcpOnceAfterDelaySchedule,
   OrchestratorMcpScheduleFromJsonString,
 ]).annotate({
   description:
-    "Trigger object: {type:'interval', everyMs}, {type:'fixed_time', timeOfDay, weekdays?}, or {type:'webhook'} to run on each request to a generated URL. Never stringify it unless the provider requires the compatibility form.",
+    "Trigger object: {type:'once', delayMs} or {type:'once', at} to come back once (a wake), {type:'cron', expression}, {type:'interval', everyMs}, {type:'fixed_time', timeOfDay, weekdays?}, or {type:'webhook'} to run on each request to a generated URL. Never stringify it unless the provider requires the compatibility form.",
 });
 
 /**
@@ -552,6 +561,13 @@ export const OrchestratorMcpScheduleTaskInput = Schema.Struct({
     Schema.Boolean.annotate({
       description:
         "True (default) posts each run into this thread; false creates a fresh top-level thread per run.",
+    }),
+  ),
+  /** t4 fork: post runs into this thread instead of the caller's (wake another thread). */
+  threadId: Schema.optional(
+    ThreadId.annotate({
+      description:
+        "Post each run into this thread instead of yours (it must be in the same project).",
     }),
   ),
   clientRequestId: Schema.optional(OrchestratorMcpClientRequestId),

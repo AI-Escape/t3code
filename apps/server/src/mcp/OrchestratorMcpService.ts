@@ -1642,10 +1642,22 @@ const make = Effect.gen(function* () {
         const projectId = yield* resolveProjectTarget(parent, input.projectId);
         yield* assertLiveCallerForOtherProject(scope, parent, projectId);
         const project = yield* requireProject(projectId);
+        // t4 fork: `threadId` posts runs into another thread of this project (a wake for it).
+        const boundThread =
+          input.threadId === undefined
+            ? undefined
+            : (yield* loadScopedThread(scope, input.threadId)).target.thread;
+        if (boundThread !== undefined && boundThread.projectId !== projectId) {
+          return yield* failure(
+            "invalid_request",
+            "threadId names a thread in a different project from the scheduled task.",
+          );
+        }
         // Binding means "wake this thread", which only a thread caller in that project has.
         const bindToCurrentThread =
-          input.bindToCurrentThread ??
-          (parent !== undefined && parent.thread.projectId === projectId);
+          boundThread === undefined &&
+          (input.bindToCurrentThread ??
+            (parent !== undefined && parent.thread.projectId === projectId));
         if (
           bindToCurrentThread &&
           (parent === undefined || parent.thread.projectId !== projectId)
@@ -1662,14 +1674,31 @@ const make = Effect.gen(function* () {
         const derivedTitle = input.prompt.split("\n")[0]?.trim() ?? "";
         const title =
           input.title ?? (derivedTitle.length > 0 ? derivedTitle.slice(0, 80) : "Scheduled task");
+        // t4 fork: {type:'once', delayMs} is stored as {type:'once', at}.
+        const schedule =
+          "delayMs" in input.schedule
+            ? {
+                type: "once" as const,
+                at: DateTime.formatIso(
+                  DateTime.makeUnsafe((yield* Clock.currentTimeMillis) + input.schedule.delayMs),
+                ),
+              }
+            : input.schedule;
         const upsertInput: ScheduledTaskUpsertInput = {
           title,
           prompt: input.prompt,
           enabled: input.enabled ?? true,
-          schedule: input.schedule,
+          schedule,
           projectId,
-          threadId: bindToCurrentThread && parent !== undefined ? parent.thread.id : null,
-          workspaceStrategy: scheduledTaskWorkspaceStrategy(bindToCurrentThread),
+          threadId:
+            boundThread !== undefined
+              ? boundThread.id
+              : bindToCurrentThread && parent !== undefined
+                ? parent.thread.id
+                : null,
+          workspaceStrategy: scheduledTaskWorkspaceStrategy(
+            boundThread !== undefined || bindToCurrentThread,
+          ),
           modelSelection,
           runtimeMode: limits.runtimeMode,
           interactionMode: limits.interactionMode,
@@ -1748,7 +1777,20 @@ const make = Effect.gen(function* () {
           title: input.title ?? existing.title,
           prompt: input.prompt ?? existing.prompt,
           enabled: input.enabled ?? existing.enabled,
-          schedule: input.schedule ?? existing.schedule,
+          // t4 fork: {type:'once', delayMs} is stored as {type:'once', at}.
+          schedule:
+            input.schedule === undefined
+              ? existing.schedule
+              : "delayMs" in input.schedule
+                ? {
+                    type: "once" as const,
+                    at: DateTime.formatIso(
+                      DateTime.makeUnsafe(
+                        (yield* Clock.currentTimeMillis) + input.schedule.delayMs,
+                      ),
+                    ),
+                  }
+                : input.schedule,
           projectId: existing.projectId,
           threadId,
           workspaceStrategy,

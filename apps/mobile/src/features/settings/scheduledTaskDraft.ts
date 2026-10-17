@@ -89,6 +89,10 @@ export function scheduleDraftForTask(task: Pick<ScheduledTask, "schedule">): Sch
             ? ""
             : String(task.schedule.maxDeliveryAgeMinutes),
       };
+    // t4 fork: one-shot and cron schedules are created by agents, not drafted here.
+    case "once":
+    case "cron":
+      return DEFAULT_SCHEDULE;
   }
 }
 

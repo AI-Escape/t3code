@@ -1,6 +1,8 @@
 import { MIN_SCHEDULED_TASK_INTERVAL_MS, type ScheduledTaskSchedule } from "@t3tools/contracts";
 import * as DateTime from "effect/DateTime";
 
+import { nextCronRunAt } from "../t4/cron.ts";
+
 const MINUTE_MS = 60_000;
 
 export function parseTimeOfDay(value: string): { hour: number; minute: number } | null {
@@ -14,6 +16,13 @@ export function nextScheduledRunAt(
   from: DateTime.DateTime,
 ): DateTime.DateTime | null {
   if (schedule.type === "webhook") return null;
+  // t4 fork: one-shot and cron schedules.
+  if (schedule.type === "once") {
+    const at = DateTime.make(schedule.at);
+    if (at._tag === "None") return null;
+    return DateTime.toEpochMillis(at.value) > DateTime.toEpochMillis(from) ? at.value : null;
+  }
+  if (schedule.type === "cron") return nextCronRunAt(schedule.expression, from);
   if (schedule.type === "interval") {
     // Persisted rows created before the one-minute floor remain readable, but
     // they must not retain their old high-frequency execution rate.
@@ -58,6 +67,8 @@ export function isSameSchedule(a: ScheduledTaskSchedule, b: ScheduledTaskSchedul
   }
   // Webhook tasks never have a next run, whatever their signature settings.
   if (a.type === "webhook") return b.type === "webhook";
+  if (a.type === "once") return b.type === "once" && a.at === b.at;
+  if (a.type === "cron") return b.type === "cron" && a.expression.trim() === b.expression.trim();
   if (b.type !== "fixed_time") return false;
   // The contract accepts padded and unpadded hours ("9:00" and "09:00"), so
   // compare the parsed time — string equality would treat a format-only edit
@@ -97,6 +108,9 @@ export function isMissedFixedTimeRun(
 
 function describeSchedule(schedule: ScheduledTaskSchedule): string {
   if (schedule.type === "webhook") return "On webhook";
+  // t4 fork: one-shot and cron schedules.
+  if (schedule.type === "once") return `Once at ${schedule.at}`;
+  if (schedule.type === "cron") return `Cron ${schedule.expression}`;
   if (schedule.type === "interval") {
     const minutes = schedule.everyMs / MINUTE_MS;
     if (Number.isInteger(minutes)) {

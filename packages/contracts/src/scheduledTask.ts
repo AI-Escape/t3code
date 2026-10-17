@@ -122,6 +122,23 @@ const ScheduledTaskUpsertWebhookSchedule = Schema.Struct({
     "Run on each request to the task's webhook URL. The prompt may use {{body.path}}, {{headers.name}}, {{query.name}}, {{body}} and {{request}} placeholders.",
 });
 
+// t4 fork: one-shot and cron schedules (t4's wakes). A `once` task has no
+// next run after it fires.
+const ScheduledTaskOnceSchedule = Schema.Struct({
+  type: Schema.Literal("once").annotate({ description: "Run once, at a given time." }),
+  at: IsoDateTime.annotate({ description: "When to run, as an ISO 8601 instant." }),
+}).annotate({ description: "Run once at a given time." });
+
+const ScheduledTaskCronSchedule = Schema.Struct({
+  type: Schema.Literal("cron").annotate({ description: "Select cron scheduling." }),
+  expression: TrimmedNonEmptyString.check(
+    Schema.isPattern(/^\S+\s+\S+\s+\S+\s+\S+\s+\S+$/),
+  ).annotate({
+    description:
+      "Five fields in the server's time zone: minute hour day-of-month month day-of-week, e.g. '0 9 * * 1-5'.",
+  }),
+}).annotate({ description: "Run on a cron schedule." });
+
 /**
  * Read model for persisted schedules. Keep accepting legacy sub-minute rows so
  * users can list, disable, edit, or delete them after the write minimum changes.
@@ -130,9 +147,11 @@ export const ScheduledTaskSchedule = Schema.Union([
   ScheduledTaskIntervalSchedule,
   ScheduledTaskFixedTimeSchedule,
   ScheduledTaskWebhookSchedule,
+  ScheduledTaskOnceSchedule,
+  ScheduledTaskCronSchedule,
 ]).annotate({
   description:
-    "Structured trigger. Pass an object with type 'interval', 'fixed_time' or 'webhook'.",
+    "Structured trigger. Pass an object with type 'interval', 'fixed_time', 'webhook', 'once' or 'cron'.",
 });
 export type ScheduledTaskSchedule = typeof ScheduledTaskSchedule.Type;
 
@@ -152,8 +171,11 @@ export const ScheduledTaskUpsertSchedule = Schema.Union([
   }),
   ScheduledTaskFixedTimeSchedule,
   ScheduledTaskUpsertWebhookSchedule,
+  ScheduledTaskOnceSchedule,
+  ScheduledTaskCronSchedule,
 ]).annotate({
-  description: "Writable trigger. Pass an object with type 'interval', 'fixed_time' or 'webhook'.",
+  description:
+    "Writable trigger. Pass an object with type 'interval', 'fixed_time', 'webhook', 'once' or 'cron'.",
 });
 export type ScheduledTaskUpsertSchedule = typeof ScheduledTaskUpsertSchedule.Type;
 

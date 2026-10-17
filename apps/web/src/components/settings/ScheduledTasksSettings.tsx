@@ -174,6 +174,9 @@ function splitModelKey(value: string): ModelSelection | null {
 
 export function scheduleLabel(schedule: ScheduledTaskSchedule): string {
   if (schedule.type === "webhook") return "On webhook";
+  // t4 fork: one-shot and cron schedules (created by agents as wakes).
+  if (schedule.type === "once") return `Once at ${new Date(schedule.at).toLocaleString()}`;
+  if (schedule.type === "cron") return `Cron ${schedule.expression}`;
   if (schedule.type === "interval") {
     const minutes = schedule.everyMs / 60_000;
     return Number.isInteger(minutes)

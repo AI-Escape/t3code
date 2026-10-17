@@ -105,6 +105,10 @@ const DAYS = [
 function describeSchedule(task: ScheduledTask): string {
   if (task.schedule.type === "webhook") return "On webhook";
   if (task.schedule.type === "interval") return formatScheduledTaskInterval(task.schedule.everyMs);
+  // t4 fork: one-shot and cron schedules (created by agents as wakes).
+  if (task.schedule.type === "once")
+    return `Once at ${new Date(task.schedule.at).toLocaleString()}`;
+  if (task.schedule.type === "cron") return `Cron ${task.schedule.expression}`;
   const days = task.schedule.weekdays?.length ? repeatLabel(task.schedule.weekdays) : "Every day";
   return `${days} at ${formatTime(task.schedule.timeOfDay)}`;
 }

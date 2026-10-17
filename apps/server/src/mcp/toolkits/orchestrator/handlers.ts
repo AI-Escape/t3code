@@ -2,7 +2,11 @@ import { OrchestratorMcpFailure } from "@t3tools/contracts";
 import { OrchestratorToolkit } from "./tools.ts";
 import * as Effect from "effect/Effect";
 
-import { readCaller } from "../../threadAccess.ts";
+import * as Clock from "effect/Clock";
+import * as DateTime from "effect/DateTime";
+import * as ScheduledTasks from "../../../scheduledTasks/ScheduledTaskService.ts";
+import * as Wakes from "../../../t4/wakes.ts";
+import { readCaller, unavailable } from "../../threadAccess.ts";
 import * as McpInvocationContext from "../../McpInvocationContext.ts";
 import * as McpToolAccess from "../../McpToolAccess.ts";
 import * as OrchestratorMcpService from "../../OrchestratorMcpService.ts";
@@ -64,7 +68,38 @@ const handlers = {
       Effect.gen(function* () {
         const scope = yield* McpInvocationContext.McpInvocationContext;
         const service = yield* OrchestratorMcpService.OrchestratorMcpService;
-        return yield* service.scheduleTask(scope, input);
+        // t4 fork: a task posted into a thread is a wake - t4's limits and
+        // its "WAKE (scheduled …)" header (t4/wakes.ts).
+        const { caller } = yield* readCaller();
+        const schedule = input.schedule as Wakes.WakeSchedule;
+        const boundThreadId =
+          input.threadId ??
+          ((input.bindToCurrentThread ??
+          (caller !== undefined && (input.projectId ?? caller.projectId) === caller.projectId))
+            ? caller?.id
+            : undefined);
+        if (boundThreadId === undefined || schedule.type === "webhook") {
+          return yield* service.scheduleTask(scope, input);
+        }
+        const scheduledTasks = yield* ScheduledTasks.ScheduledTaskService;
+        const { tasks } = yield* scheduledTasks.list().pipe(Effect.mapError(unavailable));
+        const pending = tasks.filter(
+          (task) => task.threadId === boundThreadId && task.enabled && task.nextRunAt !== null,
+        ).length;
+        const now = yield* Clock.currentTimeMillis;
+        const refused = Wakes.wakeRefusal(schedule, pending, now);
+        if (refused !== undefined) {
+          return yield* new OrchestratorMcpFailure({ code: "invalid_request", message: refused });
+        }
+        return yield* service.scheduleTask(scope, {
+          ...input,
+          prompt: Wakes.wakePrompt({
+            note: input.prompt,
+            scheduledAtLabel: `${DateTime.formatIso(DateTime.makeUnsafe(now)).slice(0, 16).replace("T", " ")} UTC`,
+            byTitle: caller?.title,
+            recurring: schedule.type !== "once",
+          }),
+        });
       }),
   ),
   list_scheduled_tasks: McpToolAccess.reads((input) =>
