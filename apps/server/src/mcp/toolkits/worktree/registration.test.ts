@@ -34,6 +34,10 @@ import * as McpHttpServer from "../../McpHttpServer.ts";
 import * as McpSessionRegistry from "../../McpSessionRegistry.ts";
 import * as PreviewAutomationBroker from "../../PreviewAutomationBroker.ts";
 import * as PreviewBrowser from "../../../preview/PreviewBrowser.ts";
+import * as T4Config from "../../../t4/T4Config.ts";
+import * as T4Delivery from "../../../t4/T4Delivery.ts";
+import * as T4Ledger from "../../../t4/T4Ledger.ts";
+import * as T4Store from "../../../t4/T4Store.ts";
 
 const layerStubServices = Layer.mergeAll(
   Layer.mock(Orchestrator.OrchestratorV2)({}),
@@ -57,6 +61,14 @@ const layerStubServices = Layer.mergeAll(
   Layer.mock(SourceControlRepositoryService.SourceControlRepositoryService)({}),
   Layer.mock(ThreadLaunchService.ThreadLaunchService)({}),
   Layer.mock(ThreadSearch.ThreadSearch)({}),
+  // t4 fork: session tooling services.
+  Layer.mock(T4Ledger.T4Ledger)({
+    isReleaseManager: () => false,
+    facts: () => ({ isReleaseManager: false, owes: 0, owedBy: 0 }),
+  }),
+  Layer.mock(T4Store.T4Store)({}),
+  Layer.mock(T4Delivery.T4Delivery)({}),
+  T4Config.layerTest(),
 );
 
 const ToolsListPayload = Schema.fromJsonString(
