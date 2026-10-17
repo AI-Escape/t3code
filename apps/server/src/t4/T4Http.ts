@@ -166,6 +166,23 @@ export const layer = Layer.mergeAll(
     }),
   ),
 
+  // V2's HTTP shell lists active threads only; the dashboard's Archived tab needs these too.
+  route("GET", "/api/t4/archived", AuthOrchestrationReadScope, () =>
+    Effect.gen(function* () {
+      const threads = yield* ThreadManagementService.ThreadManagementService;
+      const snapshot = yield* threads.getShellSnapshot({ location: "archive" });
+      const archived = [...snapshot.archivedThreads, ...snapshot.threads]
+        .filter((thread) => thread.archivedAt !== null && thread.deletedAt === null)
+        .toSorted(
+          (left, right) =>
+            DateTime.toEpochMillis(right.archivedAt ?? right.updatedAt) -
+            DateTime.toEpochMillis(left.archivedAt ?? left.updatedAt),
+        )
+        .slice(0, 500);
+      return json({ threads: archived });
+    }),
+  ),
+
   route("POST", "/api/t4/launch", AuthOrchestrationOperateScope, () =>
     Effect.gen(function* () {
       const input = yield* body(LaunchBody);
