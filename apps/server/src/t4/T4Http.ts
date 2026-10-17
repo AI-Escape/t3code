@@ -380,6 +380,24 @@ export const layer = Layer.mergeAll(
     }),
   ),
 
+  // `t4 run`'s throwaway threads.
+  route("POST", "/api/t4/threads/:threadId/delete", AuthOrchestrationOperateScope, (params) =>
+    Effect.gen(function* () {
+      const threads = yield* ThreadManagementService.ThreadManagementService;
+      const crypto = yield* Crypto.Crypto;
+      const threadId = ThreadId.make(params.threadId ?? "");
+      if ((yield* threads.getThreadShell(threadId)) === null)
+        return json({ error: "thread not found" }, 404);
+      const uuid = yield* crypto.randomUUIDv4().pipe(Effect.orDie);
+      yield* threads.dispatch({
+        type: "thread.delete",
+        commandId: CommandId.make(`t4:delete:${uuid}`),
+        threadId,
+      });
+      return json({ threadId, deleted: true });
+    }),
+  ),
+
   route("POST", "/api/t4/threads/:threadId/message", AuthOrchestrationOperateScope, (params) =>
     Effect.gen(function* () {
       const input = yield* body(MessageBody);
