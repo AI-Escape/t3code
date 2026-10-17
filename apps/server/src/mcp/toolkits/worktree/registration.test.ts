@@ -37,6 +37,7 @@ import * as PreviewBrowser from "../../../preview/PreviewBrowser.ts";
 import * as T4Config from "../../../t4/T4Config.ts";
 import * as T4Delivery from "../../../t4/T4Delivery.ts";
 import * as T4Ledger from "../../../t4/T4Ledger.ts";
+import * as T4Settle from "../../../t4/T4Settle.ts";
 import * as T4Store from "../../../t4/T4Store.ts";
 
 const layerStubServices = Layer.mergeAll(
@@ -68,6 +69,7 @@ const layerStubServices = Layer.mergeAll(
   }),
   Layer.mock(T4Store.T4Store)({}),
   Layer.mock(T4Delivery.T4Delivery)({}),
+  Layer.mock(T4Settle.T4Settle)({}),
   T4Config.layerTest(),
 );
 

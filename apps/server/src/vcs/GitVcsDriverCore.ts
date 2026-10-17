@@ -38,6 +38,7 @@ import { resolveProjectFileBackedSetting } from "@t3tools/shared/projectSettings
 import { gitCommandDuration, gitCommandsTotal, withMetrics } from "../observability/Metrics.ts";
 import * as GitVcsDriver from "./GitVcsDriver.ts";
 import { resolveWorktreesDirectory } from "../worktreesDirectory.ts";
+import { uniqueWorktreePath, worktreeNamingMode } from "../t4/worktreeNaming.ts";
 import {
   parseRemoteNames,
   parseRemoteNamesInGitOrder,
@@ -3476,7 +3477,16 @@ export const makeGitVcsDriverCore = Effect.fn("makeGitVcsDriverCore")(function* 
           detail: `The worktree location "${options?.worktreesDirectory}" must be an absolute folder on this machine, not a drive root. Change it in Settings → Storage.`,
         });
       }
-      worktreePath = path.join(parentDir, repoName, sanitizedBranch);
+      worktreePath =
+        // t4 fork: short, flat worktree directories (T4_WORKTREE_NAMING=issueId).
+        worktreeNamingMode() === "issueId"
+          ? yield* uniqueWorktreePath(
+              parentDir,
+              targetBranch,
+              (...parts) => path.join(...parts),
+              (candidate) => fileSystem.exists(candidate).pipe(Effect.orElseSucceed(() => false)),
+            )
+          : path.join(parentDir, repoName, sanitizedBranch);
     }
     const args = input.newRefName
       ? ["worktree", "add", "-b", input.newRefName, worktreePath, input.refName]

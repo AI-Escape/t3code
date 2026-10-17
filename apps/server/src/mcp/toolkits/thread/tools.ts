@@ -30,7 +30,7 @@ import * as McpInvocationContext from "../../McpInvocationContext.ts";
 
 const ThreadOrganizeTool = Tool.make("t3_thread_organize", {
   description:
-    "Pin, snooze, settle, archive, or mark a thread unread. Omit threadId for this thread. snooze requires snoozedUntil. Existing thread lifecycle rules apply. Settling this thread takes effect when your turn completes, returning settlesWhenTurnEnds=true; a turn that fails or is interrupted, or a queued message, leaves it active.",
+    "Pin, snooze, settle, archive, or mark a thread unread. Omit threadId for this thread. snooze requires snoozedUntil. Settle your own thread as the last act of a finished piece of work: it is refused for a release manager and while you still owe a handoff an answer (`t3_owed`); it retires your worktree's dev environment and takes effect when your turn ends (settlesWhenTurnEnds=true). A message that reaches you after it, other than a handoff that asks nothing, cancels it and you are told.",
   parameters: Schema.Struct({
     threadId: Schema.optional(ThreadId),
     action: Schema.Literals([
@@ -48,7 +48,11 @@ const ThreadOrganizeTool = Tool.make("t3_thread_organize", {
   }),
   success: Schema.Union([
     OrchestrationV2DispatchCommandResult,
-    Schema.Struct({ settlesWhenTurnEnds: Schema.Literal(true) }),
+    Schema.Struct({
+      settlesWhenTurnEnds: Schema.Literal(true),
+      // t4 fork: what settling did (dev footprint retired, pending wakes).
+      notes: Schema.optional(Schema.Array(Schema.String)),
+    }),
   ]),
   failure: OrchestratorMcpFailure,
   failureMode: "return" as const,

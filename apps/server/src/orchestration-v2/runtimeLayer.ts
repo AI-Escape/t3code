@@ -1,3 +1,5 @@
+import * as T4 from "../t4/layer.ts";
+import * as T4Jobs from "../t4/T4Jobs.ts";
 import * as UsageLimitRecoveryWorker from "./UsageLimitRecoveryWorker.ts";
 import * as Scheduler from "../scheduling/Scheduler.ts";
 import * as Layer from "effect/Layer";
@@ -362,4 +364,9 @@ export const layerProduction = Layer.mergeAll(
   layerProviderContinuationWorkerProvided,
   layerAgentSessionImporterProvided,
   EffectOutbox.layerPruneWorker.pipe(Layer.provide(EffectOutbox.layer)),
+  // t4 fork: session-tooling jobs (settle requests, wakes, stall recovery).
+  T4Jobs.layer.pipe(
+    Layer.provide(T4.layer),
+    Layer.provide(Layer.mergeAll(layerThreadManagementProvided, layerThreadLaunchProvided)),
+  ),
 ).pipe(Layer.provide(Scheduler.layer), Layer.provideMerge(layerEventInfrastructure));

@@ -8,6 +8,7 @@ import {
   type OrchestrationV2Command,
 } from "@t3tools/contracts";
 import * as Effect from "effect/Effect";
+import * as Option from "effect/Option";
 import { modelSelectionCommandType } from "@t3tools/shared/model";
 
 import * as McpToolAccess from "../../McpToolAccess.ts";
@@ -21,6 +22,7 @@ import {
 import * as ThreadSearch from "../../../orchestration-v2/ThreadSearch.ts";
 import * as ScheduledTasks from "../../../scheduledTasks/ScheduledTaskService.ts";
 import { queuedRunsInDeliveryOrder } from "../../../orchestration-v2/QueuedRunOrder.ts";
+import * as T4Settle from "../../../t4/T4Settle.ts";
 import { ThreadToolkit } from "./tools.ts";
 
 function queueEntry(
@@ -295,6 +297,27 @@ export const layer = McpToolAccess.toLayer(ThreadToolkit, {
       const { threads, projection, caller } = yield* readThread(input.threadId);
       const common = { commandId: yield* newCommandId(), threadId: projection.thread.id };
       if (input.action === "settle") {
+        // t4 fork: an agent settling its own thread - refused for release
+        // managers and while it owes a handoff; carried out by the t4 sweep
+        // once its turn ends (T4Settle).
+        const t4Settle = yield* Effect.serviceOption(T4Settle.T4Settle);
+        if (caller?.id === projection.thread.id && Option.isSome(t4Settle)) {
+          const t4 = t4Settle.value;
+          const shell = yield* threads
+            .getThreadShell(projection.thread.id)
+            .pipe(Effect.mapError(unavailable));
+          if (shell !== null) {
+            const refused = yield* t4.refusal(shell);
+            if (refused !== undefined) {
+              return yield* new OrchestratorMcpFailure({
+                code: "invalid_request",
+                message: refused,
+              });
+            }
+            const notes = yield* t4.request(shell);
+            return { settlesWhenTurnEnds: true as const, notes };
+          }
+        }
         return yield* threads
           .settleThread({ ...common, byOwnAgent: caller?.id === projection.thread.id })
           .pipe(Effect.mapError(dispatchFailure));
