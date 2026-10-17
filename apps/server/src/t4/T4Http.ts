@@ -143,7 +143,8 @@ export const layer = Layer.mergeAll(
       const scheduledTasks = yield* Effect.serviceOption(ScheduledTasks.ScheduledTaskService);
       const tasks =
         scheduledTasks._tag === "Some"
-          ? (yield* scheduledTasks.value.list().pipe(Effect.orElseSucceed(() => ({ tasks: [] })))).tasks
+          ? (yield* scheduledTasks.value.list().pipe(Effect.orElseSucceed(() => ({ tasks: [] }))))
+              .tasks
           : [];
       return json({
         wakes: tasks
