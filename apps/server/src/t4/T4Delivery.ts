@@ -31,7 +31,7 @@ import * as ThreadManagementService from "../orchestration-v2/ThreadManagementSe
 import * as T4Config from "./T4Config.ts";
 import * as T4Ledger from "./T4Ledger.ts";
 import * as T4Store from "./T4Store.ts";
-import { isRunning } from "./T4Threads.ts";
+import { isRunning, shortId } from "./T4Threads.ts";
 
 export class T4DeliveryError extends Schema.TaggedError<T4DeliveryError>()("T4DeliveryError", {
   message: Schema.String,
@@ -60,6 +60,15 @@ export interface T4DeliverResult {
 
 export interface T4DeliveryShape {
   readonly deliver: (input: T4DeliverInput) => Effect.Effect<T4DeliverResult, T4DeliveryError>;
+  /**
+   * `cmd_msg`: a thread-to-thread message as t4 sends it - sender header, the
+   * delivery notes; archived targets refused.
+   */
+  readonly decorate: (input: {
+    readonly sender: OrchestrationV2ThreadShell;
+    readonly target: OrchestrationV2ThreadShell;
+    readonly text: string;
+  }) => Effect.Effect<string, T4DeliveryError>;
 }
 
 export class T4Delivery extends Context.Service<T4Delivery, T4DeliveryShape>()(
@@ -115,6 +124,31 @@ export const make = Effect.gen(function* () {
             Effect.orElseSucceed(() => [] as ReadonlyArray<string>),
           );
 
+  /** The two delivery notes, prepended when they apply. */
+  const withNotes = (target: OrchestrationV2ThreadShell, text: string) =>
+    Effect.gen(function* () {
+      const notes: Array<string> = [];
+      const questions = yield* pendingQuestions(target);
+      if (questions.length > 0) notes.push(UNANSWERED_QUESTION_NOTE(questions));
+      if (target.providerInstanceId.startsWith("claude") && isRunning(target)) {
+        notes.push(CANCELLED_TOOL_NOTE);
+      }
+      return notes.length === 0
+        ? text
+        : `${notes.map((note) => `(Thread tools: ${note})`).join("\n\n")}\n\n${text}`;
+    });
+
+  const decorate: T4DeliveryShape["decorate"] = (input) =>
+    Effect.gen(function* () {
+      if (input.target.archivedAt !== null) {
+        return yield* new T4DeliveryError({
+          message: `"${input.target.title}" is archived - its work is closed; start a new thread instead`,
+        });
+      }
+      const header = `Message from thread "${input.sender.title}" (${shortId(input.sender.id)}):\n\n`;
+      return yield* withNotes(input.target, header + input.text);
+    });
+
   const deliver: T4DeliveryShape["deliver"] = (input) =>
     Effect.gen(function* () {
       if (input.target.archivedAt !== null) {
@@ -127,19 +161,8 @@ export const make = Effect.gen(function* () {
         (yield* threadManagement
           .getThreadShell(input.target.id)
           .pipe(Effect.orElseSucceed(() => null))) ?? input.target;
-      let text = input.text;
       const running = isRunning(target);
-      if (input.force !== true) {
-        const notes: Array<string> = [];
-        const questions = yield* pendingQuestions(target);
-        if (questions.length > 0) notes.push(UNANSWERED_QUESTION_NOTE(questions));
-        if (target.providerInstanceId.startsWith("claude") && running) {
-          notes.push(CANCELLED_TOOL_NOTE);
-        }
-        if (notes.length > 0) {
-          text = `${notes.map((note) => `(Thread tools: ${note})`).join("\n\n")}\n\n${text}`;
-        }
-      }
+      const text = input.force === true ? input.text : yield* withNotes(target, input.text);
 
       const world = yield* ledger.world().pipe(Effect.mapError(fail("t4 ledger unavailable")));
       const rmModel = config.releaseManagerModel;
@@ -180,7 +203,7 @@ export const make = Effect.gen(function* () {
       return { messageId, delivery: result.delivery, how };
     });
 
-  return T4Delivery.of({ deliver });
+  return T4Delivery.of({ deliver, decorate });
 });
 
 export const layer = Layer.effect(T4Delivery, make);

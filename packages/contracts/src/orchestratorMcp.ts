@@ -326,8 +326,25 @@ export const OrchestratorMcpThreadListInput = Schema.Struct({
 });
 export type OrchestratorMcpThreadListInput = typeof OrchestratorMcpThreadListInput.Type;
 
+/** t4 fork: a thread's standing in t4's session tooling. */
+export const OrchestratorMcpThreadT4Facts = Schema.Struct({
+  state: Schema.String.annotate({
+    description: "running, waiting-you, settled, snoozed, idle or archived.",
+  }),
+  isReleaseManager: Schema.Boolean,
+  owes: Schema.Number.annotate({ description: "Open handoffs this thread still has to answer." }),
+  owedBy: Schema.Number.annotate({
+    description: "Open handoffs others owe this thread an answer.",
+  }),
+  issues: Schema.Array(Schema.String).annotate({
+    description: "Linked issues (it owns them while open).",
+  }),
+});
+
 export const OrchestratorMcpThreadListItem = Schema.Struct({
   threadId: ThreadId,
+  /** t4 fork. */
+  t4: Schema.optional(OrchestratorMcpThreadT4Facts),
   title: Schema.String,
   createdBy: OrchestrationV2Actor,
   creationSource: OrchestrationV2CreationSource,
@@ -375,6 +392,8 @@ export type OrchestratorMcpThreadReadInput = typeof OrchestratorMcpThreadReadInp
 
 export const OrchestratorMcpThreadDetail = Schema.Struct({
   threadId: ThreadId,
+  /** t4 fork. */
+  t4: Schema.optional(OrchestratorMcpThreadT4Facts),
   projectId: ProjectId,
   title: Schema.String,
   createdBy: OrchestrationV2Actor,

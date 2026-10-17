@@ -5,6 +5,9 @@ import * as Effect from "effect/Effect";
 import * as Clock from "effect/Clock";
 import * as DateTime from "effect/DateTime";
 import * as ScheduledTasks from "../../../scheduledTasks/ScheduledTaskService.ts";
+import * as Option from "effect/Option";
+import * as T4Delivery from "../../../t4/T4Delivery.ts";
+import * as T4Facts from "../../../t4/T4Facts.ts";
 import * as Wakes from "../../../t4/wakes.ts";
 import { readCaller, unavailable } from "../../threadAccess.ts";
 import * as McpInvocationContext from "../../McpInvocationContext.ts";
@@ -141,7 +144,18 @@ const handlers = {
     Effect.gen(function* () {
       const scope = yield* McpInvocationContext.McpInvocationContext;
       const service = yield* OrchestratorMcpService.OrchestratorMcpService;
-      return yield* service.listThreads(scope, input);
+      const result = yield* service.listThreads(scope, input);
+      // t4 fork: each thread's ledger standing and linked issues.
+      const facts = yield* T4Facts.optionalFactsFor(
+        result.threads.map((thread) => thread.threadId),
+      );
+      return {
+        ...result,
+        threads: result.threads.map((thread) => {
+          const t4 = facts.get(thread.threadId);
+          return t4 === undefined ? thread : { ...thread, t4 };
+        }),
+      };
     }),
   ),
   // Reading a child's finished result also acknowledges its delivery to the
@@ -151,7 +165,12 @@ const handlers = {
     Effect.gen(function* () {
       const scope = yield* McpInvocationContext.McpInvocationContext;
       const service = yield* OrchestratorMcpService.OrchestratorMcpService;
-      return yield* service.readThread(scope, input);
+      const result = yield* service.readThread(scope, input);
+      // t4 fork: the thread's ledger standing and linked issues.
+      const t4 = (yield* T4Facts.optionalFactsFor([result.thread.threadId])).get(
+        result.thread.threadId,
+      );
+      return t4 === undefined ? result : { ...result, thread: { ...result.thread, t4 } };
     }),
   ),
   t3_thread_update: McpToolAccess.writesThreads(
@@ -169,6 +188,29 @@ const handlers = {
       Effect.gen(function* () {
         const scope = yield* McpInvocationContext.McpInvocationContext;
         const service = yield* OrchestratorMcpService.OrchestratorMcpService;
+        // t4 fork: a message from another thread carries t4's sender header
+        // and delivery notes; archived targets are refused (T4Delivery).
+        const t4 = yield* Effect.serviceOption(T4Delivery.T4Delivery);
+        const { caller, threads } = yield* readCaller();
+        if (Option.isSome(t4) && caller !== undefined && caller.id !== input.threadId) {
+          const target = yield* threads
+            .getThreadShell(input.threadId)
+            .pipe(Effect.mapError(unavailable));
+          if (target !== null) {
+            const message = yield* t4.value
+              .decorate({ sender: caller, target, text: input.message })
+              .pipe(
+                Effect.mapError(
+                  (error) =>
+                    new OrchestratorMcpFailure({
+                      code: "thread_not_sendable",
+                      message: error.message,
+                    }),
+                ),
+              );
+            return yield* service.sendToThread(scope, { ...input, message });
+          }
+        }
         return yield* service.sendToThread(scope, input);
       }),
   ),
