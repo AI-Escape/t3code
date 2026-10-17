@@ -23,6 +23,7 @@ import * as Path from "effect/Path";
 
 import * as ThreadManagementService from "../orchestration-v2/ThreadManagementService.ts";
 import * as ProcessRunner from "../processRunner.ts";
+import * as ScheduledTasks from "../scheduledTasks/ScheduledTaskService.ts";
 import * as T4Config from "./T4Config.ts";
 import * as T4Delivery from "./T4Delivery.ts";
 import * as T4Ledger from "./T4Ledger.ts";
@@ -144,10 +145,19 @@ export const make = Effect.gen(function* () {
           }
         }
       }
-      const wakes = yield* store.wakes(thread.id).pipe(Effect.orElseSucceed(() => []));
+      // Wakes are scheduled tasks posted into this thread.
+      const scheduledTasks = yield* Effect.serviceOption(ScheduledTasks.ScheduledTaskService);
+      const wakes =
+        scheduledTasks._tag === "Some"
+          ? (yield* scheduledTasks.value
+              .list()
+              .pipe(Effect.orElseSucceed(() => ({ tasks: [] })))).tasks.filter(
+              (task) => task.threadId === thread.id && task.enabled && task.nextRunAt !== null,
+            )
+          : [];
       if (wakes.length > 0) {
         notes.push(
-          `note: wake ${wakes.map((w) => `#${w.id}`).join(", ")} still pending - cancel it (\`delete_scheduled_task\`) unless you mean to come back`,
+          `note: wake ${wakes.map((w) => `"${w.title}" (${w.id})`).join(", ")} still pending - cancel it (\`delete_scheduled_task\`) unless you mean to come back`,
         );
       }
       notes.push(
