@@ -1089,6 +1089,10 @@ function claudeLiveSelectionFlagSettings(
  * `makeClaudeQueryOptions` merges it under T3's keys. An unreadable file is
  * passed through as a path, as before.
  */
+const decodeLaunchArgSettingsJson = Schema.decodeUnknownEffect(
+  Schema.fromJsonString(Schema.Unknown),
+);
+
 export const resolveLaunchArgSettings = Effect.fn("ClaudeAdapterV2.resolveLaunchArgSettings")(
   function* (fileSystem: FileSystem.FileSystem, launchArgs: string | undefined) {
     const value = launchArgs === undefined ? undefined : parseCliArgs(launchArgs).flags.settings;
@@ -1097,14 +1101,12 @@ export const resolveLaunchArgSettings = Effect.fn("ClaudeAdapterV2.resolveLaunch
       ? value
       : yield* fileSystem.readFileString(value).pipe(Effect.orElseSucceed(() => undefined));
     if (text === undefined) return value;
-    try {
-      const parsed: unknown = JSON.parse(text);
-      return typeof parsed === "object" && parsed !== null && !Array.isArray(parsed)
-        ? (parsed as ClaudeSdkSettings)
-        : value;
-    } catch {
-      return value;
-    }
+    const parsed = yield* decodeLaunchArgSettingsJson(text).pipe(
+      Effect.orElseSucceed(() => undefined),
+    );
+    return typeof parsed === "object" && parsed !== null && !Array.isArray(parsed)
+      ? (parsed as ClaudeSdkSettings)
+      : value;
   },
 );
 
