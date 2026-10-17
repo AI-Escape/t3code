@@ -3,11 +3,11 @@ import { assert, describe, it } from "@effect/vitest";
 import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
 
-import * as Sqlite from "../persistence/Sqlite.ts";
+import * as T4Sql from "./T4Sql.ts";
 import * as T4Store from "./T4Store.ts";
 
 const layer = T4Store.layer.pipe(
-  Layer.provideMerge(Sqlite.layerMemory),
+  Layer.provideMerge(T4Sql.layerMemory),
   Layer.provide(NodeServices.layer),
 );
 
