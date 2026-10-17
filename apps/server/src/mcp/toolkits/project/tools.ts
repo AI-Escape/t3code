@@ -130,6 +130,25 @@ const ThreadLaunchTool = Tool.make("t3_thread_launch", {
       }),
     ),
     attachments: Schema.optional(Schema.Array(McpAttachmentInput).check(Schema.isMaxLength(8))),
+    // t4 fork: spawn behaviour (t4/T4Spawn.ts).
+    issues: Schema.optional(
+      Schema.Array(Schema.String).annotate({
+        description:
+          "Issues (e.g. USA-1234) the new thread owns: linked at creation. One that an open thread already owns is refused unless anyway.",
+      }),
+    ),
+    modelPreset: Schema.optional(
+      Schema.String.annotate({
+        description:
+          "A named model selection configured on this server, instead of modelSelection.",
+      }),
+    ),
+    anyway: Schema.optional(
+      Schema.Boolean.annotate({
+        description:
+          "Launch although other threads are live in this project (or own one of the issues). Without it a thread's launch is refused with the live threads listed - if one already owns the work, message it instead.",
+      }),
+    ),
   }),
   success: Schema.Struct({
     threadId: ThreadId,

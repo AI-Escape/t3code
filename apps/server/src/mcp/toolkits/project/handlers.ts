@@ -1,5 +1,9 @@
 import { MessageId, ThreadId, OrchestratorMcpFailure, ProjectId } from "@t3tools/contracts";
 import * as Effect from "effect/Effect";
+import * as T4Config from "../../../t4/T4Config.ts";
+import * as T4Ledger from "../../../t4/T4Ledger.ts";
+import * as T4Spawn from "../../../t4/T4Spawn.ts";
+import * as T4Store from "../../../t4/T4Store.ts";
 import * as FileSystem from "effect/FileSystem";
 import * as Option from "effect/Option";
 import * as ThreadLaunch from "../../../orchestration-v2/ThreadLaunchService.ts";
@@ -124,7 +128,43 @@ export const layer = McpToolAccess.toLayer(ProjectToolkit, {
                 }),
             ),
           );
+        // t4 fork: spawn rules - live-thread guard, issue ownership, spawn footer.
+        const t4Ledger = yield* Effect.serviceOption(T4Ledger.T4Ledger);
+        const t4Config = yield* Effect.serviceOption(T4Config.T4ServerConfig);
+        const t4Store = yield* Effect.serviceOption(T4Store.T4Store);
+        const issues = input.issues ?? [];
+        let launchMessage = input.message;
+        if (Option.isSome(t4Ledger) && Option.isSome(t4Store)) {
+          const before = yield* T4Spawn.beforeLaunch({
+            caller,
+            projectId,
+            issues,
+            anyway: input.anyway === true,
+            message: input.message,
+          }).pipe(
+            Effect.provideService(T4Ledger.T4Ledger, t4Ledger.value),
+            Effect.provideService(T4Store.T4Store, t4Store.value),
+            Effect.mapError(unavailable),
+          );
+          if ("refused" in before) {
+            return yield* new OrchestratorMcpFailure({
+              code: "invalid_request",
+              message: before.refused,
+            });
+          }
+          launchMessage = before.message;
+        }
+        const preset =
+          input.modelPreset === undefined || Option.isNone(t4Config)
+            ? undefined
+            : t4Config.value.launchPresets[input.modelPreset];
+        if (input.modelPreset !== undefined && preset === undefined)
+          return yield* new OrchestratorMcpFailure({
+            code: "invalid_request",
+            message: `No model preset named "${input.modelPreset}" is configured.`,
+          });
         const modelSelection =
+          preset ??
           input.modelSelection ??
           caller?.modelSelection ??
           (yield* readProject)?.defaultModelSelection ??
@@ -144,13 +184,13 @@ export const layer = McpToolAccess.toLayer(ProjectToolkit, {
           runtimeMode,
           interactionMode,
           workspaceStrategy: input.workspaceStrategy ?? { type: "root" },
-          ...(input.message === undefined && attachments.length === 0
+          ...(launchMessage === undefined && attachments.length === 0
             ? {}
             : {
                 initialMessage: {
                   messageId,
                   ...(caller === undefined ? {} : { senderThreadId: caller.id }),
-                  text: input.message ?? "",
+                  text: launchMessage ?? "",
                   attachments,
                 },
               }),
@@ -174,6 +214,18 @@ export const layer = McpToolAccess.toLayer(ProjectToolkit, {
           }),
         );
         const thread = result.projection.thread;
+        if (Option.isSome(t4Ledger) && Option.isSome(t4Store)) {
+          yield* T4Spawn.afterLaunch({
+            caller,
+            threadId: thread.id,
+            projectId: thread.projectId,
+            issues,
+            message: input.message,
+          }).pipe(
+            Effect.provideService(T4Store.T4Store, t4Store.value),
+            Effect.ignoreCause({ log: true }),
+          );
+        }
         const run = result.projection.runs.find((run) => run.userMessageId === messageId);
         return {
           threadId: thread.id,
