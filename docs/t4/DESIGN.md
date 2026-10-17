@@ -112,15 +112,18 @@ dropping `/defaults/claude-settings.json` (`attribution: false`,
 
 ## 5. State
 
-Fork-owned tables in `statev2.sqlite`, migrated by a separate ledger
-(`t4_migrations`), never T3's `effect_sql_migrations` (upstream ids would
-collide; `docs/internals/legacy-orchestration-migration.md`):
+Fork-owned tables in their own database, `<userdata>/t4.sqlite` (T4Sql),
+with their own migration ledger (`t4_sql_migrations`). T3's `statev2.sqlite`
+is untouched: no upstream migration-id collisions
+(`docs/internals/legacy-orchestration-migration.md`), no effect on T3's
+planner statistics, and rolling back means ignoring one file. Tables:
 
 - `t4_handoffs` (id, kind, from, from_title, to, project, summary, created_at,
   updated_at, settled_at)
 - `t4_notices` (message_id, created_at), last 500
 - `t4_release_managers` (project_id, thread_id)
-- `t4_wakes` (or the scheduled-task tables, if thread-bound wakes fit them)
+- wakes are T3's own scheduled tasks (`once` / `cron` added); `t4_wakes`
+  is unused
 - `t4_settle_requests` (thread_id, requested_at)
 - `t4_stalls`
 
@@ -133,7 +136,13 @@ as a backup.
 V2's HTTP API is read-only; commands go over WebSocket RPC. Added, admin
 bearer token:
 
-- `GET /api/t4/state` — ledger, release managers, wakes, settle requests
+- `GET /api/t4/state` — ledger, release managers, issue links, wakes
+  (scheduled tasks posted into threads), settle requests, per-thread facts
+- `GET /api/t4/pending` — every pending question and approval, with text and
+  options (the dashboard's approvals and phone pushes)
+- `GET /api/t4/archived` — archived thread shells (V2's HTTP shell lists
+  active threads only)
+- `POST /api/t4/threads/:id/delete` — `t4 run`'s throwaway threads
 - `POST /api/t4/launch` — launch with a preset and linked issues (the dashboard's Linear spawn)
 - `POST /api/t4/threads/:id/restore` — unarchive / unsettle / unsnooze
 - `POST /api/t4/resume-limited` — the limited-thread resume
