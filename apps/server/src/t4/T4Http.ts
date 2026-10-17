@@ -29,6 +29,7 @@ import * as HttpServerResponse from "effect/http/HttpServerResponse";
 import * as EnvironmentAuth from "../auth/EnvironmentAuth.ts";
 import * as ThreadLaunch from "../orchestration-v2/ThreadLaunchService.ts";
 import * as ThreadManagementService from "../orchestration-v2/ThreadManagementService.ts";
+import * as ScheduledTasks from "../scheduledTasks/ScheduledTaskService.ts";
 import * as T4Config from "./T4Config.ts";
 import * as T4Delivery from "./T4Delivery.ts";
 import { factsFor } from "./T4Facts.ts";
@@ -138,7 +139,23 @@ export const layer = Layer.mergeAll(
       const store = yield* T4Store.T4Store;
       const world = yield* ledger.world();
       const facts = yield* factsFor(world.threads.map((thread) => thread.id));
+      // Wakes: scheduled tasks posted into a thread (V2 lists them only over WebSocket).
+      const scheduledTasks = yield* Effect.serviceOption(ScheduledTasks.ScheduledTaskService);
+      const tasks =
+        scheduledTasks._tag === "Some"
+          ? (yield* scheduledTasks.value.list().pipe(Effect.orElseSucceed(() => ({ tasks: [] })))).tasks
+          : [];
       return json({
+        wakes: tasks
+          .filter((task) => task.threadId !== null && task.enabled && task.nextRunAt !== null)
+          .map((task) => ({
+            id: task.id,
+            threadId: task.threadId,
+            title: task.title,
+            prompt: task.prompt,
+            schedule: task.schedule,
+            nextRunAt: task.nextRunAt,
+          })),
         handoffs: world.open,
         releaseManagers: Object.fromEntries([...(yield* store.releaseManagers()).entries()]),
         issueLinks: yield* store.issueLinks(),
