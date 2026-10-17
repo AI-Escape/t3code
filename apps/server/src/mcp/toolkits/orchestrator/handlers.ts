@@ -6,6 +6,7 @@ import * as Clock from "effect/Clock";
 import * as DateTime from "effect/DateTime";
 import * as ScheduledTasks from "../../../scheduledTasks/ScheduledTaskService.ts";
 import * as Option from "effect/Option";
+import * as T4Config from "../../../t4/T4Config.ts";
 import * as T4Delivery from "../../../t4/T4Delivery.ts";
 import * as T4Facts from "../../../t4/T4Facts.ts";
 import * as Wakes from "../../../t4/wakes.ts";
@@ -73,6 +74,7 @@ const handlers = {
         const service = yield* OrchestratorMcpService.OrchestratorMcpService;
         // t4 fork: a task posted into a thread is a wake - t4's limits and
         // its "WAKE (scheduled …)" header (t4/wakes.ts).
+        const t4Enabled = Option.isSome(yield* Effect.serviceOption(T4Config.T4ServerConfig));
         const { caller } = yield* readCaller();
         const schedule = input.schedule as Wakes.WakeSchedule;
         const boundThreadId =
@@ -81,7 +83,7 @@ const handlers = {
           (caller !== undefined && (input.projectId ?? caller.projectId) === caller.projectId))
             ? caller?.id
             : undefined);
-        if (boundThreadId === undefined || schedule.type === "webhook") {
+        if (!t4Enabled || boundThreadId === undefined || schedule.type === "webhook") {
           return yield* service.scheduleTask(scope, input);
         }
         const scheduledTasks = yield* ScheduledTasks.ScheduledTaskService;
@@ -94,8 +96,10 @@ const handlers = {
         if (refused !== undefined) {
           return yield* new OrchestratorMcpFailure({ code: "invalid_request", message: refused });
         }
+        const derivedTitle = input.prompt.split("\n")[0]?.trim() ?? "";
         return yield* service.scheduleTask(scope, {
           ...input,
+          title: input.title ?? (derivedTitle.length > 0 ? derivedTitle.slice(0, 80) : "Wake"),
           prompt: Wakes.wakePrompt({
             note: input.prompt,
             scheduledAtLabel: `${DateTime.formatIso(DateTime.makeUnsafe(now)).slice(0, 16).replace("T", " ")} UTC`,
