@@ -367,6 +367,12 @@ export const layerProduction = Layer.mergeAll(
   // t4 fork: session-tooling jobs (settle requests, wakes, stall recovery).
   T4Jobs.layer.pipe(
     Layer.provide(T4.layer),
-    Layer.provide(Layer.mergeAll(layerThreadManagementProvided, layerThreadLaunchProvided)),
+    Layer.provide(
+      Layer.mergeAll(
+        layerThreadManagementProvided,
+        layerThreadLaunchProvided,
+        layerScheduledTaskProvided,
+      ),
+    ),
   ),
 ).pipe(Layer.provide(Scheduler.layer), Layer.provideMerge(layerEventInfrastructure));
