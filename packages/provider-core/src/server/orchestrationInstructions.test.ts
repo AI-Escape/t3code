@@ -8,22 +8,25 @@ import {
 } from "./orchestrationInstructions.ts";
 
 describe("T3 orchestration provider instructions", () => {
-  it("distinguishes delegated subagents from ordinary top-level threads", () => {
-    assert.include(T3_CODE_ORCHESTRATION_INSTRUCTIONS, "Use `delegate_task`");
-    assert.include(T3_CODE_ORCHESTRATION_INSTRUCTIONS, "ordinary top-level T3 conversations");
-    assert.include(T3_CODE_ORCHESTRATION_INSTRUCTIONS, "Never use them merely");
-    assert.include(T3_CODE_ORCHESTRATION_INSTRUCTIONS, "cross-provider");
-    assert.include(T3_CODE_ORCHESTRATION_INSTRUCTIONS, "call `delegate_task` again");
-    assert.include(
-      T3_CODE_ORCHESTRATION_INSTRUCTIONS,
-      "Do not use `t3_thread_send` on `childThreadId`",
-    );
+  // t4 fork: the instructions teach t4's session tooling.
+  it("teaches handoffs, the release manager, settling and owed work", () => {
+    assert.include(T3_CODE_ORCHESTRATION_INSTRUCTIONS, "`t3_handoff`");
+    assert.include(T3_CODE_ORCHESTRATION_INSTRUCTIONS, "release manager");
+    assert.include(T3_CODE_ORCHESTRATION_INSTRUCTIONS, "`t3_owed`");
+    assert.include(T3_CODE_ORCHESTRATION_INSTRUCTIONS, "A message never moves the ledger");
+    assert.include(T3_CODE_ORCHESTRATION_INSTRUCTIONS, "settle your thread as the last act");
   });
 
-  it("documents structured schedules instead of JSON strings", () => {
+  it("distinguishes spawned threads from delegated child tasks", () => {
+    assert.include(T3_CODE_ORCHESTRATION_INSTRUCTIONS, "`t3_thread_launch`");
+    assert.include(T3_CODE_ORCHESTRATION_INSTRUCTIONS, "Use `delegate_task`");
+    assert.include(T3_CODE_ORCHESTRATION_INSTRUCTIONS, "call `delegate_task` again");
+  });
+
+  it("documents wakes as structured schedules", () => {
     assert.include(T3_CODE_ORCHESTRATION_INSTRUCTIONS, "structured object, never as JSON text");
-    assert.include(T3_CODE_ORCHESTRATION_INSTRUCTIONS, '"everyMs":3600000');
-    assert.include(T3_CODE_ORCHESTRATION_INSTRUCTIONS, "bindToCurrentThread=false");
+    assert.include(T3_CODE_ORCHESTRATION_INSTRUCTIONS, '"type":"once","delayMs":7200000');
+    assert.include(T3_CODE_ORCHESTRATION_INSTRUCTIONS, '"type":"cron"');
   });
 
   it("injects prompt fallback only for an MCP-enabled first run", () => {
