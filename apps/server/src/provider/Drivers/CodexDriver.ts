@@ -21,7 +21,7 @@
  *
  * @module provider/Drivers/CodexDriver
  */
-import { CodexSettings, ProviderDriverKind } from "@t3tools/contracts";
+import { CodexSettings, ProviderDriverKind, type ServerProviderModel } from "@t3tools/contracts";
 import * as Crypto from "effect/Crypto";
 import * as Effect from "effect/Effect";
 import * as FileSystem from "effect/FileSystem";
@@ -52,6 +52,10 @@ import { resolveCodexLaunchArgs } from "../codexLaunchArgs.ts";
 import { makeManagedServerProvider } from "@t3tools/provider-core/server/managedProvider";
 import * as ModelCatalog from "@t3tools/provider-core/server/ModelCatalog";
 import { applyCodexModelCatalog } from "../codexModelCatalog.ts";
+import {
+  applyT4CodexReasoningDefault,
+  codexReasoningDefaultOverride,
+} from "../../t4/codexReasoningDefault.ts";
 import type { ProviderDriver, ProviderInstance } from "@t3tools/provider-core/server/driver";
 import { withInstanceIdentity } from "@t3tools/provider-core/server/instanceIdentity";
 import { mergeProviderInstanceEnvironment } from "@t3tools/provider-core/server/instanceEnvironment";
@@ -156,6 +160,18 @@ export const CodexDriver: ProviderDriver<CodexSettings, CodexDriverEnv, Path.Pat
       const modelCatalog = yield* ModelCatalog.ModelCatalog;
       const currentCatalog = modelCatalog.current(DRIVER_KIND);
       const processEnv = yield* mergeProviderInstanceEnvironment(environment);
+      // t4 fork: pre-select t4's reasoning effort (T4_CODEX_DEFAULT_REASONING_EFFORT).
+      const withT4ReasoningDefault = <
+        D extends { readonly models: ReadonlyArray<ServerProviderModel> },
+      >(
+        draft: D,
+      ): D => ({
+        ...draft,
+        models: applyT4CodexReasoningDefault(
+          draft.models,
+          codexReasoningDefaultOverride(processEnv),
+        ),
+      });
       const homeLayout = yield* resolveCodexHomeLayout(config);
       const continuationIdentity = codexContinuationIdentity(homeLayout);
       const stampIdentity = withInstanceIdentity({
@@ -230,7 +246,8 @@ export const CodexDriver: ProviderDriver<CodexSettings, CodexDriverEnv, Path.Pat
           Effect.zipWith(
             checkCodexProviderStatus(effectiveConfig, undefined, processEnv),
             currentCatalog,
-            (draft, catalog) => stampIdentity(applyCodexModelCatalog(draft, catalog)),
+            (draft, catalog) =>
+              stampIdentity(withT4ReasoningDefault(applyCodexModelCatalog(draft, catalog))),
             { concurrent: true },
           ),
         ),
@@ -248,7 +265,8 @@ export const CodexDriver: ProviderDriver<CodexSettings, CodexDriverEnv, Path.Pat
           Effect.zipWith(
             makePendingCodexProvider(settings.provider),
             currentCatalog,
-            (draft, catalog) => stampIdentity(applyCodexModelCatalog(draft, catalog)),
+            (draft, catalog) =>
+              stampIdentity(withT4ReasoningDefault(applyCodexModelCatalog(draft, catalog))),
           ),
         checkProvider,
         enrichSnapshot: ({ settings, snapshot, publishSnapshot }) =>
