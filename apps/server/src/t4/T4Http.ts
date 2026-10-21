@@ -37,6 +37,7 @@ import * as T4Delivery from "./T4Delivery.ts";
 import { factsFor } from "./T4Facts.ts";
 import * as T4Ledger from "./T4Ledger.ts";
 import * as T4Spawn from "./T4Spawn.ts";
+import { clientDefaultModelSelection } from "./T4DefaultModel.ts";
 import * as T4Store from "./T4Store.ts";
 import { isRetired, isSettled, shortId } from "./T4Threads.ts";
 
@@ -263,9 +264,13 @@ export const layer = Layer.mergeAll(
       if ("refused" in before) return json({ error: before.refused }, 409);
       const modelSelection =
         (input.modelPreset === undefined ? undefined : config.launchPresets[input.modelPreset]) ??
-        input.modelSelection;
+        input.modelSelection ??
+        (yield* clientDefaultModelSelection(input.projectId));
       if (modelSelection === undefined)
-        return json({ error: "pass modelPreset or modelSelection" }, 400);
+        return json(
+          { error: "pass modelPreset or modelSelection (the client has no default model)" },
+          400,
+        );
       const id = yield* crypto.randomUUIDv4().pipe(Effect.orDie);
       // V2 creates the worktree after accepting the launch, so a branch that
       // already exists would fail later; take a fresh one beside it now.

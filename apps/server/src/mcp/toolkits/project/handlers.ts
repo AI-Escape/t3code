@@ -1,6 +1,7 @@
 import { MessageId, ThreadId, OrchestratorMcpFailure, ProjectId } from "@t3tools/contracts";
 import * as Effect from "effect/Effect";
 import * as T4Config from "../../../t4/T4Config.ts";
+import * as T4DefaultModel from "../../../t4/T4DefaultModel.ts";
 import * as T4Ledger from "../../../t4/T4Ledger.ts";
 import * as T4Spawn from "../../../t4/T4Spawn.ts";
 import * as T4Store from "../../../t4/T4Store.ts";
@@ -163,9 +164,15 @@ export const layer = McpToolAccess.toLayer(ProjectToolkit, {
             code: "invalid_request",
             message: `No model preset named "${input.modelPreset}" is configured.`,
           });
+        // t4 fork: a launch that names no model gets the client's default
+        // (T4DefaultModel), not the launching thread's model.
+        const clientDefault = Option.isSome(t4Config)
+          ? yield* T4DefaultModel.clientDefaultModelSelection(projectId)
+          : undefined;
         const modelSelection =
           preset ??
           input.modelSelection ??
+          clientDefault ??
           caller?.modelSelection ??
           (yield* readProject)?.defaultModelSelection ??
           undefined;
