@@ -190,7 +190,28 @@ export const layer = Layer.mergeAll(
           ])
           .pipe(Effect.orElseSucceed(() => null));
         if (records === null) continue;
-        for (const request of records.runtimeRequests.filter((r) => r.status === "pending")) {
+        // A request whose own tool call already ended was abandoned (a steered
+        // message aborted the call, and the agent asks again): answering it
+        // reaches no one. Builds before the adapter's cancelAbortedRequest left
+        // these pending until the turn ended, next to the question asked again.
+        const ended = new Set(
+          records.turnItems
+            .filter(
+              (item) =>
+                item.type === "dynamic_tool" &&
+                item.nativeItemRef !== null &&
+                (item.status === "failed" ||
+                  item.status === "completed" ||
+                  item.status === "cancelled"),
+            )
+            .map((item) => item.nativeItemRef?.nativeId),
+        );
+        const live = records.runtimeRequests.filter(
+          (r) =>
+            r.status === "pending" &&
+            !(r.responseCapability.type === "live" && ended.has(r.nativeRequestRef?.nativeId)),
+        );
+        for (const request of live) {
           const item = records.turnItems.find(
             (candidate) =>
               (candidate.type === "user_input_request" || candidate.type === "approval_request") &&

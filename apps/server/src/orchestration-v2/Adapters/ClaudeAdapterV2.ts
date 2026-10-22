@@ -5822,6 +5822,45 @@ export const makeClaudeAdapterV2 = Effect.fn("makeClaudeAdapterV2")(function* (
           return { node, request, turnItem };
         });
 
+        // t4 fork: a request whose wait was aborted is cancelled here. A message
+        // steered into the turn aborts Claude's pending tool call (the ask-user
+        // question or approval), but T3 cancels pending requests only when the
+        // provider turn ends, and a steer continues the turn: the dead question
+        // stayed pending beside the one the agent asked again, and answering it
+        // reached no one.
+        const cancelAbortedRequest = Effect.fnUntraced(function* (artifacts: {
+          readonly node: OrchestrationV2ExecutionNode;
+          readonly request: OrchestrationV2RuntimeRequest;
+          readonly turnItem: OrchestrationV2TurnItem;
+        }) {
+          const now = yield* DateTime.now;
+          yield* Effect.all(
+            [
+              emitProviderEvent({
+                type: "runtime_request.updated",
+                driver: CLAUDE_PROVIDER,
+                runtimeRequest: { ...artifacts.request, status: "cancelled", resolvedAt: now },
+              }),
+              emitProviderEvent({
+                type: "node.updated",
+                driver: CLAUDE_PROVIDER,
+                node: { ...artifacts.node, status: "cancelled", completedAt: now },
+              }),
+              emitProviderEvent({
+                type: "turn_item.updated",
+                driver: CLAUDE_PROVIDER,
+                turnItem: {
+                  ...artifacts.turnItem,
+                  status: "cancelled",
+                  completedAt: now,
+                  updatedAt: now,
+                },
+              }),
+            ],
+            { concurrency: 1 },
+          );
+        });
+
         const ensureReasoningBlock = Effect.fnUntraced(function* (
           context: ActiveClaudeTurnContext,
           itemId: string,
@@ -8271,6 +8310,10 @@ export const makeClaudeAdapterV2 = Effect.fn("makeClaudeAdapterV2")(function* (
                 }),
               ),
             );
+            // t4 fork: cancelAbortedRequest.
+            if (callbackOptions.signal.aborted && !(yield* Deferred.isDone(answers))) {
+              yield* cancelAbortedRequest(artifacts);
+            }
             return callbackOptions.signal.aborted
               ? ({
                   behavior: "deny",
@@ -8374,6 +8417,11 @@ export const makeClaudeAdapterV2 = Effect.fn("makeClaudeAdapterV2")(function* (
               }),
             ),
           );
+
+          // t4 fork: cancelAbortedRequest.
+          if (callbackOptions.signal.aborted && !(yield* Deferred.isDone(decision))) {
+            yield* cancelAbortedRequest(artifacts);
+          }
 
           return permissionResultFromDecision({
             toolName,

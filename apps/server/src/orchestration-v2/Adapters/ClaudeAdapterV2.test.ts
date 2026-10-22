@@ -1176,6 +1176,128 @@ describe("ClaudeAdapterV2 Auto-accept edits", () => {
   );
 });
 
+// t4 fork: cancelAbortedRequest.
+describe("ClaudeAdapterV2 aborted question", () => {
+  it.effect("cancels a question whose tool call was aborted", () =>
+    Effect.scoped(
+      Effect.gen(function* () {
+        const fileSystem = yield* FileSystem.FileSystem;
+        const idAllocator = yield* IdAllocator.IdAllocatorV2;
+        const attachmentsDir = yield* fileSystem.makeTempDirectoryScoped({
+          prefix: "t3-claude-aborted-question-",
+        });
+        let openedOptions: ClaudeAdapterV2.ClaudeAgentSdkQueryOptions | undefined;
+        const adapter = yield* ClaudeAdapterV2.makeClaudeAdapterV2({
+          instanceId: ClaudeAdapterV2.CLAUDE_DEFAULT_INSTANCE_ID,
+          settings: DEFAULT_CLAUDE_SETTINGS,
+          environment: {},
+          attachmentsDir,
+          fileSystem,
+          path: yield* Path.Path,
+          crypto: yield* Crypto.Crypto,
+          idAllocator,
+          queryRunner: {
+            allocateSessionId: Effect.succeed("native-thread-claude-aborted-question"),
+            open: (input) =>
+              Effect.sync(() => {
+                openedOptions = input.options;
+                return {
+                  messages: Stream.never,
+                  offer: () => Effect.void,
+                  setModel: () => Effect.void,
+                  applyFlagSettings: () => Effect.void,
+                  setPermissionMode: () => Effect.void,
+                  backgroundTasks: () => Effect.succeed(false),
+                  stopTask: () => Effect.void,
+                  interrupt: Effect.void,
+                  close: Effect.void,
+                };
+              }),
+            forkSession: () => Effect.die("unused"),
+            subagentLaunchToolUseId: () => Effect.succeed(null),
+            assertComplete: Effect.void,
+          },
+        });
+        const runtimePolicy = ProviderAdapter.ProviderAdapterV2RuntimePolicy.make({
+          runtimeMode: "full-access",
+          interactionMode: "default",
+          cwd: "/workspace",
+        });
+        const threadId = ThreadId.make("thread-claude-aborted-question");
+        const runtime = yield* adapter.openSession({
+          threadId,
+          providerSessionId: ProviderSessionId.make("provider-session-claude-aborted-question"),
+          modelSelection: CLAUDE_TEST_MODEL_SELECTION,
+          runtimePolicy,
+        });
+        const providerThread = yield* runtime.ensureThread({
+          threadId,
+          modelSelection: CLAUDE_TEST_MODEL_SELECTION,
+          runtimePolicy,
+        });
+        const now = yield* DateTime.now;
+        yield* runtime.startTurn(
+          makeClaudeTestTurnInput({
+            threadId,
+            providerThread,
+            now,
+            attemptId: RunAttemptId.make("attempt-claude-aborted-question"),
+            text: "Ask me.",
+            attachments: [],
+            runtimePolicy,
+          }),
+        );
+        const canUseTool = openedOptions?.canUseTool;
+        assert.isFunction(canUseTool);
+
+        const requestEvents = yield* runtime.events.pipe(
+          Stream.filter((event) => event.type === "runtime_request.updated"),
+          Stream.take(2),
+          Stream.runCollect,
+          Effect.forkScoped,
+        );
+        const controller = new AbortController();
+        const decision = yield* Effect.promise(() =>
+          canUseTool!(
+            "AskUserQuestion",
+            {
+              questions: [
+                {
+                  question: "Ship it?",
+                  header: "Ship",
+                  multiSelect: false,
+                  options: [
+                    { label: "Yes", description: "Ship." },
+                    { label: "No", description: "Wait." },
+                  ],
+                },
+              ],
+            },
+            {
+              signal: controller.signal,
+              toolUseID: "tool-ask-aborted",
+              requestId: "request-ask-aborted",
+            },
+          ),
+        ).pipe(Effect.forkScoped);
+        // A message steered into the turn aborts the pending call.
+        yield* Effect.promise(() => new Promise((resolve) => setTimeout(resolve, 100)));
+        controller.abort();
+
+        assert.equal((yield* Fiber.join(decision))?.behavior, "deny");
+        const statuses = Array.from(yield* Fiber.join(requestEvents)).map((event) =>
+          event.type === "runtime_request.updated" ? event.runtimeRequest.status : null,
+        );
+        assert.deepEqual(statuses, ["pending", "cancelled"]);
+      }).pipe(
+        Effect.provide(
+          Layer.mergeAll(IdAllocator.layer, McpProviderSessions.layer, NodeServices.layer),
+        ),
+      ),
+    ),
+  );
+});
+
 describe("ClaudeAdapterV2 approval cancellation", () => {
   it.effect("observes an approval signal that was already aborted", () =>
     Effect.gen(function* () {
