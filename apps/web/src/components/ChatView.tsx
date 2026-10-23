@@ -7607,6 +7607,8 @@ export default function ChatView(props: ChatViewProps) {
   // multi-model sends never compact first, so the offer hides for them.
   const resumeCompactionTokens =
     activeContextWindow &&
+    // t4 fork: offerResumeCompaction.
+    settings.offerResumeCompaction &&
     !resumeCompactionPermanentlyDismissed &&
     !nativeResumeCompactionDismissed &&
     !compactDisabled &&

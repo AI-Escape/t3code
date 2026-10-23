@@ -595,6 +595,10 @@ export function useSettingsRestore(onRestored?: () => void) {
       ...(settings.snoozeLimitedThreads !== DEFAULT_UNIFIED_SETTINGS.snoozeLimitedThreads
         ? ["Snooze limited threads"]
         : []),
+      // t4 fork: offerResumeCompaction.
+      ...(settings.offerResumeCompaction !== DEFAULT_UNIFIED_SETTINGS.offerResumeCompaction
+        ? ["Offer to compact stale sessions"]
+        : []),
       ...(settings.wordWrap !== DEFAULT_UNIFIED_SETTINGS.wordWrap ? ["Word wrap"] : []),
       ...(settings.persistComposerContextStrip !==
       DEFAULT_UNIFIED_SETTINGS.persistComposerContextStrip
@@ -717,6 +721,7 @@ export function useSettingsRestore(onRestored?: () => void) {
       settings.sidebarAutoSettleOnMerge,
       settings.autoResumeLimitedThreads,
       settings.snoozeLimitedThreads,
+      settings.offerResumeCompaction,
       settings.sidebarProjectGroupingMode,
       settings.sidebarProjectSortOrder,
       settings.sidebarWorkingShelfEnabled,
@@ -825,6 +830,7 @@ export function useSettingsRestore(onRestored?: () => void) {
       sidebarAutoSettleOnMerge: DEFAULT_UNIFIED_SETTINGS.sidebarAutoSettleOnMerge,
       autoResumeLimitedThreads: DEFAULT_UNIFIED_SETTINGS.autoResumeLimitedThreads,
       snoozeLimitedThreads: DEFAULT_UNIFIED_SETTINGS.snoozeLimitedThreads,
+      offerResumeCompaction: DEFAULT_UNIFIED_SETTINGS.offerResumeCompaction,
       responseStreamingMode: DEFAULT_UNIFIED_SETTINGS.responseStreamingMode,
       enableProviderUpdateChecks: DEFAULT_UNIFIED_SETTINGS.enableProviderUpdateChecks,
       continueThreadsAfterServerUpdate: DEFAULT_UNIFIED_SETTINGS.continueThreadsAfterServerUpdate,
@@ -2385,6 +2391,23 @@ export function GeneralSettingsPanel() {
                 updateSettings({ snoozeLimitedThreads: Boolean(checked) })
               }
               aria-label="Snooze limited threads"
+            />
+          }
+        />
+        {/* t4 fork: offerResumeCompaction. */}
+        <SettingsRow
+          serverScoped
+          {...searchableSetting("offer-resume-compaction")}
+          description="When a large Claude session's prompt cache has expired, compact it before the next message. Off, it continues with full history."
+          settingKeys={["offerResumeCompaction"]}
+          control={
+            <ScopedSwitch
+              settingKeys={["offerResumeCompaction"]}
+              checked={settings.offerResumeCompaction}
+              onCheckedChange={(checked) =>
+                updateSettings({ offerResumeCompaction: Boolean(checked) })
+              }
+              aria-label="Offer to compact stale sessions"
             />
           }
         />

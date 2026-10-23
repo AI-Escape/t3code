@@ -111,6 +111,8 @@ import { resolveAttachmentPath } from "../../attachmentStore.ts";
 import { resolveClaudeSdkExecutablePath } from "../../provider/Drivers/ClaudeExecutable.ts";
 import { planClaudeSkillDispatch } from "../../provider/Drivers/ClaudeSkillDispatch.ts";
 import { discoverClaudeSkills } from "../../provider/Drivers/ClaudeSkills.ts";
+// t4 fork: offerResumeCompaction.
+import { offerResumeCompaction } from "../../t4/resumeCompaction.ts";
 import {
   compileClaudeModelSelection,
   type CompiledClaudeModelSelection,
@@ -8445,6 +8447,10 @@ export const makeClaudeAdapterV2 = Effect.fn("makeClaudeAdapterV2")(function* (
             Effect.gen(function* () {
               if (request.dialogKind !== "resume_return") {
                 return { behavior: "cancelled" as const };
+              }
+              // t4 fork: offerResumeCompaction.
+              if (!(yield* offerResumeCompaction())) {
+                return { behavior: "completed" as const, result: "continue" as const };
               }
               const ageMinutes =
                 typeof request.payload.sessionAgeMinutes === "number" &&

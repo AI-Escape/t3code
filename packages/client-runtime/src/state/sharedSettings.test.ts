@@ -126,6 +126,7 @@ describe("pickSharedServerSettings", () => {
       "autoResumeLimitedThreads",
       "continueThreadsAfterServerUpdate",
       "newWorktreesStartFromOrigin",
+      "offerResumeCompaction",
       "sidebarAutoSettleAfterDays",
       "sidebarAutoSettleOnMerge",
       "snoozeLimitedThreads",

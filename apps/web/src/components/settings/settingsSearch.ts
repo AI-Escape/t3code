@@ -355,6 +355,13 @@ export const SETTINGS_SEARCH_ITEMS = [
     to: "/settings/general",
     searchTerms: ["usage quota rate limit reset recover continue"],
   },
+  // t4 fork: offerResumeCompaction.
+  {
+    id: "offer-resume-compaction",
+    title: "Offer to compact stale sessions",
+    to: "/settings/general",
+    searchTerms: ["compact compaction resume claude context tokens cache history"],
+  },
   {
     id: "working-shelf",
     title: "Working section (beta)",

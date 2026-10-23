@@ -72,6 +72,7 @@ import { SpawnExecutableResolution } from "@t3tools/shared/shell";
 
 import { attachmentRelativePath } from "../../attachmentStore.ts";
 import * as ServerConfig from "../../config.ts";
+import * as ServerSettings from "../../serverSettings.ts";
 import * as McpProviderSession from "@t3tools/provider-core/server/mcpSession";
 import * as McpProviderSessions from "@t3tools/provider-core/server/McpProviderSessions";
 import { PreviewControlsToolkit } from "../../mcp/toolkits/previewControls/tools.ts";
@@ -1250,8 +1251,10 @@ describe("ClaudeAdapterV2 aborted question", () => {
         const canUseTool = openedOptions?.canUseTool;
         assert.isFunction(canUseTool);
 
+        const requestPending = yield* Deferred.make<void>();
         const requestEvents = yield* runtime.events.pipe(
           Stream.filter((event) => event.type === "runtime_request.updated"),
+          Stream.tap(() => Deferred.succeed(requestPending, undefined)),
           Stream.take(2),
           Stream.runCollect,
           Effect.forkScoped,
@@ -1281,7 +1284,7 @@ describe("ClaudeAdapterV2 aborted question", () => {
           ),
         ).pipe(Effect.forkScoped);
         // A message steered into the turn aborts the pending call.
-        yield* Effect.promise(() => new Promise((resolve) => setTimeout(resolve, 100)));
+        yield* Deferred.await(requestPending);
         controller.abort();
 
         assert.equal((yield* Fiber.join(decision))?.behavior, "deny");
@@ -1686,6 +1689,93 @@ describe("ClaudeAdapterV2 resume compaction", () => {
         Effect.provide(
           Layer.mergeAll(IdAllocator.layer, McpProviderSessions.layer, NodeServices.layer),
         ),
+      ),
+    ),
+  );
+});
+
+describe("ClaudeAdapterV2 resume compaction setting", () => {
+  // t4 fork: offerResumeCompaction.
+  it.effect("keeps full history without asking when offerResumeCompaction is off", () =>
+    Effect.scoped(
+      Effect.gen(function* () {
+        const fileSystem = yield* FileSystem.FileSystem;
+        const idAllocator = yield* IdAllocator.IdAllocatorV2;
+        const attachmentsDir = yield* fileSystem.makeTempDirectoryScoped({
+          prefix: "t3-claude-resume-off-",
+        });
+        let openedOptions: ClaudeAdapterV2.ClaudeAgentSdkQueryOptions | undefined;
+        const adapter = yield* ClaudeAdapterV2.makeClaudeAdapterV2({
+          instanceId: ClaudeAdapterV2.CLAUDE_DEFAULT_INSTANCE_ID,
+          settings: DEFAULT_CLAUDE_SETTINGS,
+          environment: {},
+          attachmentsDir,
+          fileSystem,
+          path: yield* Path.Path,
+          crypto: yield* Crypto.Crypto,
+          idAllocator,
+          queryRunner: {
+            allocateSessionId: Effect.succeed("native-thread-claude-resume-off"),
+            open: (input) =>
+              Effect.sync(() => {
+                openedOptions = input.options;
+                return {
+                  messages: Stream.never,
+                  offer: () => Effect.void,
+                  setModel: () => Effect.void,
+                  applyFlagSettings: () => Effect.void,
+                  setPermissionMode: () => Effect.void,
+                  backgroundTasks: () => Effect.succeed(false),
+                  stopTask: () => Effect.void,
+                  interrupt: Effect.void,
+                  close: Effect.void,
+                };
+              }),
+            forkSession: () => Effect.die("unused"),
+            subagentLaunchToolUseId: () => Effect.succeed(null),
+            assertComplete: Effect.void,
+          },
+        });
+        const threadId = ThreadId.make("thread-claude-resume-off");
+        const runtime = yield* adapter.openSession({
+          threadId,
+          providerSessionId: ProviderSessionId.make("provider-session-claude-resume-off"),
+          modelSelection: CLAUDE_TEST_MODEL_SELECTION,
+          runtimePolicy: CLAUDE_TEST_RUNTIME_POLICY,
+        });
+        const providerThread = yield* runtime.ensureThread({
+          threadId,
+          modelSelection: CLAUDE_TEST_MODEL_SELECTION,
+          runtimePolicy: CLAUDE_TEST_RUNTIME_POLICY,
+        });
+        yield* runtime.startTurn(
+          makeClaudeTestTurnInput({
+            threadId,
+            providerThread,
+            now: yield* DateTime.now,
+            attemptId: RunAttemptId.make("attempt-claude-resume-off"),
+            text: "continue",
+            attachments: [],
+          }),
+        );
+        const callback = openedOptions?.onUserDialog;
+        assert.isFunction(callback);
+        assert.deepEqual(
+          yield* Effect.promise(() =>
+            callback!(
+              {
+                dialogKind: "resume_return",
+                payload: { sessionAgeMinutes: 90, estimatedTokens: 120000 },
+              },
+              { signal: new AbortController().signal, requestId: "dialog-resume-off" },
+            ),
+          ),
+          { behavior: "completed", result: "continue" },
+        );
+      }).pipe(Effect.provide(ServerSettings.layerTest({ offerResumeCompaction: false }))),
+    ).pipe(
+      Effect.provide(
+        Layer.mergeAll(IdAllocator.layer, McpProviderSessions.layer, NodeServices.layer),
       ),
     ),
   );
