@@ -4,6 +4,95 @@ T3 Code is an "agent harness control surface". It enables control of the agents 
 
 Works with your subscriptions on Claude Code, Codex, Cursor, Grok Build, OpenCode, and Google Antigravity. If they're set up on your computer, T3 Code can control them.
 
+## This fork (AI-Escape, branch `t4`)
+
+This is T3 Code v0.1.0 (Orchestrator V2) with the session tooling of
+[t4](https://github.com/AI-Escape/t4) built in. t4 runs one isolated T3 server
+per client, and its dashboard, instructions and container layout live in
+that repo. Apart from this section, the README is upstream's. The full design
+and the reasons behind it are in [`docs/t4/DESIGN.md`](docs/t4/DESIGN.md).
+
+**Keeping in sync:** upstream (`pingdotgg/t3code`) merges into `t4`, and t4's
+image pins a commit of this branch (`T3_FORK_REF`). Fork code lives in
+`apps/server/src/t4/` where it can; every edit to an upstream file is marked
+with a `t4 fork:` comment, so `grep -rn "t4 fork:"` lists the merge surface.
+The server reports its version as `0.1.0-t4.<commit>`.
+
+### Added
+
+- **Handoffs and an obligation ledger between threads.** The new MCP tools
+  `t3_handoff` (done / ask / fyi, explicit ledger effects), `t3_owed` and
+  `t3_decisions` (the user's past answers to ask-user questions).
+- **Release managers.** One per project: routed to by `t3_handoff`, created
+  on first use, pinned, always run on `releaseManager.model`, and never
+  settle.
+- **Linked issues (Linear).** `link_issue`, `unlink_issue` and
+  `list_thread_issues`, stored on the thread like linked PRs. The open
+  thread that links an issue owns it, and launches refuse an owned issue
+  unless forced.
+- **Wakes.** Scheduled tasks gain one-shot (`at`, `in`) and `cron` schedules,
+  plus a `threadId` target for waking another thread, under t4's limits:
+  8 pending per thread, 30 days out at most, intervals of 5 minutes or more.
+- **Stall recovery.** A turn silent for 15 min is interrupted and restarted
+  with a note; a second stall within 6 h is stopped and pushed to the
+  operator.
+- **Operator HTTP API** under `/api/t4` for the t4 dashboard and scripts:
+  - reads: `state`, `pending`, `archived`;
+  - writes: `launch`, `resume-limited`, `threads/:id/{message,restore,delete}`.
+- **Its own state** in `<userdata>/t4.sqlite`, with its own migrations.
+  T3's `statev2.sqlite` is untouched. On first start it imports the old
+  thread tools' JSON state once.
+- **Setting `offerResumeCompaction`** (Settings → General, on by default).
+  Off: no Compact chip on stale Claude threads, and Claude's own "compact
+  before continuing?" question is answered "keep full history" without asking.
+
+### Changed
+
+- **`t3_thread_send`:** messages carry the sender's header. When a message
+  closes an unanswered question or cancels a running tool call, it says so.
+- **`t3_thread_organize` settle:**
+  - refused for release managers, and while the thread owes anything;
+  - retires the worktree's dev stack;
+  - a later message cancels a pending settle.
+- **`t3_thread_launch` / `create_threads`:**
+  - a live-thread guard and a parent→child ledger entry with a spawn footer;
+  - model presets and linked issues;
+  - a launch that names no model gets the client's `defaultModelSelection`,
+    not the launching thread's model.
+- **`t3_thread_list` / `t3_thread_read`:** each thread's ledger standing,
+  release-manager flag and linked issues.
+- **Worktree naming:** `T4_WORKTREE_NAMING=issueId` gives short, flat
+  `<worktrees>/<issue id or slug>` directories and keeps the full branch name.
+- **Orchestration instructions:** the Claude prompt append and Codex
+  developer instructions are rewritten to teach this flow.
+- **Claude adapter:**
+  - a `--settings` launch arg is merged under T3's own settings; upstream
+    dropped it;
+  - an ask-user question or approval whose tool call was aborted, for example
+    by a steered message, is cancelled; upstream left it pending.
+- **Codex:** `T4_CODEX_DEFAULT_REASONING_EFFORT` sets the effort the model
+  picker pre-selects; upstream uses the catalog default, `low` for some
+  models.
+- **Scheduled-task UI (web and mobile):** shows the one-shot and cron
+  schedules that agents create.
+
+### Configuration
+
+| Variable                            | Purpose                                                                                                                               |
+| ----------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------- |
+| `T4_SERVER_CONFIG`                  | JSON file: release-manager title and model, worktree naming, launch presets, stall recovery, legacy state dir, dev-retire script glob |
+| `T4_WORKTREE_NAMING`                | `issueId` (t4) or `branch` (upstream)                                                                                                 |
+| `T4_CODEX_DEFAULT_REASONING_EFFORT` | Codex effort the picker pre-selects                                                                                                   |
+| `T4_LABEL`, `T4_UI_URL`             | Client name and dashboard link in stall pushes                                                                                        |
+
+### Developing
+
+Tests run in the Node 24 build container: `./.t4-test.sh <paths>`, or
+`./.t4-test.sh --cmd "pnpm run typecheck"` (runs in `apps/server`). Format with
+`pnpm exec vp fmt <files>` before committing.
+
+---
+
 ## "Wait, what are you selling me?"
 
 Nothing. We built T3 Code because we wanted the best possible development experience with agents. We were inspired by existing solutions like the Codex desktop app, Conductor, Claude Desktop and Cursor Glass, but none met our bar.
