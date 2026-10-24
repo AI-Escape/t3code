@@ -10,7 +10,11 @@
  *     unanswered and has the agent ask again;
  *   - a steered message can cancel a running Claude tool call with Claude
  *     Code's "the user doesn't want to proceed" - the message says that was
- *     this message, not the user.
+ *     this message, not the user;
+ *   - a message to a settled thread unsettles it (T3 clears the settle when a
+ *     turn starts) - the message says so, and to settle again once the work
+ *     is still done. Agents otherwise answered and kept believing they were
+ *     settled, and the thread sat open until the user asked again.
  * Release managers always receive turns on the configured release-manager
  * model (within their provider). A delivery that asks nothing of its
  * recipient is recorded as a notice, so a pending settle survives it.
@@ -31,7 +35,7 @@ import * as ThreadManagementService from "../orchestration-v2/ThreadManagementSe
 import * as T4Config from "./T4Config.ts";
 import * as T4Ledger from "./T4Ledger.ts";
 import * as T4Store from "./T4Store.ts";
-import { isRunning, shortId } from "./T4Threads.ts";
+import { isRunning, isSettled, shortId } from "./T4Threads.ts";
 
 export class T4DeliveryError extends Schema.TaggedError<T4DeliveryError>()("T4DeliveryError", {
   message: Schema.String,
@@ -43,7 +47,7 @@ export interface T4DeliverInput {
   readonly text: string;
   readonly senderThreadId?: ThreadId;
   readonly interrupt?: boolean;
-  /** Skip the two notes (the server's own relays). */
+  /** Skip the delivery notes (the server's own relays). */
   readonly force?: boolean;
   /** Asks nothing of the recipient: a pending settle stands. */
   readonly notice?: boolean;
@@ -87,6 +91,22 @@ export const CANCELLED_TOOL_NOTE =
   "message cancelled it - not the user. The user has not asked you to stop; re-run it if you " +
   "still need it and carry on.";
 
+export const REOPENED_SETTLED_NOTE =
+  "Your thread was settled; this message reopened it, so it is no longer settled. Handle " +
+  "the message, and if your work is still fully closed afterwards (nothing owed, nothing " +
+  "awaiting the user), settle again as the last act of this turn.";
+
+/** The delivery notes that apply to a target, as the message's prefix. */
+export const deliveryNotes = (input: {
+  readonly settled: boolean;
+  readonly questions: ReadonlyArray<string>;
+  readonly claudeRunning: boolean;
+}): ReadonlyArray<string> => [
+  ...(input.settled ? [REOPENED_SETTLED_NOTE] : []),
+  ...(input.questions.length > 0 ? [UNANSWERED_QUESTION_NOTE(input.questions)] : []),
+  ...(input.claudeRunning ? [CANCELLED_TOOL_NOTE] : []),
+];
+
 export const make = Effect.gen(function* () {
   const threadManagement = yield* ThreadManagementService.ThreadManagementService;
   const store = yield* T4Store.T4Store;
@@ -124,15 +144,14 @@ export const make = Effect.gen(function* () {
             Effect.orElseSucceed(() => [] as ReadonlyArray<string>),
           );
 
-  /** The two delivery notes, prepended when they apply. */
+  /** The delivery notes, prepended when they apply. */
   const withNotes = (target: OrchestrationV2ThreadShell, text: string) =>
     Effect.gen(function* () {
-      const notes: Array<string> = [];
-      const questions = yield* pendingQuestions(target);
-      if (questions.length > 0) notes.push(UNANSWERED_QUESTION_NOTE(questions));
-      if (target.providerInstanceId.startsWith("claude") && isRunning(target)) {
-        notes.push(CANCELLED_TOOL_NOTE);
-      }
+      const notes = deliveryNotes({
+        settled: isSettled(target),
+        questions: yield* pendingQuestions(target),
+        claudeRunning: target.providerInstanceId.startsWith("claude") && isRunning(target),
+      });
       return notes.length === 0
         ? text
         : `${notes.map((note) => `(Thread tools: ${note})`).join("\n\n")}\n\n${text}`;
