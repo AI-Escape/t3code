@@ -5,7 +5,7 @@ import { nextCronRunAt } from "../t4/cron.ts";
 
 const MINUTE_MS = 60_000;
 
-export function parseTimeOfDay(value: string): { hour: number; minute: number } | null {
+function parseTimeOfDay(value: string): { hour: number; minute: number } | null {
   const match = /^([01]?\d|2[0-3]):([0-5]\d)$/.exec(value.trim());
   if (!match) return null;
   return { hour: Number(match[1]), minute: Number(match[2]) };
@@ -26,9 +26,8 @@ export function nextScheduledRunAt(
   if (schedule.type === "interval") {
     // Persisted rows created before the one-minute floor remain readable, but
     // they must not retain their old high-frequency execution rate.
-    return DateTime.add(from, {
-      milliseconds: Math.max(schedule.everyMs, MIN_SCHEDULED_TASK_INTERVAL_MS),
-    });
+    // Intervals advance elapsed time, including across daylight-saving changes.
+    return DateTime.addDuration(from, Math.max(schedule.everyMs, MIN_SCHEDULED_TASK_INTERVAL_MS));
   }
 
   const time = parseTimeOfDay(schedule.timeOfDay);
@@ -49,23 +48,16 @@ export function nextScheduledRunAt(
   return null;
 }
 
-/**
- * Canonical form of a weekday mask, mirroring how `nextScheduledRunAt` reads
- * it: order and duplicates are irrelevant, and an empty/omitted mask means the
- * same as explicitly listing all seven days — daily.
- */
 function weekdayKey(weekdays: ReadonlyArray<number> | undefined): string {
   const unique = [...new Set(weekdays ?? [])].toSorted((x, y) => x - y);
   if (unique.length === 0 || unique.length === 7) return "daily";
   return unique.join(",");
 }
 
-/** Semantic equality for schedules: true iff both fire at the same times. */
 export function isSameSchedule(a: ScheduledTaskSchedule, b: ScheduledTaskSchedule): boolean {
   if (a.type === "interval") {
     return b.type === "interval" && a.everyMs === b.everyMs;
   }
-  // Webhook tasks never have a next run, whatever their signature settings.
   if (a.type === "webhook") return b.type === "webhook";
   if (a.type === "once") return b.type === "once" && a.at === b.at;
   if (a.type === "cron") return b.type === "cron" && a.expression.trim() === b.expression.trim();
@@ -84,19 +76,8 @@ export function isSameSchedule(a: ScheduledTaskSchedule, b: ScheduledTaskSchedul
   );
 }
 
-/**
- * How late a fixed-time run may fire before it counts as missed. Covers poll
- * jitter and short sleeps, while a server booted hours after the slot skips
- * to the next occurrence instead of firing stale work at a random time.
- */
 const MISSED_FIXED_TIME_GRACE_MS = 10 * MINUTE_MS;
 
-/**
- * True when a due fixed-time run was missed by more than the grace window and
- * should be rescheduled to its next occurrence instead of firing now.
- * Interval schedules are never considered missed: an overdue interval task
- * catching up with a single run is the desired behaviour.
- */
 export function isMissedFixedTimeRun(
   schedule: ScheduledTaskSchedule,
   dueAt: DateTime.DateTime,

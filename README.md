@@ -6,17 +6,18 @@ Works with your subscriptions on Claude Code, Codex, Cursor, Grok Build, OpenCod
 
 ## This fork (AI-Escape, branch `t4`)
 
-This is T3 Code v0.1.0 (Orchestrator V2) with the session tooling of
+This is T3 Code v0.1.2 (Orchestrator V2) with the session tooling of
 [t4](https://github.com/AI-Escape/t4) built in. t4 runs one isolated T3 server
 per client, and its dashboard, instructions and container layout live in
 that repo. Apart from this section, the README is upstream's. The full design
 and the reasons behind it are in [`docs/t4/DESIGN.md`](docs/t4/DESIGN.md).
 
-**Keeping in sync:** upstream (`pingdotgg/t3code`) merges into `t4`, and t4's
-image pins a commit of this branch (`T3_FORK_REF`). Fork code lives in
+**Keeping in sync:** upstream (`pingdotgg/t3code`) release tags, not its
+`main`, merge into `t4`, and `main` is kept equal to `t4`. t4's image pins a
+commit of this branch (`T3_FORK_REF`). Fork code lives in
 `apps/server/src/t4/` where it can; every edit to an upstream file is marked
 with a `t4 fork:` comment, so `grep -rn "t4 fork:"` lists the merge surface.
-The server reports its version as `0.1.0-t4.<commit>`.
+The server reports its version as `<upstream release>-t4.<commit>`.
 
 ### Added
 
@@ -42,9 +43,6 @@ The server reports its version as `0.1.0-t4.<commit>`.
 - **Its own state** in `<userdata>/t4.sqlite`, with its own migrations.
   T3's `statev2.sqlite` is untouched. On first start it imports the old
   thread tools' JSON state once.
-- **Setting `offerResumeCompaction`** (Settings → General, on by default).
-  Off: no Compact chip on stale Claude threads, and Claude's own "compact
-  before continuing?" question is answered "keep full history" without asking.
 
 ### Changed
 
@@ -87,9 +85,12 @@ The server reports its version as `0.1.0-t4.<commit>`.
 
 ### Developing
 
-Tests run in the Node 24 build container: `./.t4-test.sh <paths>`, or
-`./.t4-test.sh --cmd "pnpm run typecheck"` (runs in `apps/server`). Format with
-`pnpm exec vp fmt <files>` before committing.
+Tests run in the Node 26 build container: `./.t4-test.sh <paths>` (the helper
+is local and gitignored; it installs the pnpm `packageManager` pins, since Node
+26 has no corepack). Typecheck everything from the root:
+`./.t4-test.sh --cmd "cd /src && pnpm run typecheck"`. Format with
+`pnpm exec vp fmt <files>` before committing. Browser tests need Chromium,
+which that container lacks.
 
 ---
 

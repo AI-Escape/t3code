@@ -2,9 +2,13 @@ import type { ProviderInteractionMode } from "@t3tools/contracts";
 
 // t4 fork: rewritten for t4's session tooling (handoff ledger, release manager,
 // settle, spawn, wakes, linked issues); see docs/t4/DESIGN.md.
-export const T3_CODE_ORCHESTRATION_INSTRUCTIONS = `
-
-## T3 Code orchestration
+/**
+ * Authored as self-contained sections so a provider that limits the size of
+ * each instruction entry can deliver every one whole. Codex cuts the middle out
+ * of any entry over 4,000 bytes, so start a new section before one gets close.
+ */
+export const T3_CODE_ORCHESTRATION_SECTIONS: ReadonlyArray<string> = [
+  `## T3 Code orchestration
 
 The \`t3-code\` MCP server is how your thread works with other threads. Its tools act as your thread.
 
@@ -16,26 +20,30 @@ The \`t3-code\` MCP server is how your thread works with other threads. Its tool
 - \`t3_owed\` lists what you still owe. Answer each before you settle.
 - \`t3_thread_send\` sends a plain message: it steers a running turn, and \`restart\` interrupts it. A message never moves the ledger; use \`t3_handoff\` for anything owed or asked.
 - When your work is fully closed - nothing owed, nothing awaiting the user - settle your thread as the last act of the turn (\`t3_thread_organize\` with \`settle\`). A later message, other than a handoff that asks nothing, cancels it and you are told.
-- \`t3_decisions\` lists the user's earlier answers to ask-user questions; an answer that isn't one of the offered options is a standing rule. Check it before asking something the user may already have decided.
+- \`t3_decisions\` lists the user's earlier answers to ask-user questions; an answer that isn't one of the offered options is a standing rule. Check it before asking something the user may already have decided.`,
+  `### Starting work
 
-### Starting work
-
-- Separate top-level work in its own worktree: \`t3_thread_launch\` with \`workspaceStrategy:{"type":"worktree","baseRef":"main","branch":"<the issue's branch>"}\`, \`issues\`, and the task in \`message\`. It is refused while other threads are live in the project, with them listed; pass \`anyway\` only when the work is genuinely separate. The new thread gets a footer telling it how to answer you. \`existing_worktree\` binds a checkout that already exists; omitted \`workspaceStrategy\` means the project root, not your worktree. Asking an agent to run \`git worktree add\` does not bind the thread; choose the workspace in the launch call.
-- Use \`delegate_task\` for a child task of your own thread, on any provider or model (choose from \`orchestrator_capabilities\`). It gets only the task prompt you supply; retain its \`taskId\` and use \`task_status\` or \`task_cancel\`. For each delegated review round, call \`delegate_task\` again with the brief, prior findings and unresolved objections, and a distinct \`clientRequestId\`. Prefer native subagent tools for same-provider work only when they support the chosen model.
+- Separate top-level work in its own worktree: \`t3_thread_launch\` with \`workspaceStrategy:{"type":"worktree","baseRef":"main","branch":"<the issue's branch>"}\`, \`issues\`, and the task in \`message\`. It is refused while other threads are live in the project, with them listed; pass \`anyway\` only when the work is genuinely separate. The new thread gets a footer telling it how to answer you. \`existing_worktree\` binds a checkout that already exists; omitted \`workspaceStrategy\` means the project root, not your worktree. \`startFromOrigin:true\` fetches the base branch's remote first. Asking an agent to run \`git worktree add\` does not bind the thread; choose the workspace in the launch call.
+- Use \`delegate_task\` for a child task of your own thread, on any provider or model (choose from \`orchestrator_capabilities\`, which lists a short set of models per provider; pass \`search\` to find others). It gets only the task prompt you supply; retain its \`taskId\` and use \`task_status\` or \`task_cancel\`. For each delegated review round, call \`delegate_task\` again with the brief, prior findings and unresolved objections, and a distinct \`clientRequestId\`. Prefer native subagent tools for same-provider work only when they support the chosen model and no model options are requested or inherited.
 - \`create_threads\` makes a batch of threads that share your checkout; use it only when asked for that.
-- \`t3_thread_launch\` has no retry key: after a failed or lost response, check \`t3_thread_list\` before launching again.
-
-### Coming back later
+- \`t3_thread_launch\` has no retry key: after a failed or lost response, check \`t3_thread_list\` before launching again.`,
+  `### Coming back later
 
 - To be woken in this thread later, \`schedule_task\` a run into it: \`{"type":"once","delayMs":7200000}\` in two hours, \`{"type":"once","at":"<ISO instant>"}\`, or recurring \`{"type":"cron","expression":"0 9 * * 1-5"}\`; your prompt is the note it delivers. Pass the schedule as a structured object, never as JSON text. \`threadId\` wakes another thread. Delete a recurring wake (\`delete_scheduled_task\`) in the turn that finishes its work.
 - To wait on a pull request, \`watch_pull_request\` and end your turn instead of polling; you are woken when checks finish, someone comments, or the branch conflicts.
 
 ### Other
 
-- For a secret from the user (a token, API key or signing secret), call \`request_secret\`; never ask for one in chat or invent one.
+- For a secret from the user (a token, API key or signing secret), call \`request_secret\` and pass the returned \`secretRef\` (it works once) to the tool that needs it; never ask for one in chat, invent one, or repeat one.
 - To mention another thread, link it as \`[title](t3-thread://v1/<threadId>)\` with its exact \`threadId\`, not URL-encoded.
 - Tool names may carry a harness prefix such as \`mcp__t3_code__t3_handoff\`; the meaning is the same. If a first tool scan doesn't show T3 tools, make one direct attempt by name before concluding they are unavailable.
-- When a chart, table, diagram or mockup would say more than prose, build a self-contained HTML page, check it with \`html_preview\`, then publish it with \`html_render\` before your final reply.
+- When a chart, table, diagram or mockup would say more than prose, build a self-contained HTML page, check it with \`html_preview\`, then publish it with \`html_render\` before your final reply. The reader sees the page above that reply, so don't announce or restate it.`,
+  `- When model options are requested or the child keeps the parent's provider instance and model with nonempty \`inheritedOptions\` from \`orchestrator_capabilities\`, use \`delegate_task\` even for native-supported models. Native subagents cannot reliably apply T3 model options. Read the selected model's descriptors from \`orchestrator_capabilities\` and put settings in \`target.options\`, not only in the prompt. Claude commonly uses {"effort":"max","fastMode":true}; Codex uses {"reasoningEffort":"max","serviceTier":"priority"}. Do not translate max to high or ignore unsupported settings: report a capability mismatch. Options inherit only for the same provider instance and model; explicit entries override individual values, and [] or {} clears them. Check the returned providerInstanceId, model, and options against the requested selection.`,
+];
+
+export const T3_CODE_ORCHESTRATION_INSTRUCTIONS = `
+
+${T3_CODE_ORCHESTRATION_SECTIONS.join("\n\n")}
 `;
 
 export const T3_CODE_BROWSER_TOOL_INSTRUCTIONS = `
@@ -96,9 +104,7 @@ export function t3AcpPromptWithInstructions(input: {
 }
 
 /**
- * Providers without a system/developer-instruction channel receive this
- * context in the first prompt. Keep the wrapper explicit so it cannot be
- * mistaken for text authored by the user.
+ * Keep the wrapper explicit so it cannot be mistaken for text authored by the user.
  */
 function prependT3OrchestrationInstructions(prompt: string): string {
   return `<t3_code_orchestration_instructions>${T3_CODE_ORCHESTRATION_INSTRUCTIONS.trim()}</t3_code_orchestration_instructions>\n\n<user_request>\n${prompt}\n</user_request>`;
