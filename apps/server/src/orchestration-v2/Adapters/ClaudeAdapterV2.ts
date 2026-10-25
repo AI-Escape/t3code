@@ -129,6 +129,8 @@ import {
   type ClaudeSkillTarget,
 } from "../../provider/Drivers/ClaudeSkillDispatch.ts";
 import { discoverClaudeSkills } from "../../provider/Drivers/ClaudeSkills.ts";
+// t4 fork: questionsAsMessages.
+import { QUESTION_POSTED_NOTE, t4QuestionsAsMessages } from "../../t4/questionsAsMessages.ts";
 import {
   compileClaudeModelSelection,
   type CompiledClaudeModelSelection,
@@ -8942,6 +8944,41 @@ export const makeClaudeAdapterV2 = Effect.fn("makeClaudeAdapterV2")(function* (
               requestKind: "user_input",
               questions,
             });
+            // t4 fork: questionsAsMessages - post it as a message-mode question
+            // and let Claude end its turn with its reply as the final message.
+            if (t4QuestionsAsMessages()) {
+              yield* Effect.all(
+                [
+                  emitProviderEvent({
+                    type: "node.updated",
+                    driver: CLAUDE_PROVIDER,
+                    node: artifacts.node,
+                  }),
+                  emitProviderEvent({
+                    type: "runtime_request.updated",
+                    driver: CLAUDE_PROVIDER,
+                    runtimeRequest: {
+                      ...artifacts.request,
+                      responseCapability: { type: "message" },
+                    },
+                  }),
+                  emitProviderEvent({
+                    type: "turn_item.updated",
+                    driver: CLAUDE_PROVIDER,
+                    turnItem:
+                      artifacts.turnItem.type === "user_input_request"
+                        ? { ...artifacts.turnItem, responseMode: "message" }
+                        : artifacts.turnItem,
+                  }),
+                ],
+                { concurrency: 1 },
+              );
+              return {
+                behavior: "deny",
+                message: QUESTION_POSTED_NOTE,
+                toolUseID: callbackOptions.toolUseID,
+              } satisfies PermissionResult;
+            }
             const answers = yield* Deferred.make<ProviderUserInputAnswers, never>();
             yield* Ref.update(pendingRuntimeRequests, (current) => {
               const updated = new Map(current);
