@@ -129,8 +129,9 @@ import {
   type ClaudeSkillTarget,
 } from "../../provider/Drivers/ClaudeSkillDispatch.ts";
 import { discoverClaudeSkills } from "../../provider/Drivers/ClaudeSkills.ts";
-// t4 fork: questionsAsMessages.
+// t4 fork: questionsAsMessages, declineSafetyChecks.
 import { QUESTION_POSTED_NOTE, t4QuestionsAsMessages } from "../../t4/questionsAsMessages.ts";
+import { safetyCheckDeclinedNote, t4DeclineSafetyChecks } from "../../t4/declineSafetyChecks.ts";
 import {
   compileClaudeModelSelection,
   type CompiledClaudeModelSelection,
@@ -9086,17 +9087,30 @@ export const makeClaudeAdapterV2 = Effect.fn("makeClaudeAdapterV2")(function* (
             callbackOptions.description ??
             callbackOptions.decisionReason ??
             summarizeClaudeToolRequest(toolName, nativeToolInput);
+          const presentation = claudeApprovalPresentation({
+            permissionMode: context.queryPolicy.permissionMode,
+            prompt,
+            callbackOptions,
+          });
+          // t4 fork: declineSafetyChecks.
+          if (presentation.fullAccessOverride === "provider_check" && t4DeclineSafetyChecks()) {
+            const reason = NodeUtil.stripVTControlCharacters(
+              callbackOptions.decisionReason ?? "",
+            ).trim();
+            yield* Effect.logInfo("t4.claude-safety-check-declined", { toolName, reason });
+            return {
+              behavior: "deny",
+              message: safetyCheckDeclinedNote(reason),
+              toolUseID: callbackOptions.toolUseID,
+            } satisfies PermissionResult;
+          }
           const artifacts = yield* buildApprovalRequestArtifacts({
             context,
             nativeItemId: nativeRequestId,
             nativeRequestId,
             requestKind,
             prompt,
-            presentation: claudeApprovalPresentation({
-              permissionMode: context.queryPolicy.permissionMode,
-              prompt,
-              callbackOptions,
-            }),
+            presentation,
           });
           const decision = yield* Deferred.make<ProviderApprovalDecision, never>();
           yield* Ref.update(pendingRuntimeRequests, (current) => {

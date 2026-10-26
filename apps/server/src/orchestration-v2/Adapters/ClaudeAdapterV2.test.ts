@@ -74,6 +74,7 @@ import { SpawnExecutableResolution } from "@t3tools/shared/shell";
 
 import { attachmentRelativePath } from "../../attachmentStore.ts";
 import { QUESTION_POSTED_NOTE } from "../../t4/questionsAsMessages.ts";
+import { safetyCheckDeclinedNote } from "../../t4/declineSafetyChecks.ts";
 import { WorkflowAgentTranscriptReadObserver } from "../workflowAgentTranscript.ts";
 import * as ServerConfig from "../../config.ts";
 import * as McpProviderSession from "@t3tools/provider-core/server/mcpSession";
@@ -13657,6 +13658,131 @@ describe("ClaudeAdapterV2 questions as messages", () => {
           assert.equal(event.value.runtimeRequest.status, "pending");
           assert.deepEqual(event.value.runtimeRequest.responseCapability, { type: "message" });
         }
+      }).pipe(
+        Effect.provide(
+          Layer.mergeAll(IdAllocator.layer, McpProviderSessions.layer, NodeServices.layer),
+        ),
+      ),
+    ),
+  );
+});
+
+describe("ClaudeAdapterV2 declines safety checks", () => {
+  it.effect("declines a check full access could not auto-allow, without a card", () =>
+    Effect.scoped(
+      Effect.gen(function* () {
+        const fileSystem = yield* FileSystem.FileSystem;
+        const idAllocator = yield* IdAllocator.IdAllocatorV2;
+        const attachmentsDir = yield* fileSystem.makeTempDirectoryScoped({
+          prefix: "t3-claude-decline-safety-checks-",
+        });
+        let openedOptions: ClaudeAdapterV2.ClaudeAgentSdkQueryOptions | undefined;
+        const adapter = yield* ClaudeAdapterV2.makeClaudeAdapterV2({
+          instanceId: ClaudeAdapterV2.CLAUDE_DEFAULT_INSTANCE_ID,
+          settings: DEFAULT_CLAUDE_SETTINGS,
+          environment: {},
+          attachmentsDir,
+          fileSystem,
+          path: yield* Path.Path,
+          crypto: yield* Crypto.Crypto,
+          idAllocator,
+          queryRunner: {
+            allocateSessionId: Effect.succeed("native-thread-claude-decline-safety-checks"),
+            open: (input) =>
+              Effect.sync(() => {
+                openedOptions = input.options;
+                return {
+                  messages: Stream.never,
+                  offer: () => Effect.void,
+                  setModel: () => Effect.void,
+                  applyFlagSettings: () => Effect.void,
+                  setPermissionMode: () => Effect.void,
+                  backgroundTasks: () => Effect.succeed(false),
+                  stopTask: () => Effect.void,
+                  interrupt: Effect.void,
+                  close: Effect.void,
+                };
+              }),
+            forkSession: () => Effect.die("unused"),
+            subagentLaunchToolUseId: () => Effect.succeed(null),
+            assertComplete: Effect.void,
+          },
+        });
+        const runtimePolicy = ProviderAdapter.ProviderAdapterV2RuntimePolicy.make({
+          runtimeMode: "full-access",
+          interactionMode: "default",
+          cwd: "/workspace",
+        });
+        const threadId = ThreadId.make("thread-claude-decline-safety-checks");
+        const runtime = yield* adapter.openSession({
+          threadId,
+          providerSessionId: ProviderSessionId.make(
+            "provider-session-claude-decline-safety-checks",
+          ),
+          modelSelection: CLAUDE_TEST_MODEL_SELECTION,
+          runtimePolicy,
+        });
+        const providerThread = yield* runtime.ensureThread({
+          threadId,
+          modelSelection: CLAUDE_TEST_MODEL_SELECTION,
+          runtimePolicy,
+        });
+        const now = yield* DateTime.now;
+        yield* runtime.startTurn(
+          makeClaudeTestTurnInput({
+            threadId,
+            providerThread,
+            now,
+            attemptId: RunAttemptId.make("attempt-claude-decline-safety-checks"),
+            text: "Clean up.",
+            attachments: [],
+            runtimePolicy,
+          }),
+        );
+        const canUseTool = openedOptions?.canUseTool;
+        assert.isFunction(canUseTool);
+
+        const requestEvent = yield* runtime.events.pipe(
+          Stream.filter((event) => event.type === "runtime_request.updated"),
+          Stream.runHead,
+          Effect.timeoutOption("200 millis"),
+          Effect.map(Option.flatten),
+          Effect.forkScoped,
+        );
+        const previous = process.env.T4_CLAUDE_DECLINE_SAFETY_CHECKS;
+        process.env.T4_CLAUDE_DECLINE_SAFETY_CHECKS = "1";
+        const decision = yield* Effect.promise(() =>
+          canUseTool!(
+            "Bash",
+            { command: "cd ../web; rm -f ../api/shots/*" },
+            {
+              signal: new AbortController().signal,
+              toolUseID: "tool-rm-glob",
+              requestId: "request-rm-glob",
+              decisionReason:
+                "Dangerous rm operation on statically-unresolvable target: /workspace/api/shots/*",
+              suppressAlwaysAllowRule: true,
+            },
+          ),
+        ).pipe(
+          Effect.ensuring(
+            Effect.sync(() => {
+              if (previous === undefined) delete process.env.T4_CLAUDE_DECLINE_SAFETY_CHECKS;
+              else process.env.T4_CLAUDE_DECLINE_SAFETY_CHECKS = previous;
+            }),
+          ),
+        );
+
+        assert.deepEqual(decision, {
+          behavior: "deny",
+          message: safetyCheckDeclinedNote(
+            "Dangerous rm operation on statically-unresolvable target: /workspace/api/shots/*",
+          ),
+          toolUseID: "tool-rm-glob",
+        });
+        yield* TestClock.adjust("1 second");
+        const event = yield* Fiber.join(requestEvent);
+        assert.isTrue(Option.isNone(event));
       }).pipe(
         Effect.provide(
           Layer.mergeAll(IdAllocator.layer, McpProviderSessions.layer, NodeServices.layer),

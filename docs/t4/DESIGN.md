@@ -49,7 +49,7 @@ list on the thread, not inferred from its title or branch (today's t4
 dashboard and `spawn` parse an issue id out of the title/branch).
 
 - Thread state: `linkedIssues` — `{ provider: "linear", identifier: "USA-1234",
-url, title, linkedAt }[]`, in thread shells (`/api/orchestration/shell`),
+  url, title, linkedAt }[]`, in thread shells (`/api/orchestration/shell`),
   `t3_thread_list` and `t3_thread_read`.
 - New tools, mirroring `link_pull_request` / `unlink_pull_request` /
   `list_thread_pull_requests`: `link_issue` (identifier or URL; linking an
@@ -85,6 +85,19 @@ own settings object (`showThinkingSummaries`) overwrites the provider's
 dropping `/defaults/claude-settings.json` (`attribution: false`,
 `sandbox: false`). The adapter merges a `--settings` file/JSON from
 `launchArgs` under T3's keys.
+
+Claude adapter switches (environment, set in t4's compose):
+
+- `T4_CLAUDE_QUESTIONS_AS_MESSAGES=1` — AskUserQuestion posts a
+  message-mode question (as Codex asks) and tells Claude to end its turn
+  with the brief as its final, verbatim message (`t4/questionsAsMessages.ts`).
+- `T4_CLAUDE_DECLINE_SAFETY_CHECKS=1` — a full-access thread never shows an
+  approval card. Under `bypassPermissions` Claude Code still forwards its own
+  safety checks (e.g. the dangerous-rm guard on a relative glob after a
+  `cd`); T3 marks them `provider_check`. They are declined at once with a
+  note to redo the command in a form the check can verify - literal
+  absolute paths, no `cd` before the rm (`t4/declineSafetyChecks.ts`).
+  Asks from a matched ask rule still reach the user.
 
 ## 3. Settings
 
