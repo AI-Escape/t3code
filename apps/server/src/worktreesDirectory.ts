@@ -7,6 +7,8 @@ import { expandHomePath } from "@t3tools/provider-core/server/pathExpansion";
 
 import * as ServerConfig from "./config.ts";
 import * as ServerSettings from "./serverSettings.ts";
+// t4 fork: worktreeNaming.
+import { worktreeNamingMode } from "./t4/worktreeNaming.ts";
 
 /**
  * Null when the setting is not an absolute path on this machine, such as `D:\worktrees`
@@ -99,7 +101,9 @@ export const makeIsManagedWorktreePath = Effect.gen(function* () {
       const segments = relative.split(path.sep);
       return (
         !path.isAbsolute(relative) &&
-        segments.length === 2 &&
+        // t4 fork: flat `<worktrees>/<issue id>` (T4_WORKTREE_NAMING=issueId) is
+        // also where the server puts a worktree, so it is recreated too.
+        (segments.length === 2 || (segments.length === 1 && worktreeNamingMode() === "issueId")) &&
         segments.every((segment) => segment !== "" && segment !== "..")
       );
     });

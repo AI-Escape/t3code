@@ -1,5 +1,5 @@
 import * as NodeServices from "@effect/platform-node/NodeServices";
-import { expect, it, vi } from "vite-plus/test";
+import { describe, expect, it, vi } from "vite-plus/test";
 import { it as effectIt } from "@effect/vitest";
 import {
   CheckpointScopeId,
@@ -73,6 +73,8 @@ function startWithMissingWorktree(
     [managedWorktreesDir]: managedWorktreesDir,
     [`${managedWorktreesDir}/project`]: `${managedWorktreesDir}/project`,
   },
+  // t4 fork: restoreWorktree tests fail the first checkout.
+  failFirstCheckout = false,
 ) {
   const threadId = ThreadId.make("thread_provider_turn_start_projection_failure");
   const runId = RunId.make("run_provider_turn_start_projection_failure");
@@ -122,6 +124,11 @@ function startWithMissingWorktree(
   const startRootRun = vi.fn(() => Effect.void);
   const pruneWorktrees = vi.fn(() => Effect.void);
   const createWorktree = vi.fn(() => Effect.succeed({} as never));
+  if (failFirstCheckout) {
+    createWorktree.mockImplementationOnce(() =>
+      Effect.fail(new Error("invalid reference: feature/restore") as never),
+    );
+  }
   const layer = ProviderTurnStart.layer.pipe(
     Layer.provide(
       Layer.mergeAll(
@@ -255,6 +262,49 @@ it.each([
   const harness = startWithMissingWorktree(input.worktreePath, input.realPaths);
   await harness.start;
   expect(harness.createWorktree).toHaveBeenCalledTimes(input.recreated ? 1 : 0);
+});
+
+// t4 fork: restoreWorktree.
+describe("t4 restoreWorktree", () => {
+  const withIssueIdNaming = async (run: () => Promise<void>) => {
+    const previous = process.env.T4_WORKTREE_NAMING;
+    process.env.T4_WORKTREE_NAMING = "issueId";
+    try {
+      await run();
+    } finally {
+      if (previous === undefined) delete process.env.T4_WORKTREE_NAMING;
+      else process.env.T4_WORKTREE_NAMING = previous;
+    }
+  };
+
+  it("recreates a flat <managed>/<issue id> worktree under issueId naming", () =>
+    withIssueIdNaming(async () => {
+      const harness = startWithMissingWorktree(`${managedWorktreesDir}/usa-1445`);
+      await harness.start;
+      expect(harness.createWorktree).toHaveBeenCalledWith({
+        cwd: "/tmp/provider-turn-start-project",
+        refName: "feature/restore",
+        path: `${managedWorktreesDir}/usa-1445`,
+      });
+    }));
+
+  it("leaves a flat path alone under upstream's branch naming", async () => {
+    const harness = startWithMissingWorktree(`${managedWorktreesDir}/usa-1445`);
+    await harness.start;
+    expect(harness.createWorktree).not.toHaveBeenCalled();
+  });
+
+  it("starts a fresh branch from origin's default when the thread's branch is gone", () =>
+    withIssueIdNaming(async () => {
+      const harness = startWithMissingWorktree(`${managedWorktreesDir}/usa-1445`, undefined, true);
+      await harness.start;
+      expect(harness.createWorktree).toHaveBeenLastCalledWith({
+        cwd: "/tmp/provider-turn-start-project",
+        refName: "origin/HEAD",
+        newRefName: "feature/restore",
+        path: `${managedWorktreesDir}/usa-1445`,
+      });
+    }));
 });
 
 function makeLocalCommandHarness(input: {

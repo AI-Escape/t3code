@@ -104,7 +104,13 @@ Claude adapter switches (environment, set in t4's compose):
 - `releaseManager.model` — selection release managers run on (t4: Codex
   gpt-6.1-sol, high).
 - `worktreeNaming` — `branch` (upstream behaviour) or `issueId` (t4: flat
-  `<worktreesDirectory>/<issue-id or slug>`).
+  `<worktreesDirectory>/<issue-id or slug>`). A thread whose worktree is
+  gone (t4's reaper removes clean ones after 48 h settled) gets it back at
+  its next turn, flat paths included: its branch is checked out again, or,
+  if the branch is gone, a fresh one of that name starts from `origin/HEAD`;
+  then the project's setup script runs (`t4/restoreWorktree.ts`). Upstream
+  recreated only `<worktrees>/<repo>/<branch>` paths from an existing
+  branch, without setup.
 - `launchPresets` — named model selections for `t3_thread_launch` and the
   operator API.
 - `stallRecovery` — enabled, silence minutes (15), repeat window (6 h).
