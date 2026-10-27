@@ -32,7 +32,6 @@ import * as ProviderAuthService from "../provider/ProviderAuthService.ts";
 import * as ServerSettings from "../serverSettings.ts";
 import { makeIsManagedWorktreePath } from "../worktreesDirectory.ts";
 // t4 fork: restoreWorktree.
-import * as ProjectSetupScriptRunner from "../project/ProjectSetupScriptRunner.ts";
 import { restoreWorktree } from "../t4/restoreWorktree.ts";
 import * as EventSink from "./EventSink.ts";
 import * as ContextHandoffService from "./ContextHandoffService.ts";
@@ -134,10 +133,6 @@ export const layer: Layer.Layer<
     const runExecution = yield* RunExecutionService.RunExecutionServiceV2;
     const runtimePolicy = yield* RuntimePolicy.RuntimePolicyV2;
     const isManagedWorktreePath = yield* makeIsManagedWorktreePath;
-    // t4 fork: restoreWorktree.
-    const setupScripts = yield* Effect.serviceOption(
-      ProjectSetupScriptRunner.ProjectSetupScriptRunner,
-    );
 
     // These callbacks outlive startup while a run drains background work. Build
     // them outside start's scope so they cannot retain its full thread history.
@@ -498,7 +493,9 @@ export const layer: Layer.Layer<
             // t4 fork: restoreWorktree (a gone branch starts fresh; setup runs).
             yield* restoreWorktree({
               gitWorkflow,
-              setupScripts,
+              settings: yield* serverSettings.getSettings.pipe(
+                Effect.orElseSucceed(() => undefined),
+              ),
               threadId: projection.thread.id,
               project: {
                 id: project.id,
