@@ -7787,7 +7787,13 @@ const makeOrchestrator = Effect.fn("orchestrationV2.Orchestrator.layer")(functio
         }
         const replies: string[] = [];
         for (const question of approvalTurnItem.questions) {
-          const answer = answers?.[question.id];
+          const raw = answers?.[question.id];
+          // t4 fork: Claude questions asked as messages (T4_CLAUDE_QUESTIONS_AS_MESSAGES)
+          // can be multi-select, whose picks arrive as a list - one per line, since
+          // option labels may hold commas. Upstream's Codex questions are single-select.
+          const answer = Array.isArray(raw)
+            ? raw.filter((pick): pick is string => typeof pick === "string").join("\n")
+            : raw;
           if (typeof answer !== "string" || answer.trim().length === 0) {
             if (question.required === false) continue;
             return yield* new OrchestratorDispatchError({

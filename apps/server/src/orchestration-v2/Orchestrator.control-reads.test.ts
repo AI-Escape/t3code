@@ -347,6 +347,110 @@ it.effect(
           );
         }
       }
+      // t4 fork: a multi-select question asked as a message (Claude under
+      // T4_CLAUDE_QUESTIONS_AS_MESSAGES) is answered with a list of picks.
+      {
+        const requestId = RuntimeRequestId.make("request:multi");
+        const nodeId = NodeId.make("node:multi");
+        yield* projections.apply({
+          id: EventId.make("request:multi"),
+          type: "runtime-request.updated",
+          threadId,
+          occurredAt: now,
+          payload: {
+            id: requestId,
+            nodeId,
+            providerTurnId: null,
+            nativeRequestRef: null,
+            kind: "user_input",
+            status: "pending",
+            responseCapability: { type: "message" },
+            createdAt: now,
+            resolvedAt: null,
+          },
+        });
+        yield* projections.apply({
+          id: EventId.make("node:multi"),
+          type: "node.updated",
+          threadId,
+          occurredAt: now,
+          payload: {
+            id: nodeId,
+            threadId,
+            runId: null,
+            parentNodeId: null,
+            rootNodeId: nodeId,
+            kind: "user_input_request",
+            status: "waiting",
+            countsForRun: false,
+            providerThreadId: null,
+            providerTurnId: null,
+            nativeItemRef: null,
+            runtimeRequestId: requestId,
+            checkpointScopeId: null,
+            startedAt: now,
+            completedAt: null,
+          },
+        });
+        yield* projections.apply({
+          id: EventId.make("item:multi"),
+          type: "turn-item.updated",
+          threadId,
+          occurredAt: now,
+          payload: {
+            id: TurnItemId.make("item:multi"),
+            threadId,
+            runId: null,
+            nodeId,
+            providerThreadId: null,
+            providerTurnId: null,
+            nativeItemRef: null,
+            parentItemId: null,
+            ordinal: 3,
+            status: "waiting",
+            title: null,
+            startedAt: now,
+            completedAt: null,
+            updatedAt: now,
+            type: "user_input_request",
+            requestId,
+            responseMode: "message",
+            questions: [
+              {
+                id: "next",
+                header: "Next up",
+                question: "What next?",
+                multiSelect: true,
+                options: [
+                  { label: "Prep, USA-1", description: "First." },
+                  { label: "USA-2", description: "Second." },
+                ],
+              },
+            ],
+          },
+        });
+        yield* orchestrator.dispatch({
+          type: "runtime-request.respond",
+          commandId: CommandId.make("respond:multi"),
+          threadId,
+          requestId,
+          answers: { next: ["Prep, USA-1", "USA-2"] },
+        });
+        assert.equal(
+          (yield* projections.getRuntimeRequest(threadId, requestId))?.status,
+          "resolved",
+        );
+        const sent = yield* projections.getThreadRecords(threadId, ["turnItems"], {
+          turnItemTypes: ["user_message"],
+        });
+        const reply = sent.turnItems.find(
+          (item) => item.type === "user_message" && item.messageId === "async-answer:request:multi",
+        );
+        assert.equal(
+          reply?.type === "user_message" ? reply.text : undefined,
+          "What next?\nPrep, USA-1\nUSA-2",
+        );
+      }
       yield* orchestrator.dispatch({
         type: "thread.metadata.update",
         commandId: CommandId.make("workspace-control"),
