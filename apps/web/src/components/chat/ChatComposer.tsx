@@ -197,7 +197,6 @@ import {
 import { ComposerPendingApprovalActions } from "./ComposerPendingApprovalActions";
 import {
   ComposerAttachButton,
-  ComposerAttachInput,
   ComposerAttachmentFileList,
   ComposerAttachmentMediaRow,
   ComposerFilePreviewDialog,
@@ -1111,8 +1110,6 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
   const composerEditorRef = useRef<ComposerPromptEditorHandle>(null);
   const pasteAsTextShortcutUntilRef = useRef(0);
   const composerFormRef = useRef<HTMLFormElement>(null);
-  // t4 fork: the attach input outlives the collapsible footer (ComposerAttachInput).
-  const attachInputRef = useRef<HTMLInputElement>(null);
   const composerSurfaceRef = useRef<HTMLDivElement>(null);
   const providerInputRejectedRef = useRef(false);
   const composerSelectLockRef = useRef(false);
@@ -1120,6 +1117,24 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
   const composerMenuItemsRef = useRef<ComposerCommandItem[]>([]);
   const activeComposerMenuItemRef = useRef<ComposerCommandItem | null>(null);
   const composerBlurFrameRef = useRef<number | null>(null);
+  // t4 fork: on a phone, opening the system file picker blurs the editor, and
+  // the collapsed composer has no footer - which held the file input, so the
+  // picked file arrived at an unmounted input and nothing happened. The
+  // composer stays expanded while the picker is up.
+  const filePickerOpenRef = useRef(false);
+  const setFilePickerOpen = (open: boolean) => {
+    filePickerOpenRef.current = open;
+    if (!open) return;
+    // No change or cancel event (older WebKit): the page regaining focus means
+    // the picker closed.
+    const onFocus = () => {
+      window.removeEventListener("focus", onFocus);
+      window.setTimeout(() => {
+        filePickerOpenRef.current = false;
+      }, 1000);
+    };
+    window.addEventListener("focus", onFocus);
+  };
   const mobileComposerExpandFrameRef = useRef<number | null>(null);
   const mobileComposerExpandReleaseFrameRef = useRef<number | null>(null);
   const mobileComposerExpandInFlightRef = useRef(false);
@@ -3012,6 +3027,7 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
     if (!isMobileViewport || mobileComposerExpandInFlightRef.current) {
       return;
     }
+    if (filePickerOpenRef.current) return;
     if (composerBlurFrameRef.current !== null) {
       window.cancelAnimationFrame(composerBlurFrameRef.current);
     }
@@ -3407,7 +3423,11 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
       />
     ) : null;
   const composerAttachButton = showComposerAttachAction ? (
-    <ComposerAttachButton inputRef={attachInputRef} />
+    <ComposerAttachButton
+      addComposerAttachments={addComposerAttachments}
+      focusComposer={focusComposer}
+      onPickerOpenChange={setFilePickerOpen}
+    />
   ) : null;
   return (
     <form
@@ -3482,11 +3502,6 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
       data-chat-composer-form="true"
       {...threadContextDropTargetProps()}
     >
-      <ComposerAttachInput
-        inputRef={attachInputRef}
-        addComposerAttachments={addComposerAttachments}
-        focusComposer={focusComposer}
-      />
       {composerControlsCollapsed && restingControlsHost
         ? createPortal(
             <div

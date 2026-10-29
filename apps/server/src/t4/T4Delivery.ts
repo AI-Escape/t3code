@@ -5,9 +5,12 @@
  * the message steered in; `interrupt` stops that turn and restarts it with
  * the message. Two side effects are spelled out to the agent in the message
  * itself:
- *   - a pending ask-user question can be closed by an incoming message
- *     (Claude) or read as its answer (Codex) - the message names it as still
- *     unanswered and has the agent ask again;
+ *   - a pending live ask-user question can be closed by an incoming message
+ *     - the message names it as still unanswered and has the agent ask again;
+ *     a message-mode question (Codex's, and Claude's under
+ *     T4_CLAUDE_QUESTIONS_AS_MESSAGES) stays open and answerable, so the
+ *     message only says it is not the answer and not to ask again - asking
+ *     again put the same questions up twice (usa-rs PM, 2026-10-29);
  *   - a steered message can cancel a running Claude tool call with Claude
  *     Code's "the user doesn't want to proceed" - the message says that was
  *     this message, not the user;
@@ -86,6 +89,12 @@ export const UNANSWERED_QUESTION_NOTE = (questions: ReadonlyArray<string>) =>
   "Handle this message, then ask the question again with your ask-user tool - unless " +
   "this message makes it moot.";
 
+export const OPEN_QUESTION_NOTE = (questions: ReadonlyArray<string>) =>
+  "Your question to the user is still open and they can answer it: " +
+  questions.map((q) => `"${q}"`).join("; ") +
+  ". This message is NOT their answer. Handle this message; don't ask the question again " +
+  "(their answer will arrive as a message) unless this message changes what you need to ask.";
+
 export const CANCELLED_TOOL_NOTE =
   'If a tool call of yours was just cancelled ("the user doesn\'t want to proceed"), this ' +
   "message cancelled it - not the user. The user has not asked you to stop; re-run it if you " +
@@ -100,10 +109,15 @@ export const REOPENED_SETTLED_NOTE =
 export const deliveryNotes = (input: {
   readonly settled: boolean;
   readonly questions: ReadonlyArray<string>;
+  /** Message-mode questions: still answerable whatever this message does. */
+  readonly openQuestions?: ReadonlyArray<string>;
   readonly claudeRunning: boolean;
 }): ReadonlyArray<string> => [
   ...(input.settled ? [REOPENED_SETTLED_NOTE] : []),
   ...(input.questions.length > 0 ? [UNANSWERED_QUESTION_NOTE(input.questions)] : []),
+  ...((input.openQuestions ?? []).length > 0
+    ? [OPEN_QUESTION_NOTE(input.openQuestions ?? [])]
+    : []),
   ...(input.claudeRunning ? [CANCELLED_TOOL_NOTE] : []),
 ];
 
@@ -117,10 +131,14 @@ export const make = Effect.gen(function* () {
 
   const fail = (message: string) => (cause: unknown) => new T4DeliveryError({ message, cause });
 
-  /** Questions the target is still waiting on the user for. */
+  /**
+   * Questions the target is still waiting on the user for: `live` ones an
+   * incoming message can close, `open` (message-mode) ones it cannot.
+   */
+  const noQuestions = { live: [] as ReadonlyArray<string>, open: [] as ReadonlyArray<string> };
   const pendingQuestions = (target: OrchestrationV2ThreadShell) =>
     target.pendingRuntimeRequest?.kind !== "user_input"
-      ? Effect.succeed([] as ReadonlyArray<string>)
+      ? Effect.succeed(noQuestions)
       : threadManagement
           .getProjectThreadRecords({ projectId: target.projectId, threadId: target.id }, [
             "runtimeRequests",
@@ -128,28 +146,34 @@ export const make = Effect.gen(function* () {
           ])
           .pipe(
             Effect.map((records) => {
-              const pending = new Set(
+              const pending = new Map(
                 records.runtimeRequests
                   .filter(
                     (request) => request.kind === "user_input" && request.status === "pending",
                   )
-                  .map((request) => request.id as string),
+                  .map((request) => [request.id as string, request.responseCapability.type]),
               );
-              return records.turnItems.flatMap((item) =>
-                item.type === "user_input_request" && pending.has(item.requestId)
-                  ? item.questions.map((question) => question.question || question.header)
-                  : [],
-              );
+              const questionsWhere = (open: boolean) =>
+                records.turnItems.flatMap((item) =>
+                  item.type === "user_input_request" &&
+                  pending.has(item.requestId) &&
+                  (pending.get(item.requestId) === "message") === open
+                    ? item.questions.map((question) => question.question || question.header)
+                    : [],
+                );
+              return { live: questionsWhere(false), open: questionsWhere(true) };
             }),
-            Effect.orElseSucceed(() => [] as ReadonlyArray<string>),
+            Effect.orElseSucceed(() => noQuestions),
           );
 
   /** The delivery notes, prepended when they apply. */
   const withNotes = (target: OrchestrationV2ThreadShell, text: string) =>
     Effect.gen(function* () {
+      const questions = yield* pendingQuestions(target);
       const notes = deliveryNotes({
         settled: isSettled(target),
-        questions: yield* pendingQuestions(target),
+        questions: questions.live,
+        openQuestions: questions.open,
         claudeRunning: target.providerInstanceId.startsWith("claude") && isRunning(target),
       });
       return notes.length === 0
