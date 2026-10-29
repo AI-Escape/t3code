@@ -7,7 +7,7 @@ import type {
 } from "@t3tools/contracts";
 import { formatAttachmentSize } from "@t3tools/client-runtime/state/attachments";
 import { CircleAlertIcon, PaperclipIcon, PlayIcon, XIcon } from "lucide-react";
-import { type ComponentProps, useEffect, useLayoutEffect, useRef } from "react";
+import { type ComponentProps, useLayoutEffect, useRef } from "react";
 
 import {
   type ComposerFileAttachment,
@@ -655,64 +655,67 @@ export function ComposerQueuedAttachmentRow({
   );
 }
 
+// t4 fork: the file input lives on <body>, outside the composer. On a phone the
+// composer collapses when the editor loses focus - which opening the system
+// file picker does - and the collapsed composer has no footer, so an input
+// inside this button was unmounted before the picked file arrived and the pick
+// did nothing (iOS Safari, 2026-10-28). Keeping the composer expanded while the
+// picker was up (27d72ca) passed in WebKit emulation but not on an iPhone, and
+// an input at the form's root (80d3f26) changed the form the keyboard sees.
+let attachInput: HTMLInputElement | null = null;
+let onAttachPicked: ((files: File[]) => void) | null = null;
+
+function openAttachPicker(onPicked: (files: File[]) => void) {
+  if (!attachInput) {
+    const input = document.createElement("input");
+    input.type = "file";
+    input.multiple = true;
+    input.hidden = true;
+    input.addEventListener("change", () => {
+      const files = Array.from(input.files ?? []);
+      input.value = "";
+      onAttachPicked?.(files);
+    });
+    document.body.append(input);
+    attachInput = input;
+  }
+  onAttachPicked = onPicked;
+  attachInput.click();
+}
+
 export function ComposerAttachButton({
   addComposerAttachments,
   focusComposer,
-  onPickerOpenChange,
 }: {
   readonly addComposerAttachments: (files: File[]) => Promise<boolean>;
   readonly focusComposer: () => void;
-  // t4 fork: tells the composer the system file picker is up (see ChatComposer).
-  readonly onPickerOpenChange?: (open: boolean) => void;
 }) {
-  const inputRef = useRef<HTMLInputElement>(null);
-  // A dismissed picker fires `cancel` (React has no prop for it on inputs).
-  useEffect(() => {
-    const input = inputRef.current;
-    if (!input || !onPickerOpenChange) return;
-    const onCancel = () => onPickerOpenChange(false);
-    input.addEventListener("cancel", onCancel);
-    return () => input.removeEventListener("cancel", onCancel);
-  }, [onPickerOpenChange]);
   return (
-    <>
-      <input
-        ref={inputRef}
-        type="file"
-        multiple
-        className="hidden"
-        onChange={(event) => {
-          onPickerOpenChange?.(false);
-          const files = Array.from(event.currentTarget.files ?? []);
-          event.currentTarget.value = "";
-          // Inserting a chip refocuses the editor after the draft renders;
-          // focusing synchronously here would report the editor's stale text
-          // over the prompt that was just written.
-          void addComposerAttachments(files).then((inserted) => {
-            if (!inserted) focusComposer();
-          });
-        }}
-      />
-      <Tooltip>
-        <TooltipTrigger
-          render={
-            <Button
-              type="button"
-              variant="ghost"
-              size="icon-sm"
-              onPointerDown={(event) => event.preventDefault()}
-              onClick={() => {
-                onPickerOpenChange?.(true);
-                inputRef.current?.click();
-              }}
-              aria-label="Attach files"
-            />
-          }
-        >
-          <PaperclipIcon />
-        </TooltipTrigger>
-        <TooltipPopup>Attach files</TooltipPopup>
-      </Tooltip>
-    </>
+    <Tooltip>
+      <TooltipTrigger
+        render={
+          <Button
+            type="button"
+            variant="ghost"
+            size="icon-sm"
+            onPointerDown={(event) => event.preventDefault()}
+            onClick={() =>
+              openAttachPicker((files) => {
+                // Inserting a chip refocuses the editor after the draft renders;
+                // focusing synchronously here would report the editor's stale text
+                // over the prompt that was just written.
+                void addComposerAttachments(files).then((inserted) => {
+                  if (!inserted) focusComposer();
+                });
+              })
+            }
+            aria-label="Attach files"
+          />
+        }
+      >
+        <PaperclipIcon />
+      </TooltipTrigger>
+      <TooltipPopup>Attach files</TooltipPopup>
+    </Tooltip>
   );
 }
