@@ -86,46 +86,44 @@ export const make = Effect.gen(function* () {
   const threadManagement = yield* ThreadManagementService.ThreadManagementService;
   const fail = (cause: unknown) => new T4LedgerError({ cause });
 
-  const world: T4LedgerShape["world"] = () =>
-    Effect.gen(function* () {
-      const snapshot = yield* threadManagement.getShellSnapshot().pipe(Effect.mapError(fail));
-      const threads = [...snapshot.threads, ...snapshot.archivedThreads].filter(
-        (thread) => thread.deletedAt === null,
-      );
-      const byId = new Map(threads.map((thread) => [thread.id as string, thread]));
-      const rms = yield* store.releaseManagers().pipe(Effect.mapError(fail));
-      const open = yield* store.openHandoffs().pipe(Effect.mapError(fail));
-      return {
-        threads,
-        byId,
-        releaseManagers: new Set(rms.values()),
-        open,
-        live: liveEntries(open, byId),
-      };
-    });
+  const world: T4LedgerShape["world"] = Effect.fn("t4.T4Ledger.world")(function* () {
+    const snapshot = yield* threadManagement.getShellSnapshot();
+    const threads = [...snapshot.threads, ...snapshot.archivedThreads].filter(
+      (thread) => thread.deletedAt === null,
+    );
+    const byId = new Map(threads.map((thread) => [thread.id as string, thread]));
+    const rms = yield* store.releaseManagers();
+    const open = yield* store.openHandoffs();
+    return {
+      threads,
+      byId,
+      releaseManagers: new Set(rms.values()),
+      open,
+      live: liveEntries(open, byId),
+    };
+  }, Effect.mapError(fail));
 
   const isReleaseManager: T4LedgerShape["isReleaseManager"] = (w, thread) =>
     w.releaseManagers.has(thread.id) || thread.title.startsWith(config.releaseManagerTitlePrefix);
 
-  const findReleaseManager: T4LedgerShape["findReleaseManager"] = (w, projectId, includeRetired) =>
-    Effect.gen(function* () {
-      const recorded = (yield* store.releaseManagers().pipe(Effect.mapError(fail))).get(projectId);
-      const known = recorded === undefined ? undefined : w.byId.get(recorded);
-      if (known !== undefined && (includeRetired || !isRetired(known))) return known;
-      const titled = w.threads
-        .filter(
-          (thread) =>
-            thread.projectId === projectId &&
-            thread.title.startsWith(config.releaseManagerTitlePrefix) &&
-            (includeRetired || !isRetired(thread)),
-        )
-        .toSorted((left, right) => lastActivityMs(right) - lastActivityMs(left));
-      const found = titled[0];
-      if (found !== undefined) {
-        yield* store.setReleaseManager(projectId, found.id).pipe(Effect.mapError(fail));
-      }
-      return found;
-    });
+  const findReleaseManager: T4LedgerShape["findReleaseManager"] = Effect.fn("t4.T4Ledger.findReleaseManager")(function* (w: Parameters<T4LedgerShape["findReleaseManager"]>[0], projectId: Parameters<T4LedgerShape["findReleaseManager"]>[1], includeRetired: Parameters<T4LedgerShape["findReleaseManager"]>[2]) {
+    const recorded = (yield* store.releaseManagers()).get(projectId);
+    const known = recorded === undefined ? undefined : w.byId.get(recorded);
+    if (known !== undefined && (includeRetired || !isRetired(known))) return known;
+    const titled = w.threads
+      .filter(
+        (thread) =>
+          thread.projectId === projectId &&
+          thread.title.startsWith(config.releaseManagerTitlePrefix) &&
+          (includeRetired || !isRetired(thread)),
+      )
+      .toSorted((left, right) => lastActivityMs(right) - lastActivityMs(left));
+    const found = titled[0];
+    if (found !== undefined) {
+      yield* store.setReleaseManager(projectId, found.id);
+    }
+    return found;
+  }, Effect.mapError(fail));
 
   const facts: T4LedgerShape["facts"] = (w, threadId) => {
     const thread = w.byId.get(threadId);

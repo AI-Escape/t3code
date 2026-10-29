@@ -14,16 +14,18 @@ import * as T4Settle from "./T4Settle.ts";
 import * as T4Stalls from "./T4Stalls.ts";
 
 /** Runs `job` at most once per `everyMs`. */
-const throttled = <E, R>(everyMs: number, job: Effect.Effect<void, E, R>) =>
-  Effect.gen(function* () {
-    const last = yield* Ref.make(0);
-    return Effect.gen(function* () {
-      const now = yield* Clock.currentTimeMillis;
-      if (now - (yield* Ref.get(last)) < everyMs) return;
-      yield* Ref.set(last, now);
-      yield* job;
-    });
+const throttled = Effect.fn("t4.T4Jobs.throttled")(function* <E, R>(
+  everyMs: number,
+  job: Effect.Effect<void, E, R>,
+) {
+  const last = yield* Ref.make(0);
+  return Effect.gen(function* () {
+    const now = yield* Clock.currentTimeMillis;
+    if (now - (yield* Ref.get(last)) < everyMs) return;
+    yield* Ref.set(last, now);
+    yield* job;
   });
+});
 
 export const layer = Layer.effectDiscard(
   Effect.gen(function* () {

@@ -1,12 +1,8 @@
 import type { ProviderInteractionMode } from "@t3tools/contracts";
 
-// t4 fork: rewritten for t4's session tooling (handoff ledger, release manager,
-// settle, spawn, wakes, linked issues); see docs/t4/DESIGN.md.
-/**
- * Authored as self-contained sections so a provider that limits the size of
- * each instruction entry can deliver every one whole. Codex cuts the middle out
- * of any entry over 4,000 bytes, so start a new section before one gets close.
- */
+// t4 fork: t4's session tooling (handoff ledger, release manager, settle,
+// launch, wakes, linked issues) around upstream's sections; see docs/t4/DESIGN.md.
+// Codex truncates entries over 4,000 bytes; keep each section self-contained and below that limit.
 export const T3_CODE_ORCHESTRATION_SECTIONS: ReadonlyArray<string> = [
   `## T3 Code orchestration
 
@@ -21,24 +17,35 @@ The \`t3-code\` MCP server is how your thread works with other threads. Its tool
 - \`t3_thread_send\` sends a plain message: it steers a running turn, and \`restart\` interrupts it. A message never moves the ledger; use \`t3_handoff\` for anything owed or asked.
 - When your work is fully closed - nothing owed, nothing awaiting the user - settle your thread as the last act of the turn (\`t3_thread_organize\` with \`settle\`). A later message, other than a handoff that asks nothing, cancels it and you are told.
 - \`t3_decisions\` lists the user's earlier answers to ask-user questions; an answer that isn't one of the offered options is a standing rule. Check it before asking something the user may already have decided.`,
+  `### Subagents
+
+- Subagents: use your native tool when the child uses your provider, a model it offers, and no settings beyond yours, and it finishes in this turn (Claude \`Agent\` always with \`run_in_background:false\`; Codex \`spawn_agent\`, then wait). Use \`delegate_task\` for another provider's model, user-asked settings, a separate checkout (\`isolation:"worktree"\`), background work, or \`delegate_task\` by name. A native type running another provider's model counts too. Workflow only when asked.
+- Call \`orchestrator_capabilities\` once per thread, before the first \`delegate_task\`. Again only after an error or a user-named provider change. Settings go in \`target.options\`. Provider or model unavailable: say so. Never switch unasked, or fall back to native tools, Workflow, or CLIs. Never make a child's checkout in the shell or in \`task\`.
+- Every new delegate review or re-check is a new \`delegate_task\` (brief, findings, objections), never a \`t3_thread_send\`. Fix small review findings yourself; start no delegate for them. When told to proceed without a delegate, or to run fewer, \`task_cancel\` the extras. Start no replacement.
+- Follow a running delegate's \`next\`. Do not poll it (\`task_status\`, \`sleep\`, watchers, Monitor, ScheduleWakeup). Stop a delegate run you replace or no longer need with \`task_cancel\`, never \`t3_thread_interrupt\` on a \`childThreadId\`.
+- If you are a subagent or child, do the work yourself. Start no subagents unless your task says to.`,
   `### Starting work
 
-- Separate top-level work in its own worktree: \`t3_thread_launch\` with \`workspaceStrategy:{"type":"worktree","baseRef":"main","branch":"<the issue's branch>"}\`, \`issues\`, and the task in \`message\`. It is refused while other threads are live in the project, with them listed; pass \`anyway\` only when the work is genuinely separate. The new thread gets a footer telling it how to answer you. \`existing_worktree\` binds a checkout that already exists; omitted \`workspaceStrategy\` means the project root, not your worktree. \`startFromOrigin:true\` fetches the base branch's remote first. Asking an agent to run \`git worktree add\` does not bind the thread; choose the workspace in the launch call.
-- Use \`delegate_task\` for a child task of your own thread, on any provider or model (choose from \`orchestrator_capabilities\`, which lists a short set of models per provider; pass \`search\` to find others). It gets only the task prompt you supply; retain its \`taskId\` and use \`task_status\` or \`task_cancel\`. For each delegated review round, call \`delegate_task\` again with the brief, prior findings and unresolved objections, and a distinct \`clientRequestId\`. Prefer native subagent tools for same-provider work only when they support the chosen model and no model options are requested or inherited.
+- Separate top-level work in its own worktree: \`t3_thread_launch\` with \`workspaceStrategy:{"type":"worktree","baseRef":"main","branch":"<the issue's branch>"}\`, \`issues\`, and the task in \`message\`. It is refused while other threads are live in the project, with them listed; pass \`anyway\` only when the work is genuinely separate. The new thread gets a footer telling it how to answer you. \`existing_worktree\` binds a checkout that already exists; omitted \`workspaceStrategy\` means the project root, not your worktree. \`startFromOrigin:true\` fetches the base branch's remote first. Shell worktrees do not bind a thread; choose the workspace in the launch call. "Subagent", "delegate" and "parallel" never mean a new thread.
 - \`create_threads\` makes a batch of threads that share your checkout; use it only when asked for that.
-- \`t3_thread_launch\` has no retry key: after a failed or lost response, check \`t3_thread_list\` before launching again.`,
+- \`t3_thread_launch\` has no retry key: after a failed or lost response, check \`t3_thread_list\` before launching again.
+- Given a thread id, \`t3_thread_read\` it before you answer about it.
+- Another machine: \`t3_environment_links\` lists linked ones. Pass its \`environmentId\` to a T3 tool to act there. Ids are then that machine's, so pass \`threadId\`.
+- A machine the user names that is not linked ("delegate this to my vps"): call \`t3_environment_link\` with a \`hint\` from their words. Never ask for a pairing code in chat.`,
   `### Coming back later
 
-- To be woken in this thread later, \`schedule_task\` a run into it: \`{"type":"once","delayMs":7200000}\` in two hours, \`{"type":"once","at":"<ISO instant>"}\`, or recurring \`{"type":"cron","expression":"0 9 * * 1-5"}\`; your prompt is the note it delivers. Pass the schedule as a structured object, never as JSON text. \`threadId\` wakes another thread. Delete a recurring wake (\`delete_scheduled_task\`) in the turn that finishes its work.
+- To be woken in this thread later, \`schedule_task\` a run into it: \`{"type":"once","delayMs":7200000}\` in two hours, \`{"type":"once","at":"<ISO instant>"}\`, or recurring \`{"type":"cron","expression":"0 9 * * 1-5"}\`; your prompt is the note it delivers. Pass the schedule as a structured object, never as JSON text. \`threadId\` wakes another thread. Delete a recurring wake (\`delete_scheduled_task\`) in the turn that finishes its work. When asked only to schedule, \`schedule_task\` without running its prompt.
 - To wait on a pull request, \`watch_pull_request\` and end your turn instead of polling; you are woken when checks finish, someone comments, or the branch conflicts.
 
 ### Other
 
-- For a secret from the user (a token, API key or signing secret), call \`request_secret\` and pass the returned \`secretRef\` (it works once) to the tool that needs it; never ask for one in chat, invent one, or repeat one.
-- To mention another thread, link it as \`[title](t3-thread://v1/<threadId>)\` with its exact \`threadId\`, not URL-encoded.
-- Tool names may carry a harness prefix such as \`mcp__t3_code__t3_handoff\`; the meaning is the same. If a first tool scan doesn't show T3 tools, make one direct attempt by name before concluding they are unavailable.
-- When a chart, table, diagram or mockup would say more than prose, build a self-contained HTML page, check it with \`html_preview\`, then publish it with \`html_render\` before your final reply. The reader sees the page above that reply, so don't announce or restate it.`,
-  `- When model options are requested or the child keeps the parent's provider instance and model with nonempty \`inheritedOptions\` from \`orchestrator_capabilities\`, use \`delegate_task\` even for native-supported models. Native subagents cannot reliably apply T3 model options. Read the selected model's descriptors from \`orchestrator_capabilities\` and put settings in \`target.options\`, not only in the prompt. Claude commonly uses {"effort":"max","fastMode":true}; Codex uses {"reasoningEffort":"max","serviceTier":"priority"}. Do not translate max to high or ignore unsupported settings: report a capability mismatch. Options inherit only for the same provider instance and model; explicit entries override individual values, and [] or {} clears them. Check the returned providerInstanceId, model, and options against the requested selection.`,
+- In your reply, mention a thread by its \`link\`, verbatim. Never a plain title or bare id.
+- A secret: call \`request_secret\` yourself. Pass its \`secretRef\` to a T3 tool, or use \`delivery: "file"\` for a shell command. Never ask in chat or invent one.
+- Tool names may carry a harness prefix such as \`mcp__t3_code__t3_handoff\`; the meaning is the same. T3 tools may load late. Try the name once before you call it absent.`,
+  `### Visuals and preview
+
+- Answer data with a trend or comparison with a chart, and show any visual the user asks for here: pass its HTML to \`html_preview\`, then \`html_render\`. If the visual is a file, pass that file's HTML. A screenshot on disk or a text description does not show it. Never start a server for it. Tools a web page exposes give data only. Never use them to show results. Asked for an image to post, send, or use elsewhere: a \`.png\` file and its path, never \`html_render\`.
+- Never use \`preview_*\` to verify or show your own edit, even a frontend edit or an open tab. Do not repeat preview calls from an earlier turn. Use them only when the current request asks for browser work or names a page or tab. Public pages: web fetch or search unless browser work was asked; then preview tools only, no web fetch. Close a tab you opened before you reply, unless the user asked for it or uses it.`,
 ];
 
 export const T3_CODE_ORCHESTRATION_INSTRUCTIONS = `
@@ -48,19 +55,33 @@ ${T3_CODE_ORCHESTRATION_SECTIONS.join("\n\n")}
 
 export const T3_CODE_BROWSER_TOOL_INSTRUCTIONS = `
 
-## T3 Code collaborative browser
+## T3 Code browser
 
-You are running inside T3 Code. The \`t3-code\` MCP server is the product-native collaborative browser shared with the user. When it exposes \`preview_*\` tools, prefer those tools for browser navigation, inspection, interaction, screenshots, and recordings.
-
-For browser work, first call \`preview_status\`. If no automation-capable preview is attached, call \`preview_open\` before concluding that the browser is unavailable. Then use \`preview_navigate\`, \`preview_snapshot\`, and the focused interaction tools. Prefer snapshot-provided locators over coordinates.
-
-\`preview_status\` lists every browser tab in this thread, including tabs the user opened. When the user asks about "this page" or a page they have open, read their tab: pass its \`tabId\` to \`preview_snapshot\` or \`preview_wait_for\`, or omit \`tabId\` when you have no tab of your own. You may act on the user's tab, including \`preview_evaluate\`, only while its owner is \`unclaimed\`; while it is \`human\`, the user is driving, so read it with \`preview_snapshot\` or open your own tab. To use a browser profile (a set of saved logins), pass \`profileId\` from \`preview_status\` profiles to \`preview_open\`.
-
-Do not switch to global browser skills, Chrome, Node REPL browser automation, standalone Playwright, or agent-browser merely because the preview is initially closed or a first call fails. Inspect a failed preview call and retry with corrected arguments when the error is actionable. Use another browser system when:
-- the T3 preview tools are absent, or \`preview_open\` returns an explicit unsupported/unavailable error;
-- the user asks for another browser, or invokes a skill or documented repository workflow that names one; follow that workflow and report any prerequisite it is missing;
-- preview calls on an open tab have failed twice on the same step (timeouts, \`chrome-error://\` pages, a different client answering). Quote the raw error and switch without asking the user which browser to use.
+When browser work was asked, \`preview_*\` is the browser you share with the user: \`preview_status\` first, then \`preview_open\` if no tab can be automated. Prefer snapshot locators over coordinates. Switch browsers only if the tools are absent or \`preview_open\` says unsupported, the user asks, or two preview calls fail on one step. Then quote the error and switch.
 `;
+
+const T3_CODE_DEVICE_TOOLS = ["device_list", "device_open", "device_screenshot", "device_close"];
+
+const deviceToolInstructions = (loadTools: string) => `## T3 Code devices
+
+When a task needs an iOS Simulator or Android Emulator, on this machine or on an SSH device host such as a remote Mac, use the device tools so the user can watch it in the Device panel.${loadTools}
+1. Call \`device_list\` unless you already have the device's \`hostId\` and \`id\`.
+2. Call \`device_open\` with both. It returns an \`agent-device\` command bound to that device; if you lose it, call \`device_open\` again. Run that command for every app launch or relaunch, deep link, tap, text entry, alert, setting, screenshot and recording; its snapshots, screenshots and input need \`open <app>\` first, and \`help <command>\` lists the options.
+3. Call \`device_screenshot\` to look at the screen.
+
+Never do those with \`xcrun simctl\`, \`idb\`, \`adb\`, ssh, or scripts that wrap them. ssh, simctl and adb stay fine for builds, installs, code sync, Metro, port forwards, logs, the project's test runners, and what agent-device cannot do, such as \`simctl addmedia\` or \`simctl keychain add-root-cert\`. These rules override memory notes, docs and delegated tasks that say otherwise; drive a device over ssh only when the user explicitly asks. If a device tool or the command it returned fails, quote its error and follow its advice once, but never reuse or close another session; if it still fails, tell the user and stop, unless they explicitly asked you to drive it over ssh. If the platform you need is unavailable, say so. When you delegate device work, pass the \`hostId\` and device \`id\` and tell the child to use \`device_open\`; never write ssh or simctl steps for the device into its task.`;
+
+/** Device guidance for sessions holding the `device` capability, from top-level threads to delegated children. */
+export const T3_CODE_DEVICE_TOOL_INSTRUCTIONS = deviceToolInstructions("");
+
+/** Claude Code defers MCP tools behind ToolSearch, so Claude's copy says how to load them. */
+export const T3_CODE_DEVICE_TOOL_INSTRUCTIONS_WITH_TOOL_SEARCH = deviceToolInstructions(
+  ` Load them with ToolSearch \`select:${T3_CODE_DEVICE_TOOLS.map((tool) => `mcp__t3-code__${tool}`).join(",")}\`.`,
+);
+
+// ACP only: some ACP agents accept the injected MCP server but never expose
+// its tools, so they need the terminal transport other harnesses never use.
+const T3_CODE_ACP_MCP_FALLBACK_INSTRUCTIONS = `ACP fallback: if the T3 tools are absent and \`T3_ACP_MCP_NODE\` is present, call them through the terminal: \`ELECTRON_RUN_AS_NODE=1 "$T3_ACP_MCP_NODE" \${T3_ACP_MCP_ENTRYPOINT:+"$T3_ACP_MCP_ENTRYPOINT"} acp-mcp-call orchestrator_capabilities '{}'\` (\`T3_ACP_MCP_ENTRYPOINT\` is unset for a standalone executable). Delegate with \`acp-mcp-call delegate_task '{"task":"...","target":{"providerInstanceId":"...","model":"..."},"mode":"async","clientRequestId":"..."}'\`.`;
 
 const T3_CODE_ACP_DEFAULT_MODE_INSTRUCTIONS = `## T3 Code interaction mode: Default
 
@@ -73,12 +94,10 @@ Investigate with read-only actions and do not edit files or otherwise execute th
 export interface T3AcpInstructionState {
   readonly interactionMode: ProviderInteractionMode;
   readonly hasT3Mcp: boolean;
+  readonly hasDeviceTools: boolean;
 }
 
-/**
- * ACP has no system/developer prompt field, so send T3-owned context in the
- * first user prompt and whenever the available tools or interaction mode change.
- */
+/** ACP lacks system/developer fields; inject context on first prompt and tool/mode changes. */
 export function t3AcpPromptWithInstructions(input: {
   readonly prompt: string;
   readonly state: T3AcpInstructionState;
@@ -88,7 +107,8 @@ export function t3AcpPromptWithInstructions(input: {
   if (input.prompt.trimStart().startsWith("/")) return input.prompt;
   if (
     input.previousState?.interactionMode === input.state.interactionMode &&
-    input.previousState.hasT3Mcp === input.state.hasT3Mcp
+    input.previousState.hasT3Mcp === input.state.hasT3Mcp &&
+    input.previousState.hasDeviceTools === input.state.hasDeviceTools
   ) {
     return input.prompt;
   }
@@ -97,29 +117,49 @@ export function t3AcpPromptWithInstructions(input: {
       ? T3_CODE_ACP_PLAN_MODE_INSTRUCTIONS
       : T3_CODE_ACP_DEFAULT_MODE_INSTRUCTIONS,
     ...(input.state.hasT3Mcp
-      ? [T3_CODE_BROWSER_TOOL_INSTRUCTIONS.trim(), T3_CODE_ORCHESTRATION_INSTRUCTIONS.trim()]
+      ? [
+          T3_CODE_BROWSER_TOOL_INSTRUCTIONS.trim(),
+          ...(input.state.hasDeviceTools ? [T3_CODE_DEVICE_TOOL_INSTRUCTIONS] : []),
+          T3_CODE_ORCHESTRATION_INSTRUCTIONS.trim(),
+          T3_CODE_ACP_MCP_FALLBACK_INSTRUCTIONS,
+        ]
       : []),
   ];
   return `<t3_code_instructions>\n${instructions.join("\n\n")}\n</t3_code_instructions>\n\n<user_request>\n${input.prompt}\n</user_request>`;
 }
 
-/**
- * Keep the wrapper explicit so it cannot be mistaken for text authored by the user.
- */
-function prependT3OrchestrationInstructions(prompt: string): string {
-  return `<t3_code_orchestration_instructions>${T3_CODE_ORCHESTRATION_INSTRUCTIONS.trim()}</t3_code_orchestration_instructions>\n\n<user_request>\n${prompt}\n</user_request>`;
+const orchestrationInstructions = (hasDeviceTools: boolean) =>
+  hasDeviceTools
+    ? `${T3_CODE_ORCHESTRATION_INSTRUCTIONS}\n${T3_CODE_DEVICE_TOOL_INSTRUCTIONS}\n`
+    : T3_CODE_ORCHESTRATION_INSTRUCTIONS;
+
+function prependT3OrchestrationInstructions(prompt: string, instructions: string): string {
+  return `<t3_code_orchestration_instructions>${instructions.trim()}</t3_code_orchestration_instructions>\n\n<user_request>\n${prompt}\n</user_request>`;
 }
 
-export function t3OrchestrationPromptForFirstRun(input: {
+/** For providers whose instructions ride on the prompt, so a compacted conversation loses them. */
+export function t3OrchestrationPrompt(input: {
   readonly prompt: string;
-  readonly runOrdinal: number;
   readonly hasT3Mcp: boolean;
+  readonly hasDeviceTools: boolean;
+  readonly orchestrationDelivered: boolean;
+  readonly deviceInstructionsDelivered: boolean;
 }): string {
-  return input.runOrdinal === 1 && input.hasT3Mcp
-    ? prependT3OrchestrationInstructions(input.prompt)
+  if (!input.hasT3Mcp) return input.prompt;
+  if (!input.orchestrationDelivered) {
+    return prependT3OrchestrationInstructions(
+      input.prompt,
+      orchestrationInstructions(input.hasDeviceTools),
+    );
+  }
+  return input.hasDeviceTools && !input.deviceInstructionsDelivered
+    ? prependT3OrchestrationInstructions(input.prompt, T3_CODE_DEVICE_TOOL_INSTRUCTIONS)
     : input.prompt;
 }
 
-export function t3OrchestrationSystemPrompt(hasT3Mcp: boolean): string | undefined {
-  return hasT3Mcp ? T3_CODE_ORCHESTRATION_INSTRUCTIONS : undefined;
+export function t3OrchestrationSystemPrompt(
+  hasT3Mcp: boolean,
+  hasDeviceTools: boolean,
+): string | undefined {
+  return hasT3Mcp ? orchestrationInstructions(hasDeviceTools) : undefined;
 }

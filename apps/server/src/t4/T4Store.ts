@@ -242,17 +242,16 @@ export const make = Effect.gen(function* () {
       }),
     );
 
-  const settleHandoffs: T4StoreShape["settleHandoffs"] = (input) =>
-    Effect.gen(function* () {
-      const at = yield* nowIso;
-      const rows = yield* sql<{ readonly id: string }>`
-        UPDATE t4_handoffs SET settled_at = ${at}
-        WHERE from_thread_id = ${input.fromThreadId} AND to_thread_id = ${input.toThreadId}
-          AND settled_at IS NULL
-        RETURNING id
-      `;
-      return rows.length;
-    });
+  const settleHandoffs: T4StoreShape["settleHandoffs"] = Effect.fn("t4.T4Store.settleHandoffs")(function* (input: Parameters<T4StoreShape["settleHandoffs"]>[0]) {
+    const at = yield* nowIso;
+    const rows = yield* sql<{ readonly id: string }>`
+      UPDATE t4_handoffs SET settled_at = ${at}
+      WHERE from_thread_id = ${input.fromThreadId} AND to_thread_id = ${input.toThreadId}
+        AND settled_at IS NULL
+      RETURNING id
+    `;
+    return rows.length;
+  });
 
   const insertHandoffRow: T4StoreShape["insertHandoffRow"] = (row) =>
     sql`
@@ -264,16 +263,15 @@ export const make = Effect.gen(function* () {
               ${row.settledAt})
     `.pipe(Effect.asVoid);
 
-  const addNotice: T4StoreShape["addNotice"] = (messageId) =>
-    Effect.gen(function* () {
-      const at = yield* nowIso;
-      yield* sql`INSERT OR IGNORE INTO t4_notices (message_id, created_at) VALUES (${messageId}, ${at})`;
-      yield* sql`
-        DELETE FROM t4_notices WHERE message_id NOT IN (
-          SELECT message_id FROM t4_notices ORDER BY created_at DESC LIMIT ${MAX_NOTICES}
-        )
-      `;
-    });
+  const addNotice: T4StoreShape["addNotice"] = Effect.fn("t4.T4Store.addNotice")(function* (messageId: Parameters<T4StoreShape["addNotice"]>[0]) {
+    const at = yield* nowIso;
+    yield* sql`INSERT OR IGNORE INTO t4_notices (message_id, created_at) VALUES (${messageId}, ${at})`;
+    yield* sql`
+      DELETE FROM t4_notices WHERE message_id NOT IN (
+        SELECT message_id FROM t4_notices ORDER BY created_at DESC LIMIT ${MAX_NOTICES}
+      )
+    `;
+  });
 
   const noticeIds: T4StoreShape["noticeIds"] = (messageIds) =>
     messageIds.length === 0
@@ -380,12 +378,11 @@ export const make = Effect.gen(function* () {
       SELECT at FROM t4_stalls WHERE thread_id = ${threadId} AND at >= ${sinceIso} ORDER BY at
     `.pipe(Effect.map((rows) => rows.map((row) => row.at)));
 
-  const addStall: T4StoreShape["addStall"] = (threadId, at) =>
-    Effect.gen(function* () {
-      yield* sql`INSERT INTO t4_stalls (thread_id, at) VALUES (${threadId}, ${at})`;
-      // Only the last day matters to the repeat window.
-      yield* sql`DELETE FROM t4_stalls WHERE at < datetime(${at}, '-1 day')`;
-    });
+  const addStall: T4StoreShape["addStall"] = Effect.fn("t4.T4Store.addStall")(function* (threadId: Parameters<T4StoreShape["addStall"]>[0], at: Parameters<T4StoreShape["addStall"]>[1]) {
+    yield* sql`INSERT INTO t4_stalls (thread_id, at) VALUES (${threadId}, ${at})`;
+    // Only the last day matters to the repeat window.
+    yield* sql`DELETE FROM t4_stalls WHERE at < datetime(${at}, '-1 day')`;
+  });
 
   const meta: T4StoreShape["meta"] = (key) =>
     sql<{ readonly value: string }>`SELECT value FROM t4_meta WHERE key = ${key}`.pipe(

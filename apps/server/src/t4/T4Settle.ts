@@ -61,110 +61,106 @@ export const make = Effect.gen(function* () {
   const path = yield* Path.Path;
   const crypto = yield* Crypto.Crypto;
 
-  const refusal: T4SettleShape["refusal"] = (thread) =>
-    Effect.gen(function* () {
-      const world = yield* ledger.world();
-      if (ledger.isReleaseManager(world, thread)) {
-        return "release managers never settle - say 'nothing queued, nothing in flight' in one line and stop";
-      }
-      const owing = world.live.filter((entry) => entry.toThreadId === thread.id);
-      if (owing.length > 0) {
-        const names = owing
-          .slice(0, 5)
-          .map((entry) => `"${entry.fromTitle}" (${shortId(entry.fromThreadId)})`)
-          .join("; ");
-        return `you still owe an answer to: ${names} - answer with \`t3_handoff\` (to that thread, done) first (\`t3_owed\`)`;
-      }
-      return undefined;
-    }).pipe(Effect.orElseSucceed(() => undefined));
+  const refusal: T4SettleShape["refusal"] = Effect.fn("t4.T4Settle.refusal")(function* (thread: Parameters<T4SettleShape["refusal"]>[0]) {
+    const world = yield* ledger.world();
+    if (ledger.isReleaseManager(world, thread)) {
+      return "release managers never settle - say 'nothing queued, nothing in flight' in one line and stop";
+    }
+    const owing = world.live.filter((entry) => entry.toThreadId === thread.id);
+    if (owing.length > 0) {
+      const names = owing
+        .slice(0, 5)
+        .map((entry) => `"${entry.fromTitle}" (${shortId(entry.fromThreadId)})`)
+        .join("; ");
+      return `you still owe an answer to: ${names} - answer with \`t3_handoff\` (to that thread, done) first (\`t3_owed\`)`;
+    }
+    return undefined;
+  }, Effect.orElseSucceed(() => undefined));
 
   const exists = (p: string) => fileSystem.exists(p).pipe(Effect.orElseSucceed(() => false));
 
   /** `dev_footprint()`: why the worktree has a dev environment to retire, or undefined. */
-  const devFootprint = (top: string) =>
-    Effect.gen(function* () {
-      if (yield* exists(path.join(top, ".env"))) return "port allocation";
-      if (yield* exists(path.join(top, "backend", ".dev-neon-branch.json"))) return "database fork";
-      const out = yield* processes
-        .run({
-          command: "docker",
-          args: ["ps", "-a", "--format", '{{.Label "com.docker.compose.project.working_dir"}}'],
-          timeout: "30 seconds",
-          timeoutBehavior: "timedOutResult",
-        })
-        .pipe(Effect.orElseSucceed(() => undefined));
-      if (out === undefined) return "compose stack (unknown - docker unreachable)";
-      return out.stdout.split(/\s+/).some((dir) => dir === top) ? "compose stack" : undefined;
-    });
+  const devFootprint = Effect.fn("t4.T4Settle.devFootprint")(function* (top: string) {
+    if (yield* exists(path.join(top, ".env"))) return "port allocation";
+    if (yield* exists(path.join(top, "backend", ".dev-neon-branch.json"))) return "database fork";
+    const out = yield* processes
+      .run({
+        command: "docker",
+        args: ["ps", "-a", "--format", '{{.Label "com.docker.compose.project.working_dir"}}'],
+        timeout: "30 seconds",
+        timeoutBehavior: "timedOutResult",
+      })
+      .pipe(Effect.orElseSucceed(() => undefined));
+    if (out === undefined) return "compose stack (unknown - docker unreachable)";
+    return out.stdout.split(/\s+/).some((dir) => dir === top) ? "compose stack" : undefined;
+  });
 
   /** The repo's retire script (e.g. `scripts/*dev-retire`), if it has one. */
-  const retireScript = (top: string) =>
-    Effect.gen(function* () {
-      const glob = config.devRetireGlob;
-      if (glob === null) return undefined;
-      const dir = path.join(top, path.dirname(glob));
-      const pattern = path.basename(glob);
-      const suffix = pattern.startsWith("*") ? pattern.slice(1) : pattern;
-      const entries = yield* fileSystem.readDirectory(dir).pipe(Effect.orElseSucceed(() => []));
-      const match = entries.toSorted().find((entry) => entry.endsWith(suffix));
-      return match === undefined ? undefined : path.join(dir, match);
-    });
+  const retireScript = Effect.fn("t4.T4Settle.retireScript")(function* (top: string) {
+    const glob = config.devRetireGlob;
+    if (glob === null) return undefined;
+    const dir = path.join(top, path.dirname(glob));
+    const pattern = path.basename(glob);
+    const suffix = pattern.startsWith("*") ? pattern.slice(1) : pattern;
+    const entries = yield* fileSystem.readDirectory(dir).pipe(Effect.orElseSucceed(() => []));
+    const match = entries.toSorted().find((entry) => entry.endsWith(suffix));
+    return match === undefined ? undefined : path.join(dir, match);
+  });
 
-  const request: T4SettleShape["request"] = (thread) =>
-    Effect.gen(function* () {
-      const notes: Array<string> = [];
-      const at = DateTime.formatIso(DateTime.makeUnsafe(yield* Clock.currentTimeMillis));
-      yield* store.setSettleRequest(thread.id, at).pipe(Effect.orDie);
-      // A closed thread keeps nothing reserved: wind down its worktree's dev
-      // footprint (ports, DB fork, compose stack). Best-effort - the reaper
-      // covers any failure.
-      if (thread.worktreePath !== null) {
-        const script = yield* retireScript(thread.worktreePath);
-        if (script !== undefined) {
-          if ((yield* devFootprint(thread.worktreePath)) === undefined) {
-            notes.push("no dev environment to retire");
-          } else {
-            const result = yield* processes
-              .run({
-                command: script,
-                args: [],
-                cwd: thread.worktreePath,
-                timeout: "300 seconds",
-                timeoutBehavior: "timedOutResult",
-              })
-              .pipe(Effect.orElseSucceed(() => undefined));
-            notes.push(
-              result === undefined
-                ? "settle: retire failed - the reaper will clean up later"
-                : result.timedOut
-                  ? "settle: retire timed out - the reaper will clean up later"
-                  : result.code === 0
-                    ? "dev footprint retired"
-                    : "settle: retire failed - the reaper will clean up later",
-            );
-          }
+  const request: T4SettleShape["request"] = Effect.fn("t4.T4Settle.request")(function* (thread: Parameters<T4SettleShape["request"]>[0]) {
+    const notes: Array<string> = [];
+    const at = DateTime.formatIso(DateTime.makeUnsafe(yield* Clock.currentTimeMillis));
+    yield* store.setSettleRequest(thread.id, at).pipe(Effect.orDie);
+    // A closed thread keeps nothing reserved: wind down its worktree's dev
+    // footprint (ports, DB fork, compose stack). Best-effort - the reaper
+    // covers any failure.
+    if (thread.worktreePath !== null) {
+      const script = yield* retireScript(thread.worktreePath);
+      if (script !== undefined) {
+        if ((yield* devFootprint(thread.worktreePath)) === undefined) {
+          notes.push("no dev environment to retire");
+        } else {
+          const result = yield* processes
+            .run({
+              command: script,
+              args: [],
+              cwd: thread.worktreePath,
+              timeout: "300 seconds",
+              timeoutBehavior: "timedOutResult",
+            })
+            .pipe(Effect.orElseSucceed(() => undefined));
+          notes.push(
+            result === undefined
+              ? "settle: retire failed - the reaper will clean up later"
+              : result.timedOut
+                ? "settle: retire timed out - the reaper will clean up later"
+                : result.code === 0
+                  ? "dev footprint retired"
+                  : "settle: retire failed - the reaper will clean up later",
+          );
         }
       }
-      // Wakes are scheduled tasks posted into this thread.
-      const scheduledTasks = yield* Effect.serviceOption(ScheduledTasks.ScheduledTaskService);
-      const wakes =
-        scheduledTasks._tag === "Some"
-          ? (yield* scheduledTasks.value
-              .list()
-              .pipe(Effect.orElseSucceed(() => ({ tasks: [] })))).tasks.filter(
-              (task) => task.threadId === thread.id && task.enabled && task.nextRunAt !== null,
-            )
-          : [];
-      if (wakes.length > 0) {
-        notes.push(
-          `note: wake ${wakes.map((w) => `"${w.title}" (${w.id})`).join(", ")} still pending - cancel it (\`delete_scheduled_task\`) unless you mean to come back`,
-        );
-      }
+    }
+    // Wakes are scheduled tasks posted into this thread.
+    const scheduledTasks = yield* Effect.serviceOption(ScheduledTasks.ScheduledTaskService);
+    const wakes =
+      scheduledTasks._tag === "Some"
+        ? (yield* scheduledTasks.value
+            .list()
+            .pipe(Effect.orElseSucceed(() => ({ tasks: [] })))).tasks.filter(
+            (task) => task.threadId === thread.id && task.enabled && task.nextRunAt !== null,
+          )
+        : [];
+    if (wakes.length > 0) {
       notes.push(
-        `settling "${thread.title}" - it closes when this turn ends; do not start new work here`,
+        `note: wake ${wakes.map((w) => `"${w.title}" (${w.id})`).join(", ")} still pending - cancel it (\`delete_scheduled_task\`) unless you mean to come back`,
       );
-      return notes;
-    });
+    }
+    notes.push(
+      `settling "${thread.title}" - it closes when this turn ends; do not start new work here`,
+    );
+    return notes;
+  });
 
   const sweep: T4SettleShape["sweep"] = Effect.gen(function* () {
     const requests = yield* store.settleRequests();

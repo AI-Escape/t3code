@@ -38,31 +38,30 @@ export const stallNote = (minutes: number) =>
   "were waiting on the user's answer to a question, ask it again with your ask-user tool.)";
 
 /** A phone push (Pushover; keys from the environment) linking the t4 dashboard. */
-export const pushUser = (title: string, message: string) =>
-  Effect.gen(function* () {
-    const token = process.env.PUSHOVER_APP_TOKEN;
-    const user = process.env.PUSHOVER_USER_KEY;
-    if (!token || !user) return;
-    const client = yield* Effect.serviceOption(HttpClient.HttpClient);
-    if (Option.isNone(client)) return;
-    const form = new URLSearchParams({
-      token,
-      user,
-      title: title.slice(0, 250),
-      message: message.slice(0, 1000),
-    });
-    if (process.env.T4_UI_URL) {
-      form.set("url", process.env.T4_UI_URL);
-      form.set("url_title", "Open t4");
-    }
-    yield* client.value
-      .execute(
-        HttpClientRequest.post("https://api.pushover.net/1/messages.json").pipe(
-          HttpClientRequest.bodyUrlParams(form),
-        ),
-      )
-      .pipe(Effect.timeout(Duration.seconds(10)), Effect.ignore);
+export const pushUser = Effect.fn("t4.T4Stalls.pushUser")(function* (title: string, message: string) {
+  const token = process.env.PUSHOVER_APP_TOKEN;
+  const user = process.env.PUSHOVER_USER_KEY;
+  if (!token || !user) return;
+  const client = yield* Effect.serviceOption(HttpClient.HttpClient);
+  if (Option.isNone(client)) return;
+  const form = new URLSearchParams({
+    token,
+    user,
+    title: title.slice(0, 250),
+    message: message.slice(0, 1000),
   });
+  if (process.env.T4_UI_URL) {
+    form.set("url", process.env.T4_UI_URL);
+    form.set("url_title", "Open t4");
+  }
+  yield* client.value
+    .execute(
+      HttpClientRequest.post("https://api.pushover.net/1/messages.json").pipe(
+        HttpClientRequest.bodyUrlParams(form),
+      ),
+    )
+    .pipe(Effect.timeout(Duration.seconds(10)), Effect.ignore);
+});
 
 /** Minutes the thread's running turn has been silent, or undefined if it isn't stalled. */
 export const silentMinutes = Effect.fn("t4.silentMinutes")(function* (

@@ -167,84 +167,81 @@ export const make = Effect.gen(function* () {
           );
 
   /** The delivery notes, prepended when they apply. */
-  const withNotes = (target: OrchestrationV2ThreadShell, text: string) =>
-    Effect.gen(function* () {
-      const questions = yield* pendingQuestions(target);
-      const notes = deliveryNotes({
-        settled: isSettled(target),
-        questions: questions.live,
-        openQuestions: questions.open,
-        claudeRunning: target.providerInstanceId.startsWith("claude") && isRunning(target),
+  const withNotes = Effect.fn("t4.T4Delivery.withNotes")(function* (target: OrchestrationV2ThreadShell, text: string) {
+    const questions = yield* pendingQuestions(target);
+    const notes = deliveryNotes({
+      settled: isSettled(target),
+      questions: questions.live,
+      openQuestions: questions.open,
+      claudeRunning: target.providerInstanceId.startsWith("claude") && isRunning(target),
+    });
+    return notes.length === 0
+      ? text
+      : `${notes.map((note) => `(Thread tools: ${note})`).join("\n\n")}\n\n${text}`;
+  });
+
+  const decorate: T4DeliveryShape["decorate"] = Effect.fn("t4.T4Delivery.decorate")(function* (input: Parameters<T4DeliveryShape["decorate"]>[0]) {
+    if (input.target.archivedAt !== null) {
+      return yield* new T4DeliveryError({
+        message: `"${input.target.title}" is archived - its work is closed; start a new thread instead`,
       });
-      return notes.length === 0
-        ? text
-        : `${notes.map((note) => `(Thread tools: ${note})`).join("\n\n")}\n\n${text}`;
-    });
+    }
+    const header = `Message from thread "${input.sender.title}" (${shortId(input.sender.id)}):\n\n`;
+    return yield* withNotes(input.target, header + input.text);
+  });
 
-  const decorate: T4DeliveryShape["decorate"] = (input) =>
-    Effect.gen(function* () {
-      if (input.target.archivedAt !== null) {
-        return yield* new T4DeliveryError({
-          message: `"${input.target.title}" is archived - its work is closed; start a new thread instead`,
-        });
-      }
-      const header = `Message from thread "${input.sender.title}" (${shortId(input.sender.id)}):\n\n`;
-      return yield* withNotes(input.target, header + input.text);
-    });
+  const deliver: T4DeliveryShape["deliver"] = Effect.fn("t4.T4Delivery.deliver")(function* (input: Parameters<T4DeliveryShape["deliver"]>[0]) {
+    if (input.target.archivedAt !== null) {
+      return yield* new T4DeliveryError({
+        message: `"${input.target.title}" is archived - its work is closed; start a new thread instead`,
+      });
+    }
+    // The freshest view of the target decides the notes and the mode.
+    const target =
+      (yield* threadManagement
+        .getThreadShell(input.target.id)
+        .pipe(Effect.orElseSucceed(() => null))) ?? input.target;
+    const running = isRunning(target);
+    const text = input.force === true ? input.text : yield* withNotes(target, input.text);
 
-  const deliver: T4DeliveryShape["deliver"] = (input) =>
-    Effect.gen(function* () {
-      if (input.target.archivedAt !== null) {
-        return yield* new T4DeliveryError({
-          message: `"${input.target.title}" is archived - its work is closed; start a new thread instead`,
-        });
-      }
-      // The freshest view of the target decides the notes and the mode.
-      const target =
-        (yield* threadManagement
-          .getThreadShell(input.target.id)
-          .pipe(Effect.orElseSucceed(() => null))) ?? input.target;
-      const running = isRunning(target);
-      const text = input.force === true ? input.text : yield* withNotes(target, input.text);
+    const world = yield* ledger.world().pipe(Effect.mapError(fail("t4 ledger unavailable")));
+    const rmModel = config.releaseManagerModel;
+    const modelSelection =
+      rmModel !== null &&
+      ledger.isReleaseManager(world, target) &&
+      target.modelSelection.instanceId === rmModel.instanceId
+        ? rmModel
+        : undefined;
 
-      const world = yield* ledger.world().pipe(Effect.mapError(fail("t4 ledger unavailable")));
-      const rmModel = config.releaseManagerModel;
-      const modelSelection =
-        rmModel !== null &&
-        ledger.isReleaseManager(world, target) &&
-        target.modelSelection.instanceId === rmModel.instanceId
-          ? rmModel
-          : undefined;
-
-      const messageId = MessageId.make(yield* uuid);
-      if (input.notice === true) {
-        yield* store.addNotice(messageId).pipe(Effect.mapError(fail("t4 store unavailable")));
-      }
-      const result = yield* threadManagement
-        .sendToThread({
-          projectId: target.projectId,
-          commandId: CommandId.make(`t4:deliver:${yield* uuid}`),
-          threadId: target.id,
-          messageId,
-          ...(input.senderThreadId === undefined ? {} : { senderThreadId: input.senderThreadId }),
-          text,
-          attachments: [],
-          ...(modelSelection === undefined ? {} : { modelSelection }),
-          mode: input.interrupt === true && running ? "restart" : "auto",
-          createdBy: input.createdBy ?? "agent",
-          creationSource: input.creationSource ?? "mcp",
-        })
-        .pipe(Effect.mapError(fail(`could not deliver to "${target.title}"`)));
-      const how =
-        result.delivery === "restarted"
-          ? "its turn was interrupted and restarted with your message"
-          : result.delivery === "steered"
-            ? "it was mid-turn; the message went straight into the running turn"
-            : result.delivery === "queued"
-              ? "it was starting a turn; the message is queued right behind it"
-              : "delivered";
-      return { messageId, delivery: result.delivery, how };
-    });
+    const messageId = MessageId.make(yield* uuid);
+    if (input.notice === true) {
+      yield* store.addNotice(messageId).pipe(Effect.mapError(fail("t4 store unavailable")));
+    }
+    const result = yield* threadManagement
+      .sendToThread({
+        projectId: target.projectId,
+        commandId: CommandId.make(`t4:deliver:${yield* uuid}`),
+        threadId: target.id,
+        messageId,
+        ...(input.senderThreadId === undefined ? {} : { senderThreadId: input.senderThreadId }),
+        text,
+        attachments: [],
+        ...(modelSelection === undefined ? {} : { modelSelection }),
+        mode: input.interrupt === true && running ? "restart" : "auto",
+        createdBy: input.createdBy ?? "agent",
+        creationSource: input.creationSource ?? "mcp",
+      })
+      .pipe(Effect.mapError(fail(`could not deliver to "${target.title}"`)));
+    const how =
+      result.delivery === "restarted"
+        ? "its turn was interrupted and restarted with your message"
+        : result.delivery === "steered"
+          ? "it was mid-turn; the message went straight into the running turn"
+          : result.delivery === "queued"
+            ? "it was starting a turn; the message is queued right behind it"
+            : "delivered";
+    return { messageId, delivery: result.delivery, how };
+  });
 
   return T4Delivery.of({ deliver, decorate });
 });

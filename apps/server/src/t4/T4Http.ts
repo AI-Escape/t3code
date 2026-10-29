@@ -46,17 +46,16 @@ type Shell = OrchestrationV2ThreadShell;
 const json = (body: unknown, status = 200) => HttpServerResponse.jsonUnsafe(body, { status });
 
 /** The request's session, or a 401/403 response to return instead. */
-const authorize = (
+const authorize = Effect.fn("t4.T4Http.authorize")(function* (
   scope: typeof AuthOrchestrationReadScope | typeof AuthOrchestrationOperateScope,
-) =>
-  Effect.gen(function* () {
-    const request = yield* HttpServerRequest.HttpServerRequest;
-    const auth = yield* EnvironmentAuth.EnvironmentAuth;
-    const session = yield* auth.authenticateHttpRequest(request).pipe(Effect.option);
-    if (Option.isNone(session)) return json({ error: "unauthorized" }, 401);
-    if (!session.value.scopes.includes(scope)) return json({ error: `needs ${scope}` }, 403);
-    return undefined;
-  });
+) {
+  const request = yield* HttpServerRequest.HttpServerRequest;
+  const auth = yield* EnvironmentAuth.EnvironmentAuth;
+  const session = yield* auth.authenticateHttpRequest(request).pipe(Effect.option);
+  if (Option.isNone(session)) return json({ error: "unauthorized" }, 401);
+  if (!session.value.scopes.includes(scope)) return json({ error: `needs ${scope}` }, 403);
+  return undefined;
+});
 
 const route = <E, R>(
   method: "GET" | "POST",

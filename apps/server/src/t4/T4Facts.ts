@@ -42,14 +42,13 @@ export const factsFor = Effect.fn("t4.factsFor")(function* (threadIds: ReadonlyA
 });
 
 /** The facts, or an empty map when the t4 services are absent or fail. */
-export const optionalFactsFor = (threadIds: ReadonlyArray<string>) =>
-  Effect.gen(function* () {
-    const ledger = yield* Effect.serviceOption(T4Ledger.T4Ledger);
-    const store = yield* Effect.serviceOption(T4Store.T4Store);
-    if (ledger._tag === "None" || store._tag === "None") return new Map<string, T4ThreadFacts>();
-    return yield* factsFor(threadIds).pipe(
-      Effect.provideService(T4Ledger.T4Ledger, ledger.value),
-      Effect.provideService(T4Store.T4Store, store.value),
-      Effect.orElseSucceed(() => new Map<string, T4ThreadFacts>()),
-    );
-  });
+export const optionalFactsFor = Effect.fn("t4.T4Facts.optionalFactsFor")(function* (threadIds: ReadonlyArray<string>) {
+  const ledger = yield* Effect.serviceOption(T4Ledger.T4Ledger);
+  const store = yield* Effect.serviceOption(T4Store.T4Store);
+  if (ledger._tag === "None" || store._tag === "None") return new Map<string, T4ThreadFacts>();
+  return yield* factsFor(threadIds).pipe(
+    Effect.provideService(T4Ledger.T4Ledger, ledger.value),
+    Effect.provideService(T4Store.T4Store, store.value),
+    Effect.orElseSucceed(() => new Map<string, T4ThreadFacts>()),
+  );
+});
