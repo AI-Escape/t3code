@@ -132,6 +132,13 @@ import { discoverClaudeSkills } from "../../provider/Drivers/ClaudeSkills.ts";
 // t4 fork: questionsAsMessages, declineSafetyChecks.
 import { QUESTION_POSTED_NOTE, t4QuestionsAsMessages } from "../../t4/questionsAsMessages.ts";
 import { safetyCheckDeclinedNote, t4DeclineSafetyChecks } from "../../t4/declineSafetyChecks.ts";
+// t4 fork: claudeAccounts.
+import {
+  claudeAccountEnvironment,
+  isClaudeAccountExhausted,
+  markClaudeAccountExhausted,
+  pickClaudeAccount,
+} from "../../t4/claudeAccounts.ts";
 import {
   compileClaudeModelSelection,
   type CompiledClaudeModelSelection,
@@ -3536,6 +3543,8 @@ interface ClaudeLiveQueryContext {
   permissionMode: PermissionMode;
   stopping: boolean;
   readonly subagentsFromEarlierProcesses: ReadonlySet<ActiveClaudeSubagent>;
+  /** t4 fork: the Claude account this process logged in with (t4/claudeAccounts.ts). */
+  readonly t4Account: string;
 }
 
 interface ActiveClaudeToolCall {
@@ -8647,10 +8656,36 @@ export const makeClaudeAdapterV2 = Effect.fn("makeClaudeAdapterV2")(function* (
             ) {
               resetTimes.push(assistantLimit.resetAt);
             }
-            const resetAt =
+            const claudeResetAt =
               resetTimes.length > 0 && resetTimes.every((time) => time !== null)
                 ? resetTimes.reduce((latest, time) => (time! > latest ? time! : latest), "")
                 : null;
+            // t4 fork: the account is used up until its reset; the thread goes
+            // on now when another account is free (a second past the turn's
+            // end, which T3's limit recovery requires), else when one frees up.
+            const t4ResumeAtMs =
+              usageLimited && !interrupted
+                ? markClaudeAccountExhausted(
+                    liveQuery.t4Account,
+                    claudeResetAt === null ? null : Date.parse(claudeResetAt),
+                    DateTime.toEpochMillis(completedAt),
+                  )
+                : undefined;
+            if (t4ResumeAtMs !== undefined) {
+              yield* Effect.logInfo("t4.claude-account-limit", {
+                threadId: context.input.threadId,
+                account: liveQuery.t4Account,
+                resetAt: claudeResetAt,
+              });
+            }
+            const resetAt =
+              t4ResumeAtMs === undefined
+                ? claudeResetAt
+                : DateTime.formatIso(
+                    DateTime.makeUnsafe(
+                      Math.max(t4ResumeAtMs, DateTime.toEpochMillis(completedAt) + 1000),
+                    ),
+                  );
             const resultFailure = interrupted
               ? null
               : limitedCompaction !== null
@@ -9344,11 +9379,14 @@ export const makeClaudeAdapterV2 = Effect.fn("makeClaudeAdapterV2")(function* (
             );
             live.selection = compiledSelection;
           }
+          // t4 fork: a process whose Claude account hit its limit is replaced.
+          const t4NowMs = DateTime.toEpochMillis(yield* DateTime.now);
           if (
             existing !== null &&
             existing.nativeThreadId === nativeThreadId &&
             existing.queryPolicyKey === queryPolicyKey &&
-            existing.selection.queryIdentity === compiledSelection.queryIdentity
+            existing.selection.queryIdentity === compiledSelection.queryIdentity &&
+            !isClaudeAccountExhausted(existing.t4Account, t4NowMs)
           ) {
             // A denied ExitPlanMode leaves Claude in plan mode. Restore only from plan:
             // Auto/default may reflect a policy restriction that forbids restoring bypass.
@@ -9412,6 +9450,13 @@ export const makeClaudeAdapterV2 = Effect.fn("makeClaudeAdapterV2")(function* (
             fileSystem,
             adapterOptions.settings.launchArgs,
           );
+          const t4Account = pickClaudeAccount(t4NowMs);
+          if (t4Account.token !== undefined) {
+            yield* Effect.logInfo("t4.claude-account", {
+              threadId: turnInput.threadId,
+              account: t4Account.key,
+            });
+          }
           const queryOptions = makeClaudeQueryOptions({
             ...(launchArgSettings === undefined ? {} : { sdkSettings: launchArgSettings }),
             modelSelection: turnInput.modelSelection,
@@ -9421,12 +9466,15 @@ export const makeClaudeAdapterV2 = Effect.fn("makeClaudeAdapterV2")(function* (
             cwd: turnInput.runtimePolicy.cwd,
             attachmentsDir,
             settings: adapterOptions.settings,
-            environment: claudeQueryEnvironment(
-              adapterOptions.environment,
-              turnInput.appThread,
-              turnInput.appThread.lineage.relationshipToParent === "subagent"
-                ? yield* resolveSubagentPromptCacheTtl(turnInput.runtimePolicy.cwd)
-                : undefined,
+            environment: claudeAccountEnvironment(
+              claudeQueryEnvironment(
+                adapterOptions.environment,
+                turnInput.appThread,
+                turnInput.appThread.lineage.relationshipToParent === "subagent"
+                  ? yield* resolveSubagentPromptCacheTtl(turnInput.runtimePolicy.cwd)
+                  : undefined,
+              ),
+              t4Account,
             ),
             tools: queryPolicy.tools ?? CLAUDE_CODE_PRESET_TOOLS,
             ...(mcpOverrides.allowedTools === undefined
@@ -9497,6 +9545,7 @@ export const makeClaudeAdapterV2 = Effect.fn("makeClaudeAdapterV2")(function* (
                 (subagent) => subagent.task.status === "running",
               ),
             ),
+            t4Account: t4Account.key,
           };
           yield* Ref.set(queryContext, context);
           yield* querySession.messages.pipe(
