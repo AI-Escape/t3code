@@ -10001,6 +10001,19 @@ export const makeClaudeAdapterV2 = Effect.fn("makeClaudeAdapterV2")(function* (
             return existing;
           }
 
+          // t4 fork: background work in a process whose Claude account hit its limit
+          // cannot go on either; replace it as Stop would, so the thread continues on
+          // the next account instead of being refused (usa-rs USA-1496, 2026-10-29).
+          if (
+            existing !== null &&
+            (existing.nativeThreadId === nativeThreadId ||
+              existing.lastTurn?.input.threadId === turnInput.threadId) &&
+            !existing.stopping &&
+            isClaudeAccountExhausted(existing.t4Account, t4NowMs)
+          ) {
+            existing.stopping = true;
+          }
+
           // Replacing this thread's process kills its background work, even with a new native identity.
           if (
             existing !== null &&
