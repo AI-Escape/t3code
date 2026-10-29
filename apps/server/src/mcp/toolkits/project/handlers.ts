@@ -3,6 +3,7 @@ import * as Effect from "effect/Effect";
 import * as T4Config from "../../../t4/T4Config.ts";
 import * as T4DefaultModel from "../../../t4/T4DefaultModel.ts";
 import * as T4Ledger from "../../../t4/T4Ledger.ts";
+import * as T4ModelPolicy from "../../../t4/T4ModelPolicy.ts";
 import * as T4Spawn from "../../../t4/T4Spawn.ts";
 import * as T4Store from "../../../t4/T4Store.ts";
 import * as FileSystem from "effect/FileSystem";
@@ -199,6 +200,17 @@ export const layer = McpToolAccess.toLayer(ProjectToolkit, {
             message:
               "Pass modelSelection: the project has no default model. orchestrator_capabilities lists providers and models.",
           });
+        // t4 fork: an agent's own modelSelection must be one of the user's (T4ModelPolicy).
+        if (caller !== undefined && preset === undefined && input.modelSelection !== undefined) {
+          const refusal = yield* T4ModelPolicy.unlistedModelRefusal({
+            projectId,
+            selection: input.modelSelection,
+            callerSelection: caller.modelSelection,
+            byPreset: true,
+          });
+          if (refusal !== undefined)
+            return yield* new OrchestratorMcpFailure({ code: "invalid_request", message: refusal });
+        }
         const startedRuntimeMode =
           projectDefaults !== undefined && input.runtimeMode === undefined
             ? yield* resolveRuntimeMode(runtimeMode, projectDefaults.defaultRuntimeMode).pipe(

@@ -111,6 +111,8 @@ import {
 } from "./McpInvocationContext.ts";
 import * as Metrics from "../observability/Metrics.ts";
 import * as SecretRequests from "../secrets/SecretRequests.ts";
+// t4 fork: agents delegate only on models the user chose.
+import * as T4ModelPolicy from "../t4/T4ModelPolicy.ts";
 
 const DEFAULT_WAIT_TIMEOUT_MS = 10 * 60 * 1_000;
 const MAX_WAIT_TIMEOUT_MS = 60 * 60 * 1_000;
@@ -2213,6 +2215,15 @@ const make = Effect.gen(function* () {
         providers,
         skipProjectEnablementFilter: isRetryOfAcceptedDelegation,
       });
+      // t4 fork: delegate only on a model the user chose (T4ModelPolicy).
+      if (!isRetryOfAcceptedDelegation) {
+        const refusal = yield* T4ModelPolicy.unlistedModelRefusal({
+          projectId: parent.thread.projectId,
+          selection: target.modelSelection,
+          callerSelection: parent.thread.modelSelection,
+        });
+        if (refusal !== undefined) return yield* failure("invalid_request", refusal);
+      }
       const runtimeMode = yield* resolveRuntimeMode(
         parent.thread.runtimeMode,
         input.runtimeMode,
@@ -2609,6 +2620,15 @@ const make = Effect.gen(function* () {
                 providers,
                 skipProjectEnablementFilter: isRetryOfAcceptedCreation,
               });
+              // t4 fork: create only on a model the user chose (T4ModelPolicy).
+              if (!isRetryOfAcceptedCreation) {
+                const refusal = yield* T4ModelPolicy.unlistedModelRefusal({
+                  projectId: parent.thread.projectId,
+                  selection: target.modelSelection,
+                  callerSelection: parent.thread.modelSelection,
+                });
+                if (refusal !== undefined) return yield* failure("invalid_request", refusal);
+              }
               const runtimeMode = yield* resolveRuntimeMode(
                 parent.thread.runtimeMode,
                 request.runtimeMode,
