@@ -99,6 +99,8 @@ export interface T4RunWatchShape {
   }) => Effect.Effect<{ readonly run: WorkflowRun; readonly watching: boolean }, T4RunWatchError>;
   /** Posts finished runs into their threads; drops stale watches. */
   readonly sweep: Effect.Effect<void>;
+  /** The threads with at least one run watched. */
+  readonly watchingThreads: Effect.Effect<ReadonlySet<string>>;
 }
 
 export class T4RunWatch extends Context.Service<T4RunWatch, T4RunWatchShape>()(
@@ -238,7 +240,11 @@ export const make = Effect.gen(function* () {
     );
   }).pipe(Effect.ignoreCause({ log: true }));
 
-  return T4RunWatch.of({ watch, sweep });
+  const watchingThreads = load.pipe(
+    Effect.map((watches) => new Set(watches.map((w) => w.threadId)) as ReadonlySet<string>),
+  );
+
+  return T4RunWatch.of({ watch, sweep, watchingThreads });
 });
 
 export const layer = Layer.effect(T4RunWatch, make);

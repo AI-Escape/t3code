@@ -103,8 +103,17 @@ export const make = Effect.gen(function* () {
     };
   }, Effect.mapError(fail));
 
+  // A fork of a release manager copies its title (" fork" added) and its pin,
+  // but it is a copy: only the recorded thread, or a titled thread that is not
+  // a fork, is one (usa-rs's "Release manager — usa-rs fork", made from the web
+  // app's fork action, was badged and pinned as one, 2026-10-29).
+  const titledReleaseManager = (thread: Pick<Shell, "title"> & Partial<Pick<Shell, "lineage">>) =>
+    thread.title.startsWith(config.releaseManagerTitlePrefix) &&
+    thread.lineage?.relationshipToParent !== "fork";
+
   const isReleaseManager: T4LedgerShape["isReleaseManager"] = (w, thread) =>
-    w.releaseManagers.has(thread.id) || thread.title.startsWith(config.releaseManagerTitlePrefix);
+    w.releaseManagers.has(thread.id) ||
+    titledReleaseManager({ ...thread, ...(w.byId.get(thread.id) ?? {}) });
 
   const findReleaseManager: T4LedgerShape["findReleaseManager"] = Effect.fn(
     "t4.T4Ledger.findReleaseManager",
@@ -120,7 +129,7 @@ export const make = Effect.gen(function* () {
       .filter(
         (thread) =>
           thread.projectId === projectId &&
-          thread.title.startsWith(config.releaseManagerTitlePrefix) &&
+          titledReleaseManager(thread) &&
           (includeRetired || !isRetired(thread)),
       )
       .toSorted((left, right) => lastActivityMs(right) - lastActivityMs(left));

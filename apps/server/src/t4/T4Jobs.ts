@@ -11,6 +11,7 @@ import * as Ref from "effect/Ref";
 import * as Scheduler from "../scheduling/Scheduler.ts";
 import * as FyiDigest from "./fyiDigest.ts";
 import * as T4LegacyImport from "./T4LegacyImport.ts";
+import * as T4ReleaseGuard from "./T4ReleaseGuard.ts";
 import * as T4RunWatch from "./T4RunWatch.ts";
 import * as T4Settle from "./T4Settle.ts";
 import * as T4Stalls from "./T4Stalls.ts";
@@ -40,5 +41,6 @@ export const layer = Layer.effectDiscard(
     const runWatch = yield* T4RunWatch.T4RunWatch;
     yield* scheduler.register("t4-workflow-runs", yield* throttled(30_000, runWatch.sweep));
     yield* scheduler.register("t4-fyi-digests", yield* throttled(60_000, FyiDigest.sweep));
+    yield* scheduler.register("t4-release-guard", yield* throttled(300_000, T4ReleaseGuard.sweep));
   }),
 );
