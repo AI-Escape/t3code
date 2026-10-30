@@ -9260,8 +9260,11 @@ export const makeClaudeAdapterV2 = Effect.fn("makeClaudeAdapterV2")(function* (
                 ? resetTimes.reduce((latest, time) => (time! > latest ? time! : latest), "")
                 : null;
             // t4 fork: the account is used up until its reset; the thread goes
-            // on now when another account is free (a second past the turn's
-            // end, which T3's limit recovery requires), else when one frees up.
+            // on when another account is free - a minute past the turn's end,
+            // because T3's limit recovery ignores a reset at or before the
+            // run's recorded completion, which lands after this completedAt (a
+            // one-second margin left USA-1523 stopped, 2026-10-30) - else when
+            // one frees up.
             const t4ResumeAtMs =
               usageLimited && !interrupted
                 ? markClaudeAccountExhausted(
@@ -9282,7 +9285,7 @@ export const makeClaudeAdapterV2 = Effect.fn("makeClaudeAdapterV2")(function* (
                 ? claudeResetAt
                 : DateTime.formatIso(
                     DateTime.makeUnsafe(
-                      Math.max(t4ResumeAtMs, DateTime.toEpochMillis(completedAt) + 1000),
+                      Math.max(t4ResumeAtMs, DateTime.toEpochMillis(completedAt) + 60_000),
                     ),
                   );
             const resultFailure = interrupted
