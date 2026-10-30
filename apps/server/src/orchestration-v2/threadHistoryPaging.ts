@@ -675,6 +675,23 @@ export function buildBoundedThreadProjection(input: {
   for (const item of dependencyTurnItems) {
     turnItemById.set(String(item.id), item);
   }
+  // t4 fork: an open question or approval keeps its item - clients draw its
+  // card from it. On a long thread newer turns pushed it out of the window, so
+  // T3 showed no card for a question the release manager was still waiting on
+  // (usa-rs, 2026-10-30).
+  const pendingRequestIds = new Set(
+    controlProjection.runtimeRequests
+      .filter((request) => request.status === "pending")
+      .map((request) => String(request.id)),
+  );
+  for (const item of controlProjection.turnItems) {
+    if (
+      (item.type === "user_input_request" || item.type === "approval_request") &&
+      pendingRequestIds.has(String(item.requestId))
+    ) {
+      turnItemById.set(String(item.id), item);
+    }
+  }
   const turnItems = [...turnItemById.values()];
 
   const visiblePlanIds = new Set(
