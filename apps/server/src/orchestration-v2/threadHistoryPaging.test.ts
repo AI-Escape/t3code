@@ -158,6 +158,48 @@ function makeProjection(visibleTurnItems: OrchestrationV2ProjectedTurnItem[]) {
 }
 
 describe("threadHistoryPaging", () => {
+  // t4 fork: a long thread's still-open question keeps the item its card is drawn from.
+  it("keeps an open question's item when newer rows push it out of the window", () => {
+    const question: OrchestrationV2ProjectedTurnItem = {
+      position: 0,
+      visibility: "local",
+      sourceThreadId: THREAD,
+      sourceItemId: TurnItemId.make("question"),
+      item: {
+        id: TurnItemId.make("question"),
+        type: "user_input_request",
+        threadId: THREAD,
+        runId: null,
+        nodeId: null,
+        providerThreadId: null,
+        providerTurnId: null,
+        nativeItemRef: null,
+        parentItemId: null,
+        ordinal: 1,
+        status: "waiting",
+        requestId: "req-open",
+        responseMode: "message",
+        questions: [{ id: "0", header: "Retry", question: "Retry the release?", options: [] }],
+        startedAt: NOW,
+        completedAt: null,
+        updatedAt: NOW,
+      } as unknown as OrchestrationV2TurnItem,
+    };
+    const rows = [
+      question,
+      ...Array.from({ length: 40 }, (_, i) => makeRow(i + 1, { outputBytes: 200_000 })),
+    ];
+    const projection = {
+      ...makeProjection(rows),
+      runtimeRequests: [{ id: "req-open", status: "pending" }],
+    } as unknown as Parameters<typeof buildBoundedThreadProjection>[0]["projection"];
+    const bounded = buildBoundedThreadProjection({ projection, snapshotSequence: 1 });
+    expect(bounded.projection.visibleTurnItems.some((row) => row.sourceItemId === "question")).toBe(
+      false,
+    );
+    expect(bounded.projection.turnItems.some((item) => item.id === "question")).toBe(true);
+  });
+
   it("defers completed work above 150 items and keeps conversation and persistent rows", () => {
     const work = Array.from({ length: 151 }, (_, index) => {
       const row = makeRow(index);
