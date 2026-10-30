@@ -75,10 +75,12 @@ export const silentMinutes = Effect.fn("t4.silentMinutes")(function* (
     return undefined;
   const threads = yield* ThreadManagementService.ThreadManagementService;
   const records = yield* threads
-    .getProjectThreadRecords({ projectId: thread.projectId, threadId: thread.id }, [
-      "turnItems",
-      "runs",
-    ])
+    .getProjectThreadRecords(
+      { projectId: thread.projectId, threadId: thread.id },
+      ["turnItems", "runs"],
+      // The running turn's items only: this runs every minute for every running thread.
+      { turnItemRunId: thread.activeRunId },
+    )
     .pipe(Effect.orElseSucceed(() => null));
   if (records === null) return undefined;
   const run = records.runs.find((candidate) => candidate.id === thread.activeRunId);

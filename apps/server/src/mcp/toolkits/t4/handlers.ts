@@ -410,17 +410,36 @@ export const layer = McpToolAccess.toLayer(T4Toolkit, {
         isNote: boolean;
       }> = [];
       for (const thread of scope) {
-        const records = yield* threads
+        // Requests first, then only the question items: a whole thread's items
+        // (the release manager's were 38,616, 236 MB) held T3's one reader for
+        // 40 s and froze every client of the server (usa-rs, 2026-10-30).
+        const requests = yield* threads
           .getProjectThreadRecords({ projectId: thread.projectId, threadId: thread.id }, [
             "runtimeRequests",
-            "turnItems",
           ])
+          .pipe(
+            Effect.map((records) =>
+              records.runtimeRequests.filter(
+                (request) =>
+                  request.kind === "user_input" &&
+                  request.status === "resolved" &&
+                  request.resolvedAt !== null &&
+                  DateTime.toEpochMillis(request.resolvedAt) >= cutoffMs,
+              ),
+            ),
+            Effect.orElseSucceed(() => []),
+          );
+        if (requests.length === 0) continue;
+        const records = yield* threads
+          .getProjectThreadRecords(
+            { projectId: thread.projectId, threadId: thread.id },
+            ["turnItems"],
+            { turnItemTypes: ["user_input_request"] },
+          )
           .pipe(Effect.orElseSucceed(() => null));
         if (records === null) continue;
-        for (const request of records.runtimeRequests) {
-          if (request.kind !== "user_input" || request.status !== "resolved") continue;
-          if (request.resolvedAt === null || DateTime.toEpochMillis(request.resolvedAt) < cutoffMs)
-            continue;
+        for (const request of requests) {
+          if (request.resolvedAt === null) continue;
           const item = records.turnItems.find(
             (candidate) =>
               candidate.type === "user_input_request" && candidate.requestId === request.id,

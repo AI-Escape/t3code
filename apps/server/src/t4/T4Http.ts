@@ -196,19 +196,36 @@ export const layer = Layer.mergeAll(
       );
       const pending: Array<Record<string, unknown>> = [];
       for (const thread of waiting) {
+        // Only the item types read below, and tool calls of the running turn
+        // alone: a release manager's whole history is 200+ MB, and the
+        // dashboard polls this every few seconds.
         const records = yield* threads
-          .getProjectThreadRecords({ projectId: thread.projectId, threadId: thread.id }, [
-            "runtimeRequests",
-            "turnItems",
-          ])
+          .getProjectThreadRecords(
+            { projectId: thread.projectId, threadId: thread.id },
+            ["runtimeRequests", "turnItems"],
+            { turnItemTypes: ["user_input_request", "approval_request", "secret_request"] },
+          )
           .pipe(Effect.orElseSucceed(() => null));
         if (records === null) continue;
+        const toolItems =
+          thread.activeRunId === null
+            ? []
+            : yield* threads
+                .getProjectThreadRecords(
+                  { projectId: thread.projectId, threadId: thread.id },
+                  ["turnItems"],
+                  { turnItemTypes: ["dynamic_tool"], turnItemRunId: thread.activeRunId },
+                )
+                .pipe(
+                  Effect.map((tools) => tools.turnItems),
+                  Effect.orElseSucceed(() => []),
+                );
         // A request whose own tool call already ended was abandoned (a steered
         // message aborted the call, and the agent asks again): answering it
         // reaches no one. Builds before the adapter's cancelAbortedRequest left
         // these pending until the turn ended, next to the question asked again.
         const ended = new Set(
-          records.turnItems
+          toolItems
             .filter(
               (item) =>
                 item.type === "dynamic_tool" &&
@@ -515,6 +532,7 @@ export const layer = Layer.mergeAll(
       const records = yield* threads.getProjectThreadRecords(
         { projectId: thread.projectId, threadId },
         ["turnItems", "runtimeRequests"],
+        { turnItemTypes: ["user_input_request"] },
       );
       const request = records.runtimeRequests.find(
         (candidate) => candidate.id === input.requestId && candidate.status === "pending",

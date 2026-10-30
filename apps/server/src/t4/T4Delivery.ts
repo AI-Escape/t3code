@@ -140,10 +140,12 @@ export const make = Effect.gen(function* () {
     target.pendingRuntimeRequest?.kind !== "user_input"
       ? Effect.succeed(noQuestions)
       : threadManagement
-          .getProjectThreadRecords({ projectId: target.projectId, threadId: target.id }, [
-            "runtimeRequests",
-            "turnItems",
-          ])
+          .getProjectThreadRecords(
+            { projectId: target.projectId, threadId: target.id },
+            ["runtimeRequests", "turnItems"],
+            // Only question items: a release manager's whole history is 200+ MB.
+            { turnItemTypes: ["user_input_request"] },
+          )
           .pipe(
             Effect.map((records) => {
               const pending = new Map(
