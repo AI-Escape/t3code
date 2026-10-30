@@ -123,7 +123,8 @@ const handlers = {
             (task) => task.threadId === boundThreadId && task.enabled && task.nextRunAt !== null,
           ).length;
           const now = yield* Clock.currentTimeMillis;
-          const refused = Wakes.wakeRefusal(wakeSchedule, pending, now);
+          const refused =
+            Wakes.wakeNoteRefusal(prompt) ?? Wakes.wakeRefusal(wakeSchedule, pending, now);
           if (refused !== undefined) {
             return yield* new OrchestratorMcpFailure({ code: "invalid_request", message: refused });
           }
@@ -147,6 +148,11 @@ const handlers = {
       ({ scheduledTaskId, prompt, title, schedule, enabled, bindToCurrentThread }) =>
         Effect.gen(function* () {
           if (scheduledTaskId === undefined) return yield* Effect.die("unreachable");
+          // t4 fork: the same cap on a wake's note when it is rewritten.
+          const tooLong = prompt === undefined ? undefined : Wakes.wakeNoteRefusal(prompt);
+          if (tooLong !== undefined) {
+            return yield* new OrchestratorMcpFailure({ code: "invalid_request", message: tooLong });
+          }
           const scope = yield* McpInvocationContext.McpInvocationContext;
           const service = yield* OrchestratorMcpService.OrchestratorMcpService;
           return yield* service.updateScheduledTask(scope, {
@@ -160,11 +166,19 @@ const handlers = {
         }),
     ),
   ),
-  list_scheduled_tasks: McpToolAccess.reads((input) =>
+  list_scheduled_tasks: McpToolAccess.reads(({ all, ...input }) =>
     Effect.gen(function* () {
       const scope = yield* McpInvocationContext.McpInvocationContext;
       const service = yield* OrchestratorMcpService.OrchestratorMcpService;
-      return yield* service.listScheduledTasks(scope, input);
+      const result = yield* service.listScheduledTasks(scope, input);
+      // t4 fork: a thread sees its own pending tasks unless it asks for all.
+      const { caller } = yield* readCaller();
+      if (all === true || caller === undefined || input.projectId !== undefined) return result;
+      return {
+        tasks: result.tasks.filter(
+          (task) => task.boundThreadId === caller.id && task.nextRunAt !== null,
+        ),
+      };
     }),
   ),
   delete_scheduled_task: McpToolAccess.writes((input) =>

@@ -5,6 +5,7 @@ import {
   OrchestrationV2StoredEvent,
   type OrchestrationV2PlanArtifact,
   type OrchestrationV2Run,
+  type OrchestrationV2TurnItem,
   type OrchestrationV2ProviderTurn,
   type OrchestrationV2Subagent,
   type OrchestrationV2ThreadProjection,
@@ -43,6 +44,8 @@ import { makeProviderFailureTurnItem } from "@t3tools/provider-core/server/failu
 import * as ThreadCommandExecutor from "./ThreadCommandExecutor.ts";
 import { stripUnservedToolOutputImageBytes } from "./toolOutputImageBytes.ts";
 import { boundFileChangeForStorage } from "./WireProjection.ts";
+// t4 fork: persistTmpImages.
+import { persistTmpImages } from "../t4/durableImages.ts";
 
 export class ProviderEventNormalizeError extends Schema.TaggedError<ProviderEventNormalizeError>()(
   "ProviderEventNormalizeError",
@@ -422,6 +425,83 @@ export const layer: Layer.Layer<
       },
     );
 
+    /**
+     * t4 fork: a message-mode question identical to one still open in the
+     * thread replaces it. Agents re-asked open questions word for word - 37
+     * stacked copies in a week, each answered separately (score's SCORE-2 asked
+     * one seven times in 37 minutes, 2026-10-29). The older card is cancelled
+     * so the user answers once; answering a message-mode question only sends
+     * a message, so nothing is lost with it.
+     */
+    const dismissDuplicateQuestions = Effect.fn("ProviderEventIngestor.dismissDuplicateQuestions")(
+      function* (input: ProviderEventIngestInput, item: OrchestrationV2TurnItem) {
+        if (
+          item.type !== "user_input_request" ||
+          item.responseMode !== "message" ||
+          ["completed", "cancelled", "failed", "interrupted"].includes(item.status)
+        ) {
+          return [];
+        }
+        const textOf = (questions: ReadonlyArray<{ readonly question: string }>) =>
+          questions.map((question) => question.question.trim()).join("\n");
+        const wanted = textOf(item.questions);
+        if (wanted.length === 0) return [];
+        const open = yield* projections
+          .getPendingMessageUserInputs(item.threadId)
+          .pipe(Effect.orElseSucceed(() => ({ runtimeRequests: [], nodes: [], turnItems: [] })));
+        const duplicates = open.turnItems.filter(
+          (other) =>
+            other.type === "user_input_request" &&
+            other.id !== item.id &&
+            other.requestId !== item.requestId &&
+            textOf(other.questions) === wanted,
+        );
+        if (duplicates.length === 0) return [];
+        const requestIds = new Set(
+          duplicates.flatMap((other) =>
+            other.type === "user_input_request" ? [other.requestId] : [],
+          ),
+        );
+        const requests = open.runtimeRequests.filter((request) => requestIds.has(request.id));
+        const nodeIds = new Set(requests.map((request) => request.nodeId));
+        const now = yield* DateTime.now;
+        const events: Array<OrchestrationV2DomainEvent> = [];
+        for (const request of requests) {
+          events.push(
+            yield* makeDomainEvent(input, {
+              type: "runtime-request.updated",
+              threadId: item.threadId,
+              nodeId: request.nodeId,
+              payload: { ...request, status: "cancelled", resolvedAt: now },
+            }),
+          );
+        }
+        for (const node of open.nodes.filter((candidate) => nodeIds.has(candidate.id))) {
+          events.push(
+            yield* makeDomainEvent(input, {
+              type: "node.updated",
+              threadId: item.threadId,
+              nodeId: node.id,
+              runId: node.runId,
+              payload: { ...node, status: "cancelled", completedAt: now },
+            }),
+          );
+        }
+        for (const duplicate of duplicates) {
+          events.push(
+            yield* makeDomainEvent(input, {
+              type: "turn-item.updated",
+              threadId: item.threadId,
+              nodeId: duplicate.nodeId,
+              runId: duplicate.runId,
+              payload: { ...duplicate, status: "cancelled", completedAt: now, updatedAt: now },
+            }),
+          );
+        }
+        return events;
+      },
+    );
+
     /** Providers may reveal native subagent models late; lock full-row updates against concurrent thread commands. */
     const syncSubagentThreadModel = Effect.fn("ProviderEventIngestor.syncSubagentThreadModel")(
       function* (input: ProviderEventIngestInput, subagent: OrchestrationV2Subagent) {
@@ -648,7 +728,11 @@ export const layer: Layer.Layer<
                 yield* makeDomainEvent(input, {
                   type: "message.updated",
                   threadId: input.event.message.threadId,
-                  payload: input.event.message,
+                  // t4 fork: a final reply's /tmp images are kept (t4/durableImages.ts).
+                  payload:
+                    input.event.message.role === "assistant" && !input.event.message.streaming
+                      ? { ...input.event.message, text: persistTmpImages(input.event.message.text) }
+                      : input.event.message,
                   runId: input.event.message.runId,
                   nodeId: input.event.message.nodeId,
                 }),
@@ -659,11 +743,22 @@ export const layer: Layer.Layer<
                   type: "turn-item.updated",
                   threadId: input.event.turnItem.threadId,
                   payload: boundFileChangeForStorage(
-                    stripUnservedToolOutputImageBytes(input.event.turnItem),
+                    stripUnservedToolOutputImageBytes(
+                      // t4 fork: a final reply's /tmp images are kept (t4/durableImages.ts).
+                      input.event.turnItem.type === "assistant_message" &&
+                        !input.event.turnItem.streaming
+                        ? {
+                            ...input.event.turnItem,
+                            text: persistTmpImages(input.event.turnItem.text),
+                          }
+                        : input.event.turnItem,
+                    ),
                   ),
                   runId: input.event.turnItem.runId,
                   nodeId: input.event.turnItem.nodeId,
                 }),
+                // t4 fork: dismissDuplicateQuestions.
+                ...(yield* dismissDuplicateQuestions(input, input.event.turnItem)),
               ];
             case "runtime_request.updated":
               return [

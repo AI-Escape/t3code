@@ -303,6 +303,17 @@ const ListThreadPullRequestsTool = Tool.make("list_thread_pull_requests", {
   parameters: Schema.Struct({
     environmentId: OrchestratorMcpEnvironmentTarget,
     threadId: Schema.optional(ThreadId.annotate({ description: "Thread. Default: this thread." })),
+    // t4 fork: a release manager links hundreds of PRs; the full list was 277 KB a call.
+    state: Schema.optional(
+      Schema.Literals(["open", "all"]).annotate({
+        description: "open (default): open or not yet read; all: merged and closed too.",
+      }),
+    ),
+    limit: Schema.optional(
+      Schema.Int.check(Schema.isBetween({ minimum: 1, maximum: 500 })).annotate({
+        description: "Keep the most recent N. Default 50.",
+      }),
+    ),
   }),
   success: ListThreadPullRequestsResult,
   failure: PullRequestToolError,

@@ -18,14 +18,14 @@ const threads = [
 
 const services = Layer.mock(ThreadManagementService.ThreadManagementService)({
   getThreadShell: (id: ThreadId) =>
-    Effect.succeed(
-      (threads.find((t: { id: string }) => t.id === id) ?? null) as never,
-    ),
+    Effect.succeed((threads.find((t: { id: string }) => t.id === id) ?? null) as never),
   getShellSnapshot: () => Effect.succeed({ threads, archivedThreads: [] } as never),
 });
 
 const resolve = (threadId: string) =>
-  Effect.runPromise(resolveThreadIdParam({ threadId, message: "hi" }).pipe(Effect.provide(services)));
+  Effect.runPromise(
+    resolveThreadIdParam({ threadId, message: "hi" }).pipe(Effect.provide(services)),
+  );
 
 describe("t4 thread refs", () => {
   it("short ids leave out t4-", () => {
@@ -55,7 +55,9 @@ describe("t4 thread refs", () => {
 
   it("passes params without a threadId through", async () => {
     expect(
-      await Effect.runPromise(resolveThreadIdParam({ projectId: "p" }).pipe(Effect.provide(services))),
+      await Effect.runPromise(
+        resolveThreadIdParam({ projectId: "p" }).pipe(Effect.provide(services)),
+      ),
     ).toEqual({ projectId: "p" });
   });
 });

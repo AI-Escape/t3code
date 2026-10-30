@@ -126,9 +126,7 @@ function startWithMissingWorktree(
   const startRootRun = vi.fn(() => Effect.void);
   const pruneWorktrees = vi.fn(() => Effect.void);
   const createWorktree = vi.fn(() => Effect.succeed({} as never));
-  const listLocalBranchNames = vi.fn(() =>
-    Effect.succeed(onlyOnOrigin ? [] : ["feature/restore"]),
-  );
+  const listLocalBranchNames = vi.fn(() => Effect.succeed(onlyOnOrigin ? [] : ["feature/restore"]));
   const remoteBranchExists = vi.fn(() => Effect.succeed(onlyOnOrigin));
   const layer = ProviderTurnStart.layer.pipe(
     Layer.provide(

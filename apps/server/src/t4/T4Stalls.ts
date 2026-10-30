@@ -38,7 +38,10 @@ export const stallNote = (minutes: number) =>
   "were waiting on the user's answer to a question, ask it again with your ask-user tool.)";
 
 /** A phone push (Pushover; keys from the environment) linking the t4 dashboard. */
-export const pushUser = Effect.fn("t4.T4Stalls.pushUser")(function* (title: string, message: string) {
+export const pushUser = Effect.fn("t4.T4Stalls.pushUser")(function* (
+  title: string,
+  message: string,
+) {
   const token = process.env.PUSHOVER_APP_TOKEN;
   const user = process.env.PUSHOVER_USER_KEY;
   if (!token || !user) return;

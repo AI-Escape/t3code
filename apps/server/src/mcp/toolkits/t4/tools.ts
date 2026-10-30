@@ -15,6 +15,7 @@ import * as Project from "../../../project/ProjectService.ts";
 import * as T4Config from "../../../t4/T4Config.ts";
 import * as T4Delivery from "../../../t4/T4Delivery.ts";
 import * as T4Ledger from "../../../t4/T4Ledger.ts";
+import * as T4RunWatch from "../../../t4/T4RunWatch.ts";
 import * as T4Store from "../../../t4/T4Store.ts";
 import * as McpInvocationContext from "../../McpInvocationContext.ts";
 
@@ -183,6 +184,38 @@ const ListThreadIssuesTool = Tool.make("list_thread_issues", {
   .annotate(Tool.Readonly, true)
   .annotate(Tool.Destructive, false);
 
+const WatchWorkflowRunTool = Tool.make("watch_workflow_run", {
+  ...common,
+  dependencies: [...common.dependencies, T4RunWatch.T4RunWatch],
+  description:
+    "Be woken when a GitHub Actions run finishes, instead of blocking on `gh run watch`, `ci watch` or polling: give the run id (`ci runs`, `gh run list`), then END YOUR TURN. One message arrives in this thread when the run completes, with its conclusion and failed jobs; while you wait, any handoff or message starts your turn at once. A run that already finished is reported right away. Repeat per run you need to follow.",
+  parameters: Schema.Struct({
+    runId: Schema.Union([Schema.String, Schema.Number]).annotate({
+      description: "The workflow run's id (the number in its URL).",
+    }),
+    repository: Schema.optional(
+      Schema.String.annotate({
+        description: "owner/repo. Default: the repository of your checkout.",
+      }),
+    ),
+    note: Schema.optional(
+      Schema.String.annotate({
+        description: "A short line to have repeated in the wake message (what to do next).",
+      }),
+    ),
+  }),
+  success: Schema.Struct({
+    watching: Schema.Boolean,
+    runId: Schema.String,
+    name: Schema.String,
+    status: Schema.String,
+    conclusion: Schema.String,
+    url: Schema.String,
+    failedJobs: Schema.Array(Schema.String),
+    next: Schema.String,
+  }),
+}).annotate(Tool.Destructive, false);
+
 export const T4Toolkit = Toolkit.make(
   HandoffTool,
   OwedTool,
@@ -190,4 +223,5 @@ export const T4Toolkit = Toolkit.make(
   LinkIssueTool,
   UnlinkIssueTool,
   ListThreadIssuesTool,
+  WatchWorkflowRunTool,
 );

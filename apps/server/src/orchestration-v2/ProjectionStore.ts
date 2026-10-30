@@ -537,6 +537,10 @@ export interface ProjectionStoreV2Shape {
     threadId: ThreadId,
     providerTurnId: ProviderTurnId,
   ) => Effect.Effect<ProjectionPendingUserInputs, ProjectionStoreV2Error>;
+  /** t4 fork: a thread's open message-mode questions, whatever turn asked them. */
+  readonly getPendingMessageUserInputs: (
+    threadId: ThreadId,
+  ) => Effect.Effect<ProjectionPendingUserInputs, ProjectionStoreV2Error>;
   readonly getPlan: (
     threadId: ThreadId,
     planId: PlanId,
@@ -4679,6 +4683,46 @@ export const layer: Layer.Layer<ProjectionStoreV2, never, SqlClient.SqlClient> =
         )
         .pipe(Effect.mapError(controlReadError(threadId)));
 
+    // t4 fork: getPendingMessageUserInputs (duplicate questions are dismissed on ingest).
+    const getPendingMessageUserInputs: ProjectionStoreV2Shape["getPendingMessageUserInputs"] = (
+      threadId,
+    ) =>
+      sql
+        .withTransaction(
+          Effect.gen(function* () {
+            const rows = yield* sql<PayloadRow>`
+          SELECT payload_json FROM orchestration_v2_projection_runtime_requests
+          WHERE thread_id = ${threadId} AND kind = 'user_input' AND status = 'pending'
+        `;
+            const runtimeRequests = (yield* decodeRows(
+              decodeRuntimeRequestPayload,
+              threadId,
+            )(rows)).filter((request) => request.responseCapability.type === "message");
+            if (runtimeRequests.length === 0) return { runtimeRequests, nodes: [], turnItems: [] };
+            const nodeRows = yield* sql<PayloadRow>`
+          SELECT payload_json FROM orchestration_v2_projection_nodes
+          WHERE thread_id = ${threadId} AND ${sql.in(
+            "node_id",
+            runtimeRequests.map((request) => request.nodeId),
+          )}
+        `;
+            const itemRows = yield* sql<PayloadRow>`
+          SELECT payload_json FROM orchestration_v2_projection_turn_items
+          WHERE thread_id = ${threadId} AND type = 'user_input_request'
+            AND status NOT IN ('completed', 'cancelled', 'failed', 'interrupted')
+        `;
+            const requestIds = new Set(runtimeRequests.map((request) => request.id));
+            return {
+              runtimeRequests,
+              nodes: yield* decodeRows(decodeNodePayload, threadId)(nodeRows),
+              turnItems: (yield* decodeRows(decodeTurnItemPayload, threadId)(itemRows)).filter(
+                (item) => item.type === "user_input_request" && requestIds.has(item.requestId),
+              ),
+            };
+          }),
+        )
+        .pipe(Effect.mapError(controlReadError(threadId)));
+
     const getPlan: ProjectionStoreV2Shape["getPlan"] = (threadId, planId) =>
       sql
         .withTransaction(
@@ -6790,6 +6834,7 @@ export const layer: Layer.Layer<ProjectionStoreV2, never, SqlClient.SqlClient> =
       getRunMessage: readOnReader(getRunMessage),
       canStartQueuedRun: readOnReader(canStartQueuedRun),
       getPendingNativeUserInputs: readOnReader(getPendingNativeUserInputs),
+      getPendingMessageUserInputs: readOnReader(getPendingMessageUserInputs),
       hasUnpairedRunInterruptRequest: readOnReader(hasUnpairedRunInterruptRequest),
       isNodeStored: readOnReader(isNodeStored),
       getMessageCount: readOnReader(getMessageCount),

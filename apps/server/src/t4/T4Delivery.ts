@@ -167,7 +167,10 @@ export const make = Effect.gen(function* () {
           );
 
   /** The delivery notes, prepended when they apply. */
-  const withNotes = Effect.fn("t4.T4Delivery.withNotes")(function* (target: OrchestrationV2ThreadShell, text: string) {
+  const withNotes = Effect.fn("t4.T4Delivery.withNotes")(function* (
+    target: OrchestrationV2ThreadShell,
+    text: string,
+  ) {
     const questions = yield* pendingQuestions(target);
     const notes = deliveryNotes({
       settled: isSettled(target),
@@ -180,7 +183,9 @@ export const make = Effect.gen(function* () {
       : `${notes.map((note) => `(Thread tools: ${note})`).join("\n\n")}\n\n${text}`;
   });
 
-  const decorate: T4DeliveryShape["decorate"] = Effect.fn("t4.T4Delivery.decorate")(function* (input: Parameters<T4DeliveryShape["decorate"]>[0]) {
+  const decorate: T4DeliveryShape["decorate"] = Effect.fn("t4.T4Delivery.decorate")(function* (
+    input: Parameters<T4DeliveryShape["decorate"]>[0],
+  ) {
     if (input.target.archivedAt !== null) {
       return yield* new T4DeliveryError({
         message: `"${input.target.title}" is archived - its work is closed; start a new thread instead`,
@@ -190,7 +195,9 @@ export const make = Effect.gen(function* () {
     return yield* withNotes(input.target, header + input.text);
   });
 
-  const deliver: T4DeliveryShape["deliver"] = Effect.fn("t4.T4Delivery.deliver")(function* (input: Parameters<T4DeliveryShape["deliver"]>[0]) {
+  const deliver: T4DeliveryShape["deliver"] = Effect.fn("t4.T4Delivery.deliver")(function* (
+    input: Parameters<T4DeliveryShape["deliver"]>[0],
+  ) {
     if (input.target.archivedAt !== null) {
       return yield* new T4DeliveryError({
         message: `"${input.target.title}" is archived - its work is closed; start a new thread instead`,

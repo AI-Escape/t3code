@@ -35,7 +35,12 @@ describe("t4 unlistedModelRefusal", () => {
   });
 
   it("refuses a model the user never chose, naming the ones they did", async () => {
-    const refusal = await run({ projectId, selection: terra, callerSelection: opus, byPreset: true });
+    const refusal = await run({
+      projectId,
+      selection: terra,
+      callerSelection: opus,
+      byPreset: true,
+    });
     expect(refusal).toContain("gpt-6.1-terra (codex) is not one of the models the user set");
     expect(refusal).toContain("the client's default gpt-6.1-sol (codex), by naming no model");
     expect(refusal).toContain('modelPreset "claude" for claude-opus-5-5 (claudeAgent)');

@@ -17,6 +17,19 @@ export type WakeSchedule =
   | { readonly type: "fixed_time"; readonly timeOfDay: string }
   | { readonly type: "webhook" };
 
+export const MAX_WAKE_NOTE_CHARS = 2000;
+
+/**
+ * A wake's note is read by the user too, and it was being used as storage:
+ * usa-rs's release manager rewrote a 10-30 KB queue into it every 10 minutes
+ * (3.4 MB of wake messages in a week, 2026-10-29).
+ */
+export function wakeNoteRefusal(note: string): string | undefined {
+  return note.length <= MAX_WAKE_NOTE_CHARS
+    ? undefined
+    : `A wake note is at most ${MAX_WAKE_NOTE_CHARS} characters (this one is ${note.length}). Keep your state in a notes file (e.g. ~/artifacts/<your thread>/notes.md) and have the note say what to check and point to that file.`;
+}
+
 /** Why this wake breaks t4's rules, or undefined. */
 export function wakeRefusal(
   schedule: WakeSchedule,

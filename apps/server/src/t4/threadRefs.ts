@@ -54,8 +54,8 @@ export const withThreadRef = <Handler>(handle: Handler): Handler =>
   (typeof handle === "function"
     ? (params: unknown) =>
         resolveThreadIdParam(params).pipe(
-          Effect.flatMap(
-            (resolved) => (handle as (params: unknown) => Effect.Effect<unknown>)(resolved),
+          Effect.flatMap((resolved) =>
+            (handle as (params: unknown) => Effect.Effect<unknown>)(resolved),
           ),
         )
     : handle) as Handler;

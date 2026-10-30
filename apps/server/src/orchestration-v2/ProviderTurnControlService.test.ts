@@ -241,6 +241,7 @@ it.effect(
           getThreadProviderContext: () => Effect.die("unused getThreadProviderContext"),
           getRuntimeResponseContext: () => Effect.die("unused getRuntimeResponseContext"),
           getPendingNativeUserInputs: () => Effect.die("unused getPendingNativeUserInputs"),
+          getPendingMessageUserInputs: () => Effect.die("unused getPendingMessageUserInputs"),
           getProviderControlContext: (_threadId, target) =>
             Ref.get(projection).pipe(
               Effect.map((current) => ({

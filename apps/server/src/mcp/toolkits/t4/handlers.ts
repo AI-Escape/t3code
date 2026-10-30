@@ -20,7 +20,9 @@ import * as ThreadLaunch from "../../../orchestration-v2/ThreadLaunchService.ts"
 import * as Project from "../../../project/ProjectService.ts";
 import * as T4Config from "../../../t4/T4Config.ts";
 import * as T4Delivery from "../../../t4/T4Delivery.ts";
+import * as FyiDigest from "../../../t4/fyiDigest.ts";
 import * as T4Ledger from "../../../t4/T4Ledger.ts";
+import * as T4RunWatch from "../../../t4/T4RunWatch.ts";
 import * as T4Store from "../../../t4/T4Store.ts";
 import {
   ago,
@@ -271,6 +273,30 @@ export const layer = McpToolAccess.toLayer(T4Toolkit, {
             .settleHandoffs({ fromThreadId: target.id, toThreadId: me.id })
             .pipe(Effect.mapError(ledgerUnavailable))
         : 0;
+      // t4 fork: a pure fyi soon after the last one to this thread is bundled (fyiDigest).
+      const pureFyi = !done && !ask && input.interrupt !== true;
+      if (
+        pureFyi &&
+        (yield* FyiDigest.queueIfRecent({
+          from: me.id,
+          fromTitle: me.title,
+          to: target.id,
+          body,
+        }))
+      ) {
+        return {
+          to: summaryOf(target, now),
+          isReleaseManager: ledger.isReleaseManager(world, target),
+          createdReleaseManager: false,
+          delivery: "bundled",
+          settled: 0,
+          nowOwesYou: false,
+          youStillOweThem: false,
+          notes: [
+            `bundled: "${target.title}" gets your no-reply-needed updates at most every 10 minutes, as one message - send fyi only for changes it acts on`,
+          ],
+        };
+      }
       const delivered = yield* delivery
         .deliver({
           target,
@@ -280,6 +306,7 @@ export const layer = McpToolAccess.toLayer(T4Toolkit, {
           notice: !ask,
         })
         .pipe(Effect.mapError((error) => invalid(error.message)));
+      if (pureFyi) yield* FyiDigest.noteDelivered(me.id, target.id);
       if (ask) {
         yield* store
           .recordHandoff({
@@ -510,6 +537,44 @@ export const layer = McpToolAccess.toLayer(T4Toolkit, {
           title: link.title,
           linkedAt: link.linkedAt,
         })),
+      };
+    }),
+  ),
+
+  watch_workflow_run: McpToolAccess.actsAsCaller((input) =>
+    Effect.gen(function* () {
+      const me = yield* callerThread;
+      const runWatch = yield* T4RunWatch.T4RunWatch;
+      const runId = String(input.runId).trim();
+      if (!/^\d+$/.test(runId)) return yield* invalid(`'${runId}' is not a workflow run id`);
+      const project =
+        me.worktreePath === null
+          ? yield* Project.ProjectService.pipe(
+              Effect.flatMap((projects) => projects.getById(me.projectId)),
+              Effect.map(Option.getOrUndefined),
+              Effect.orElseSucceed(() => undefined),
+            )
+          : undefined;
+      const { run, watching } = yield* runWatch
+        .watch({
+          threadId: me.id,
+          runId,
+          repository: input.repository?.trim() || null,
+          cwd: me.worktreePath ?? project?.workspaceRoot ?? null,
+          note: input.note?.trim() || null,
+        })
+        .pipe(Effect.mapError((error) => invalid(`couldn't read run ${runId}: ${error.message}`)));
+      return {
+        watching,
+        runId,
+        name: run.name,
+        status: run.status,
+        conclusion: run.conclusion,
+        url: run.url,
+        failedJobs: [...run.failedJobs],
+        next: watching
+          ? "End your turn now. A message arrives here when the run finishes; handoffs reach you meanwhile."
+          : "The run already finished; act on its conclusion now.",
       };
     }),
   ),

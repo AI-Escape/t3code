@@ -61,21 +61,24 @@ export const make = Effect.gen(function* () {
   const path = yield* Path.Path;
   const crypto = yield* Crypto.Crypto;
 
-  const refusal: T4SettleShape["refusal"] = Effect.fn("t4.T4Settle.refusal")(function* (thread: Parameters<T4SettleShape["refusal"]>[0]) {
-    const world = yield* ledger.world();
-    if (ledger.isReleaseManager(world, thread)) {
-      return "release managers never settle - say 'nothing queued, nothing in flight' in one line and stop";
-    }
-    const owing = world.live.filter((entry) => entry.toThreadId === thread.id);
-    if (owing.length > 0) {
-      const names = owing
-        .slice(0, 5)
-        .map((entry) => `"${entry.fromTitle}" (${shortId(entry.fromThreadId)})`)
-        .join("; ");
-      return `you still owe an answer to: ${names} - answer with \`t3_handoff\` (to that thread, done) first (\`t3_owed\`)`;
-    }
-    return undefined;
-  }, Effect.orElseSucceed(() => undefined));
+  const refusal: T4SettleShape["refusal"] = Effect.fn("t4.T4Settle.refusal")(
+    function* (thread: Parameters<T4SettleShape["refusal"]>[0]) {
+      const world = yield* ledger.world();
+      if (ledger.isReleaseManager(world, thread)) {
+        return "release managers never settle - say 'nothing queued, nothing in flight' in one line and stop";
+      }
+      const owing = world.live.filter((entry) => entry.toThreadId === thread.id);
+      if (owing.length > 0) {
+        const names = owing
+          .slice(0, 5)
+          .map((entry) => `"${entry.fromTitle}" (${shortId(entry.fromThreadId)})`)
+          .join("; ");
+        return `you still owe an answer to: ${names} - answer with \`t3_handoff\` (to that thread, done) first (\`t3_owed\`)`;
+      }
+      return undefined;
+    },
+    Effect.orElseSucceed(() => undefined),
+  );
 
   const exists = (p: string) => fileSystem.exists(p).pipe(Effect.orElseSucceed(() => false));
 
@@ -107,7 +110,9 @@ export const make = Effect.gen(function* () {
     return match === undefined ? undefined : path.join(dir, match);
   });
 
-  const request: T4SettleShape["request"] = Effect.fn("t4.T4Settle.request")(function* (thread: Parameters<T4SettleShape["request"]>[0]) {
+  const request: T4SettleShape["request"] = Effect.fn("t4.T4Settle.request")(function* (
+    thread: Parameters<T4SettleShape["request"]>[0],
+  ) {
     const notes: Array<string> = [];
     const at = DateTime.formatIso(DateTime.makeUnsafe(yield* Clock.currentTimeMillis));
     yield* store.setSettleRequest(thread.id, at).pipe(Effect.orDie);

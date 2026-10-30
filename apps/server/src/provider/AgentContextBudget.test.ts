@@ -42,6 +42,7 @@ import { VcsStatusBroadcaster } from "../vcs/VcsStatusBroadcaster.ts";
 import { T4ServerConfig, defaultT4ServerConfig } from "../t4/T4Config.ts";
 import { T4Delivery } from "../t4/T4Delivery.ts";
 import { T4Ledger } from "../t4/T4Ledger.ts";
+import { T4RunWatch } from "../t4/T4RunWatch.ts";
 import { T4Store } from "../t4/T4Store.ts";
 import { buildCodexAdditionalContext } from "./CodexDeveloperInstructions.ts";
 import { DocumentText } from "./DocumentText.ts";
@@ -59,8 +60,12 @@ const toolHandlerServices = Layer.mergeAll(
   Layer.mock(OrchestratorV2)({}),
   Layer.mock(PeerForwarding)({}),
   Layer.mock(T4Delivery)({}),
-  Layer.mock(T4Ledger)({ isReleaseManager: () => false, facts: () => ({ isReleaseManager: false, owes: 0, owedBy: 0 }) }),
+  Layer.mock(T4Ledger)({
+    isReleaseManager: () => false,
+    facts: () => ({ isReleaseManager: false, owes: 0, owedBy: 0 }),
+  }),
   Layer.mock(T4Store)({}),
+  Layer.mock(T4RunWatch)({}),
   Layer.succeed(T4ServerConfig, defaultT4ServerConfig),
   Layer.mock(PeerLinkRequests)({}),
   Layer.mock(PeerLinks)({}),

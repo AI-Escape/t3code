@@ -738,6 +738,13 @@ export const OrchestratorMcpListScheduledTasksInput = Schema.Struct({
       description: "Default: your thread's project, or all outside a thread.",
     }),
   ),
+  /** t4 fork: a thread's own pending tasks by default (the project list held every finished one). */
+  all: Schema.optional(
+    Schema.Boolean.annotate({
+      description:
+        "true: every task in the project, finished ones too. Default: your thread's pending tasks.",
+    }),
+  ),
 });
 export type OrchestratorMcpListScheduledTasksInput =
   typeof OrchestratorMcpListScheduledTasksInput.Type;

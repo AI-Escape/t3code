@@ -106,7 +106,13 @@ export const make = Effect.gen(function* () {
   const isReleaseManager: T4LedgerShape["isReleaseManager"] = (w, thread) =>
     w.releaseManagers.has(thread.id) || thread.title.startsWith(config.releaseManagerTitlePrefix);
 
-  const findReleaseManager: T4LedgerShape["findReleaseManager"] = Effect.fn("t4.T4Ledger.findReleaseManager")(function* (w: Parameters<T4LedgerShape["findReleaseManager"]>[0], projectId: Parameters<T4LedgerShape["findReleaseManager"]>[1], includeRetired: Parameters<T4LedgerShape["findReleaseManager"]>[2]) {
+  const findReleaseManager: T4LedgerShape["findReleaseManager"] = Effect.fn(
+    "t4.T4Ledger.findReleaseManager",
+  )(function* (
+    w: Parameters<T4LedgerShape["findReleaseManager"]>[0],
+    projectId: Parameters<T4LedgerShape["findReleaseManager"]>[1],
+    includeRetired: Parameters<T4LedgerShape["findReleaseManager"]>[2],
+  ) {
     const recorded = (yield* store.releaseManagers()).get(projectId);
     const known = recorded === undefined ? undefined : w.byId.get(recorded);
     if (known !== undefined && (includeRetired || !isRetired(known))) return known;

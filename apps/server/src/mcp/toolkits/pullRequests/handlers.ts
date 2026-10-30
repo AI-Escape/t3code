@@ -429,6 +429,17 @@ const make = Effect.gen(function* () {
     list_thread_pull_requests: McpToolAccess.reads((input) =>
       requireThread(PullRequestListFailedError, input.threadId).pipe(
         Effect.map(listThreadPullRequests),
+        // t4 fork: open PRs by default, the most recent `limit`, in stack order.
+        Effect.map((result) => {
+          const kept = result.pullRequests
+            .filter((pr) => input.state === "all" || pr.state === null || pr.state === "open")
+            .slice(-(input.limit ?? 50));
+          const numbers = new Set(kept.map((pr) => pr.number));
+          return {
+            pullRequests: kept,
+            chains: result.chains.filter((chain) => chain.numbers.some((n) => numbers.has(n))),
+          };
+        }),
       ),
     ),
     watch_pull_request: writesThread((input) => setWatching(input, true)),

@@ -137,10 +137,7 @@ export const markClaudeAccountExhausted = (
   const files = accountFiles(env);
   if (files.length === 0) return undefined;
   const state = loadState(env, files);
-  state.set(
-    key,
-    resetAtMs !== null && resetAtMs > nowMs ? resetAtMs : nowMs + UNKNOWN_RESET_MS,
-  );
+  state.set(key, resetAtMs !== null && resetAtMs > nowMs ? resetAtMs : nowMs + UNKNOWN_RESET_MS);
   saveState(env, files);
   const keys = [...files.map(keyOf), MAIN_CLAUDE_ACCOUNT];
   if (keys.some((other) => (state.get(other) ?? 0) <= nowMs)) return nowMs;
