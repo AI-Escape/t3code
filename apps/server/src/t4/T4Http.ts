@@ -12,6 +12,7 @@ import {
   ModelSelection,
   type OrchestrationV2ThreadShell,
   ProjectId,
+  ScheduledTaskId,
   ThreadId,
 } from "@t3tools/contracts";
 import * as Clock from "effect/Clock";
@@ -36,6 +37,7 @@ import * as T4Config from "./T4Config.ts";
 import * as T4Delivery from "./T4Delivery.ts";
 import { factsFor } from "./T4Facts.ts";
 import * as T4Ledger from "./T4Ledger.ts";
+import * as T4Schedules from "./T4Schedules.ts";
 import * as T4Spawn from "./T4Spawn.ts";
 import { clientDefaultModelSelection } from "./T4DefaultModel.ts";
 import * as T4Store from "./T4Store.ts";
@@ -462,6 +464,36 @@ export const layer = Layer.mergeAll(
         creationSource: "web",
       });
       return json({ threadId: thread.id, messageId: result.messageId, delivery: result.delivery });
+    }),
+  ),
+
+  // Scheduled sessions (t4/T4Schedules.ts): a prompt that starts a fresh thread
+  // on a cron schedule, managed from the dashboard's client settings.
+  route("GET", "/api/t4/schedules", AuthOrchestrationReadScope, () =>
+    T4Schedules.listSchedules().pipe(Effect.map((schedules) => json({ schedules }))),
+  ),
+  route("POST", "/api/t4/schedules", AuthOrchestrationOperateScope, () =>
+    Effect.gen(function* () {
+      const input = yield* body(T4Schedules.SaveScheduleBody);
+      if (input.title.trim().length === 0 || input.prompt.trim().length === 0) {
+        return json({ error: "a schedule needs a title and a prompt" }, 400);
+      }
+      const saved = yield* T4Schedules.saveSchedule(input).pipe(
+        Effect.catch((error) =>
+          Effect.succeed({ error: String((error as { message?: unknown }).message ?? error) }),
+        ),
+      );
+      return "error" in saved ? json({ error: saved.error }, 400) : json({ task: saved.task });
+    }),
+  ),
+  route("POST", "/api/t4/schedules/:id/delete", AuthOrchestrationOperateScope, (params) =>
+    T4Schedules.deleteSchedule(params.id ?? "").pipe(Effect.map(() => json({ deleted: true }))),
+  ),
+  route("POST", "/api/t4/schedules/:id/run", AuthOrchestrationOperateScope, (params) =>
+    Effect.gen(function* () {
+      const scheduled = yield* ScheduledTasks.ScheduledTaskService;
+      const result = yield* scheduled.runNow({ id: ScheduledTaskId.make(params.id ?? "") });
+      return json({ threadId: result.threadId });
     }),
   ),
 
