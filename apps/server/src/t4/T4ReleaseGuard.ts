@@ -3,7 +3,7 @@
  *
  * ai-escape's release manager merged PR #79, ended its turn with a watch on
  * the merged PR (which never fires) while both deploys ran, and sat idle: no
- * owner heard back (2026-10-30). Every 5 minutes, a release manager that is
+ * owner heard back (2026-10-30). Every 2 minutes, a release manager that is
  * idle, still owes handoffs, and has nothing set to wake it - no workflow-run
  * watch, no wake due within 35 minutes - after 10 quiet minutes gets one note
  * to pick its queue back up; at most one an hour per thread.

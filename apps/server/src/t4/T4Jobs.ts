@@ -42,7 +42,7 @@ export const layer = Layer.effectDiscard(
     const runWatch = yield* T4RunWatch.T4RunWatch;
     yield* scheduler.register("t4-workflow-runs", yield* throttled(30_000, runWatch.sweep));
     yield* scheduler.register("t4-fyi-digests", yield* throttled(60_000, FyiDigest.sweep));
-    yield* scheduler.register("t4-release-guard", yield* throttled(300_000, T4ReleaseGuard.sweep));
+    yield* scheduler.register("t4-release-guard", yield* throttled(120_000, T4ReleaseGuard.sweep));
     yield* scheduler.register(
       "t4-schedule-models",
       yield* throttled(60_000, T4Schedules.syncDefaultModels),

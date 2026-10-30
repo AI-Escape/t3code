@@ -37,10 +37,48 @@ const Watch = Schema.Struct({
   cwd: Schema.NullOr(Schema.String),
   note: Schema.NullOr(Schema.String),
   since: Schema.Number,
+  /** The run's name and URL when the watch began, for the dashboard. */
+  name: Schema.optional(Schema.String),
+  url: Schema.optional(Schema.String),
 });
 type Watch = typeof Watch.Type;
 const Watches = Schema.fromJsonString(Schema.Array(Watch));
 const decodeWatches = Schema.decodeUnknownEffect(Watches);
+
+/**
+ * A watch on every run for a commit, including runs that start later - a
+ * release train's staging run triggers its production run only when it ends,
+ * so a watch on the staging run alone left the release manager with nothing
+ * to wake it for production but a half-hourly wake (usa-rs, 2026-10-30).
+ */
+const CommitWatch = Schema.Struct({
+  threadId: Schema.String,
+  commit: Schema.String,
+  repository: Schema.NullOr(Schema.String),
+  cwd: Schema.NullOr(Schema.String),
+  note: Schema.NullOr(Schema.String),
+  since: Schema.Number,
+  /** Runs already reported finished. */
+  reported: Schema.Array(Schema.String),
+  /** When a run last finished or started; the watch ends after a quiet spell. */
+  lastActivity: Schema.Number,
+});
+type CommitWatch = typeof CommitWatch.Type;
+const CommitWatches = Schema.fromJsonString(Schema.Array(CommitWatch));
+const COMMIT_META_KEY = "workflow-commit-watches";
+/** With nothing running for this long after the last run ended, the chain is done. */
+const COMMIT_QUIET_MS = 20 * 60_000;
+
+const RunListItem = Schema.Struct({
+  databaseId: Schema.Number,
+  name: Schema.optional(Schema.String),
+  workflowName: Schema.optional(Schema.String),
+  displayTitle: Schema.optional(Schema.String),
+  status: Schema.optional(Schema.String),
+  conclusion: Schema.optional(Schema.String),
+  url: Schema.optional(Schema.String),
+});
+const decodeRunList = Schema.decodeUnknownEffect(Schema.fromJsonString(Schema.Array(RunListItem)));
 
 export interface WorkflowRun {
   readonly name: string;
@@ -97,10 +135,31 @@ export interface T4RunWatchShape {
     readonly cwd: string | null;
     readonly note: string | null;
   }) => Effect.Effect<{ readonly run: WorkflowRun; readonly watching: boolean }, T4RunWatchError>;
+  /** Watches every run for a commit, those that start later included. */
+  readonly watchCommit: (input: {
+    readonly threadId: string;
+    readonly commit: string;
+    readonly repository: string | null;
+    readonly cwd: string | null;
+    readonly note: string | null;
+  }) => Effect.Effect<
+    ReadonlyArray<{ readonly runId: string; readonly name: string; readonly status: string }>,
+    T4RunWatchError
+  >;
   /** Posts finished runs into their threads; drops stale watches. */
   readonly sweep: Effect.Effect<void>;
   /** The threads with at least one run watched. */
   readonly watchingThreads: Effect.Effect<ReadonlySet<string>>;
+  /** Every watched run, for the dashboard: a thread waiting on one is working. */
+  readonly watches: Effect.Effect<
+    ReadonlyArray<{
+      readonly threadId: string;
+      readonly runId: string;
+      readonly name: string | null;
+      readonly url: string | null;
+      readonly since: string;
+    }>
+  >;
 }
 
 export class T4RunWatch extends Context.Service<T4RunWatch, T4RunWatchShape>()(
@@ -167,6 +226,143 @@ export const make = Effect.gen(function* () {
     } satisfies WorkflowRun;
   });
 
+  const loadCommits = store.meta(COMMIT_META_KEY).pipe(
+    Effect.flatMap((text) =>
+      text === undefined ? Effect.succeed([]) : Schema.decodeEffect(CommitWatches)(text),
+    ),
+    Effect.orElseSucceed((): ReadonlyArray<CommitWatch> => []),
+  );
+  const saveCommits = (list: ReadonlyArray<CommitWatch>) =>
+    Schema.encodeEffect(CommitWatches)(list).pipe(
+      Effect.flatMap((text) => store.setMeta(COMMIT_META_KEY, text)),
+      Effect.ignore,
+    );
+
+  const runsForCommit = Effect.fn("t4.T4RunWatch.runsForCommit")(function* (
+    commit: string,
+    repository: string | null,
+    cwd: string | null,
+  ) {
+    const result = yield* processes
+      .run({
+        command: "gh",
+        args: [
+          "run",
+          "list",
+          "--commit",
+          commit,
+          ...(repository === null ? [] : ["--repo", repository]),
+          "--limit",
+          "50",
+          "--json",
+          "databaseId,name,workflowName,displayTitle,status,conclusion,url",
+        ],
+        ...(cwd === null ? {} : { cwd }),
+        timeout: "30 seconds",
+        timeoutBehavior: "timedOutResult",
+      })
+      .pipe(Effect.mapError((cause) => new T4RunWatchError({ message: String(cause) })));
+    if (result.timedOut || result.code !== 0) {
+      return yield* new T4RunWatchError({
+        message: (result.stderr || result.stdout).trim().slice(0, 400) || "gh run list failed",
+      });
+    }
+    return yield* decodeRunList(result.stdout).pipe(
+      Effect.mapError(() => new T4RunWatchError({ message: "gh run list returned no runs" })),
+    );
+  });
+
+  const watchCommit: T4RunWatchShape["watchCommit"] = Effect.fn("t4.T4RunWatch.watchCommit")(
+    function* (input: Parameters<T4RunWatchShape["watchCommit"]>[0]) {
+      const runs = yield* runsForCommit(input.commit, input.repository, input.cwd);
+      const now = yield* Clock.currentTimeMillis;
+      yield* lock.withPermits(1)(
+        Effect.gen(function* () {
+          const list = yield* loadCommits;
+          const previous = list.find(
+            (w) => w.threadId === input.threadId && w.commit === input.commit,
+          );
+          const reported =
+            previous?.reported ??
+            runs.filter((run) => run.status === "completed").map((run) => String(run.databaseId));
+          yield* saveCommits([
+            ...list.filter((w) => !(w.threadId === input.threadId && w.commit === input.commit)),
+            { ...input, since: previous?.since ?? now, reported, lastActivity: now },
+          ]);
+        }),
+      );
+      return runs.map((run) => ({
+        runId: String(run.databaseId),
+        name: run.displayTitle || run.name || run.workflowName || "run",
+        status: run.status === "completed" ? run.conclusion || "completed" : run.status || "",
+      }));
+    },
+  );
+
+  const sweepCommits = Effect.gen(function* () {
+    const list = yield* loadCommits;
+    if (list.length === 0) return;
+    const now = yield* Clock.currentTimeMillis;
+    const next: Array<CommitWatch> = [];
+    for (const w of list) {
+      const runs = yield* runsForCommit(w.commit, w.repository, w.cwd).pipe(
+        Effect.orElseSucceed(() => null),
+      );
+      if (runs === null) {
+        next.push(w);
+        continue;
+      }
+      const finished = runs.filter(
+        (run) => run.status === "completed" && !w.reported.includes(String(run.databaseId)),
+      );
+      const running = runs.filter((run) => run.status !== "completed");
+      let lastActivity = w.lastActivity;
+      if (finished.length > 0) {
+        lastActivity = now;
+        const lines = [];
+        for (const run of finished) {
+          const detail =
+            run.conclusion === "success"
+              ? null
+              : yield* view(String(run.databaseId), w.repository, w.cwd).pipe(
+                  Effect.orElseSucceed(() => null),
+                );
+          lines.push(
+            `- ${run.displayTitle || run.name || run.workflowName} #${run.databaseId}: ${run.conclusion || "completed"}${detail && detail.failedJobs.length > 0 ? ` (failed: ${detail.failedJobs.join(", ")})` : ""} ${run.url ?? ""}`.trim(),
+          );
+        }
+        yield* post(
+          w.threadId,
+          [
+            `WORKFLOW RUNS finished for commit ${w.commit.slice(0, 10)}:`,
+            ...lines,
+            running.length > 0
+              ? `Still running: ${running.map((run) => `${run.displayTitle || run.name} #${run.databaseId}`).join("; ")} - you will be woken when they finish.`
+              : "Nothing else is running for this commit yet; a run it triggers later is still watched for 20 minutes.",
+            w.note ? `Your note: ${w.note}` : null,
+          ]
+            .filter((line) => line !== null)
+            .join("\n"),
+        );
+      }
+      const reported = [...w.reported, ...finished.map((run) => String(run.databaseId))];
+      const quiet = running.length === 0 && now - lastActivity > COMMIT_QUIET_MS;
+      if (quiet || now - w.since > MAX_AGE_MS) continue;
+      next.push({ ...w, reported, lastActivity: running.length > 0 ? now : lastActivity });
+    }
+    yield* lock.withPermits(1)(
+      Effect.gen(function* () {
+        // Keep watches added while this sweep ran.
+        const latest = yield* loadCommits;
+        const swept = new Set(list.map((w) => `${w.threadId} ${w.commit}`));
+        yield* saveCommits([
+          ...next,
+          ...latest.filter((w) => !swept.has(`${w.threadId} ${w.commit}`)),
+        ]);
+      }),
+    );
+  });
+
   const watch: T4RunWatchShape["watch"] = Effect.fn("t4.T4RunWatch.watch")(function* (
     input: Parameters<T4RunWatchShape["watch"]>[0],
   ) {
@@ -184,7 +380,7 @@ export const make = Effect.gen(function* () {
             message: `this thread already watches ${MAX_PER_THREAD} runs`,
           });
         }
-        yield* save([...others, { ...input, since: now }]);
+        yield* save([...others, { ...input, since: now, name: run.name, url: run.url }]);
       }),
     );
     return { run, watching: true };
@@ -203,6 +399,7 @@ export const make = Effect.gen(function* () {
     );
 
   const sweep: T4RunWatchShape["sweep"] = Effect.gen(function* () {
+    yield* sweepCommits.pipe(Effect.ignoreCause({ log: true }));
     const watches = yield* load;
     if (watches.length === 0) return;
     const now = yield* Clock.currentTimeMillis;
@@ -240,11 +437,33 @@ export const make = Effect.gen(function* () {
     );
   }).pipe(Effect.ignoreCause({ log: true }));
 
-  const watchingThreads = load.pipe(
-    Effect.map((watches) => new Set(watches.map((w) => w.threadId)) as ReadonlySet<string>),
+  const watchingThreads = Effect.all([load, loadCommits]).pipe(
+    Effect.map(
+      ([watches, commits]) =>
+        new Set([...watches, ...commits].map((w) => w.threadId)) as ReadonlySet<string>,
+    ),
   );
 
-  return T4RunWatch.of({ watch, sweep, watchingThreads });
+  const watches = Effect.all([load, loadCommits]).pipe(
+    Effect.map(([list, commits]) => [
+      ...list.map((w) => ({
+        threadId: w.threadId,
+        runId: w.runId,
+        name: w.name ?? null,
+        url: w.url ?? null,
+        since: DateTime.formatIso(DateTime.makeUnsafe(w.since)),
+      })),
+      ...commits.map((w) => ({
+        threadId: w.threadId,
+        runId: `commit ${w.commit.slice(0, 10)}`,
+        name: `every run for commit ${w.commit.slice(0, 10)}`,
+        url: null,
+        since: DateTime.formatIso(DateTime.makeUnsafe(w.since)),
+      })),
+    ]),
+  );
+
+  return T4RunWatch.of({ watch, watchCommit, sweep, watchingThreads, watches });
 });
 
 export const layer = Layer.effect(T4RunWatch, make);

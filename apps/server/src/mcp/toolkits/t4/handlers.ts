@@ -545,8 +545,6 @@ export const layer = McpToolAccess.toLayer(T4Toolkit, {
     Effect.gen(function* () {
       const me = yield* callerThread;
       const runWatch = yield* T4RunWatch.T4RunWatch;
-      const runId = String(input.runId).trim();
-      if (!/^\d+$/.test(runId)) return yield* invalid(`'${runId}' is not a workflow run id`);
       const project =
         me.worktreePath === null
           ? yield* Project.ProjectService.pipe(
@@ -555,14 +553,42 @@ export const layer = McpToolAccess.toLayer(T4Toolkit, {
               Effect.orElseSucceed(() => undefined),
             )
           : undefined;
+      const where = {
+        threadId: me.id,
+        repository: input.repository?.trim() || null,
+        cwd: me.worktreePath ?? project?.workspaceRoot ?? null,
+        note: input.note?.trim() || null,
+      };
+      const commit = input.commit?.trim();
+      if (commit !== undefined && commit.length > 0) {
+        if (!/^[0-9a-f]{7,40}$/i.test(commit))
+          return yield* invalid(`'${commit}' is not a commit SHA`);
+        const runs = yield* runWatch
+          .watchCommit({ ...where, commit })
+          .pipe(
+            Effect.mapError((error) =>
+              invalid(`couldn't read runs for ${commit}: ${error.message}`),
+            ),
+          );
+        return {
+          watching: true,
+          runId: `commit ${commit.slice(0, 10)}`,
+          name: `every run for commit ${commit.slice(0, 10)}`,
+          status: runs.some((run) => run.status === "in_progress" || run.status === "queued")
+            ? "in_progress"
+            : "watching",
+          conclusion: "",
+          url: "",
+          failedJobs: [],
+          runs: [...runs],
+          next: "End your turn now. You are woken as each run for this commit finishes, including runs that start later (checked every 30 s); handoffs reach you meanwhile.",
+        };
+      }
+      const runId = String(input.runId ?? "").trim();
+      if (!/^\d+$/.test(runId))
+        return yield* invalid("pass `commit` (a SHA) or `runId` (a run's number)");
       const { run, watching } = yield* runWatch
-        .watch({
-          threadId: me.id,
-          runId,
-          repository: input.repository?.trim() || null,
-          cwd: me.worktreePath ?? project?.workspaceRoot ?? null,
-          note: input.note?.trim() || null,
-        })
+        .watch({ ...where, runId })
         .pipe(Effect.mapError((error) => invalid(`couldn't read run ${runId}: ${error.message}`)));
       return {
         watching,
@@ -573,7 +599,7 @@ export const layer = McpToolAccess.toLayer(T4Toolkit, {
         url: run.url,
         failedJobs: [...run.failedJobs],
         next: watching
-          ? "End your turn now. A message arrives here when the run finishes; handoffs reach you meanwhile."
+          ? "End your turn now. A message arrives here when the run finishes (checked every 30 s); handoffs reach you meanwhile."
           : "The run already finished; act on its conclusion now.",
       };
     }),

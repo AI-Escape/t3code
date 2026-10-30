@@ -37,6 +37,7 @@ import * as T4Config from "./T4Config.ts";
 import * as T4Delivery from "./T4Delivery.ts";
 import { factsFor } from "./T4Facts.ts";
 import * as T4Ledger from "./T4Ledger.ts";
+import * as T4RunWatch from "./T4RunWatch.ts";
 import * as T4Schedules from "./T4Schedules.ts";
 import * as T4Spawn from "./T4Spawn.ts";
 import { clientDefaultModelSelection } from "./T4DefaultModel.ts";
@@ -171,6 +172,12 @@ export const layer = Layer.mergeAll(
         issueLinks: yield* store.issueLinks(),
         settleRequests: Object.fromEntries([...(yield* store.settleRequests()).entries()]),
         threads: Object.fromEntries(facts.entries()),
+        // Runs a thread waits on (watch_workflow_run): it is working, not idle.
+        runWatches: yield* Effect.serviceOption(T4RunWatch.T4RunWatch).pipe(
+          Effect.flatMap((service) =>
+            service._tag === "Some" ? service.value.watches : Effect.succeed([]),
+          ),
+        ),
       });
     }),
   ),

@@ -188,11 +188,18 @@ const WatchWorkflowRunTool = Tool.make("watch_workflow_run", {
   ...common,
   dependencies: [...common.dependencies, T4RunWatch.T4RunWatch],
   description:
-    "Be woken when a GitHub Actions run finishes, instead of blocking on `gh run watch`, `ci watch` or polling: give the run id (`ci runs`, `gh run list`), then END YOUR TURN. One message arrives in this thread when the run completes, with its conclusion and failed jobs; while you wait, any handoff or message starts your turn at once. A run that already finished is reported right away. Repeat per run you need to follow.",
+    "Be woken when GitHub Actions runs finish, instead of blocking on `gh run watch` / `ci watch` or polling, then END YOUR TURN. `commit` (a merge commit's SHA) follows EVERY run for that commit, including runs that start later - a staging train and the production deploy it triggers - and wakes you as each finishes (checked every 30 s); use it for a release. `runId` follows one run. While you wait, handoffs and messages start your turn at once. A run that already finished is reported right away.",
   parameters: Schema.Struct({
-    runId: Schema.Union([Schema.String, Schema.Number]).annotate({
-      description: "The workflow run's id (the number in its URL).",
-    }),
+    commit: Schema.optional(
+      Schema.String.annotate({
+        description: "A commit SHA: follow every run for it, later ones included.",
+      }),
+    ),
+    runId: Schema.optional(
+      Schema.Union([Schema.String, Schema.Number]).annotate({
+        description: "One workflow run's id (the number in its URL).",
+      }),
+    ),
     repository: Schema.optional(
       Schema.String.annotate({
         description: "owner/repo. Default: the repository of your checkout.",
@@ -212,6 +219,11 @@ const WatchWorkflowRunTool = Tool.make("watch_workflow_run", {
     conclusion: Schema.String,
     url: Schema.String,
     failedJobs: Schema.Array(Schema.String),
+    runs: Schema.optional(
+      Schema.Array(
+        Schema.Struct({ runId: Schema.String, name: Schema.String, status: Schema.String }),
+      ),
+    ),
     next: Schema.String,
   }),
 }).annotate(Tool.Destructive, false);

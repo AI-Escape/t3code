@@ -32,6 +32,17 @@ const harness = () => {
         }),
         Layer.mock(ProcessRunner.ProcessRunner)({
           run: (input) => {
+            if (input.args[1] === "list") {
+              const list = [...runs.entries()]
+                .filter(([, r]) => r.commit === input.args[3])
+                .map(([id, r]) => ({ databaseId: Number(id), ...r }));
+              return Effect.succeed({
+                stdout: JSON.stringify(list),
+                stderr: "",
+                code: 0,
+                timedOut: false,
+              } as never);
+            }
             const run = runs.get(String(input.args[2]));
             return Effect.succeed({
               stdout: run === undefined ? "" : JSON.stringify(run),
@@ -96,5 +107,37 @@ describe("t4 watch_workflow_run", () => {
   it("refuses a run gh cannot read", async () => {
     const h = harness();
     await expect(h.use((w) => w.watch({ ...input, runId: "404" }))).rejects.toThrow();
+  });
+
+  it("follows every run for a commit, including one that starts after the first finishes", async () => {
+    const h = harness();
+    h.runs.set("10", {
+      commit: "abc1234",
+      name: "Staging train",
+      displayTitle: "staging",
+      status: "in_progress",
+    });
+    const runs = await h.use((w) => w.watchCommit({ ...input, commit: "abc1234" }));
+    expect(runs).toHaveLength(1);
+
+    h.runs.set("10", { ...h.runs.get("10"), status: "completed", conclusion: "success" });
+    await h.use((w) => w.sweep);
+    expect(h.delivered).toHaveLength(1);
+    expect(h.delivered[0]!.text).toContain("staging #10: success");
+
+    // The production deploy the staging train triggers starts afterwards.
+    h.runs.set("11", {
+      commit: "abc1234",
+      name: "Production",
+      displayTitle: "production",
+      status: "in_progress",
+    });
+    await h.use((w) => w.sweep);
+    expect(h.delivered).toHaveLength(1);
+    h.runs.set("11", { ...h.runs.get("11"), status: "completed", conclusion: "success" });
+    await h.use((w) => w.sweep);
+    expect(h.delivered).toHaveLength(2);
+    expect(h.delivered[1]!.text).toContain("production #11: success");
+    expect(await h.use((w) => w.watchingThreads)).toEqual(new Set(["t4-rm"]));
   });
 });
