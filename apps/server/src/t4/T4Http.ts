@@ -93,6 +93,11 @@ const LaunchBody = Schema.Struct({
   modelSelection: Schema.optional(ModelSelection),
   force: Schema.optional(Schema.Boolean),
 });
+const AnswerBody = Schema.Struct({
+  requestId: Schema.String,
+  /** The answer to the request's only (or first) question: an option label, or free text. */
+  answer: Schema.Union([Schema.String, Schema.Array(Schema.String)]),
+});
 const MessageBody = Schema.Struct({
   text: Schema.String,
   interrupt: Schema.optional(Schema.Boolean),
@@ -210,6 +215,22 @@ export const layer = Layer.mergeAll(
             r.status === "pending" &&
             !(r.responseCapability.type === "live" && ended.has(r.nativeRequestRef?.nativeId)),
         );
+        // t4 fork: a pending secret request (`request_secret`) waits on the user too;
+        // it is entered privately in T3's card, never typed into chat.
+        for (const item of records.turnItems) {
+          if (item.type !== "secret_request" || item.secretStatus !== "pending") continue;
+          pending.push({
+            threadId: thread.id,
+            threadTitle: thread.title,
+            projectId: thread.projectId,
+            requestId: item.id,
+            createdAt: DateTime.formatIso(item.startedAt ?? item.updatedAt),
+            kind: "secret",
+            title: `Enter a secret: ${item.label}`,
+            detail: item.reason || null,
+            options: [],
+          });
+        }
         for (const request of live) {
           const item = records.turnItems.find(
             (candidate) =>
@@ -232,6 +253,9 @@ export const layer = Layer.mergeAll(
               title: first?.question ?? first?.header ?? "Question",
               more: Math.max(0, questions.length - 1),
               options: (first?.options ?? []).map((option) => option.label),
+              // t4 fork: what the dashboard needs to answer it (POST .../answer).
+              questionId: first?.id ?? null,
+              multiSelect: first?.multiSelect === true,
             });
           } else {
             pending.push({
@@ -438,6 +462,48 @@ export const layer = Layer.mergeAll(
         creationSource: "web",
       });
       return json({ threadId: thread.id, messageId: result.messageId, delivery: result.delivery });
+    }),
+  ),
+
+  // The dashboard answers a one-question card the way T3's own card does.
+  route("POST", "/api/t4/threads/:threadId/answer", AuthOrchestrationOperateScope, (params) =>
+    Effect.gen(function* () {
+      const input = yield* body(AnswerBody);
+      const threads = yield* ThreadManagementService.ThreadManagementService;
+      const threadId = ThreadId.make(params.threadId ?? "");
+      const thread = yield* threads.getThreadShell(threadId);
+      if (thread === null) return json({ error: "thread not found" }, 404);
+      const records = yield* threads.getProjectThreadRecords(
+        { projectId: thread.projectId, threadId },
+        ["turnItems", "runtimeRequests"],
+      );
+      const request = records.runtimeRequests.find(
+        (candidate) => candidate.id === input.requestId && candidate.status === "pending",
+      );
+      if (request === undefined) return json({ error: "that question is no longer open" }, 409);
+      const item = records.turnItems.find(
+        (candidate) =>
+          candidate.type === "user_input_request" && candidate.requestId === request.id,
+      );
+      const questions = item?.type === "user_input_request" ? item.questions : [];
+      if (questions.length !== 1) {
+        return json({ error: "answer this one in T3: it asks more than one question" }, 400);
+      }
+      const raw = input.answer;
+      const answer =
+        typeof raw === "string"
+          ? raw.trim()
+          : raw.map((pick) => pick.trim()).filter((pick) => pick.length > 0);
+      if (answer.length === 0) return json({ error: "empty answer" }, 400);
+      const crypto = yield* Crypto.Crypto;
+      yield* threads.dispatch({
+        type: "runtime-request.respond",
+        commandId: CommandId.make(`t4:dashboard-answer:${yield* crypto.randomUUIDv4()}`),
+        threadId,
+        requestId: request.id,
+        answers: { [questions[0]!.id]: answer },
+      });
+      return json({ ok: true });
     }),
   ),
 
