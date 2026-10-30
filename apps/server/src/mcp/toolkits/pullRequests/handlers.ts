@@ -14,6 +14,7 @@ import * as Option from "effect/Option";
 
 import * as Orchestrator from "../../../orchestration-v2/Orchestrator.ts";
 import * as ProjectService from "../../../project/ProjectService.ts";
+import * as T4Ledger from "../../../t4/T4Ledger.ts";
 import * as PullRequestReviewGuideService from "../../../pullRequest/PullRequestReviewGuideService.ts";
 import { pullRequestSyncKey } from "../../../pullRequest/pullRequestSyncKey.ts";
 import { sourceControlDefinitions } from "../../../sourceControl/sourceControlDefinitions.ts";
@@ -368,6 +369,19 @@ const make = Effect.gen(function* () {
             : {};
         const project = yield* projectOf(thread, PullRequestLinkFailedError);
         const target = yield* resolveTarget(input, project);
+        // t4 fork: a release manager merges other threads' PRs; linking each one
+        // and unlinking it on ship was ~110 calls a day (usa-rs, 2026-10-30).
+        const t4Ledger = yield* Effect.serviceOption(T4Ledger.T4Ledger);
+        if (Option.isSome(t4Ledger)) {
+          const world = yield* t4Ledger.value.world().pipe(Effect.orElseSucceed(() => null));
+          if (world !== null && t4Ledger.value.isReleaseManager(world, thread)) {
+            return {
+              ...target,
+              alreadyLinked: false,
+              next: "Not linked: a release manager doesn't link the PRs it merges - they stay linked to their owners' threads. Watch the merge commit with `watch_workflow_run` instead.",
+            };
+          }
+        }
         const existing = threadPullRequestsOf(thread).find((link) =>
           threadPullRequestKeysEqual(link, target),
         );

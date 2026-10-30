@@ -261,6 +261,12 @@ const decideSteeringExecution: CommandPolicyV2Shape["decideSteeringExecution"] =
   ) {
     return Effect.succeed("interrupt_restart");
   }
+  // t4 fork: a restart to a provider that can only steer (Claude) steers
+  // instead - Claude's steer already cancels the running tool call. It failed
+  // with "cannot redirect an active run" and the sender re-sent as a steer.
+  if (input.forceRestart && input.capabilities.turns.supportsActiveSteering) {
+    return Effect.succeed("active_steering");
+  }
   return Effect.fail(
     unsupported(
       input,

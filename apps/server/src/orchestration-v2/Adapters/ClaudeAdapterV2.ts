@@ -141,6 +141,7 @@ import { QUESTION_POSTED_NOTE, t4QuestionsAsMessages } from "../../t4/questionsA
 import { safetyCheckDeclinedNote, t4DeclineSafetyChecks } from "../../t4/declineSafetyChecks.ts";
 // t4 fork: claudeAccounts.
 import {
+  anotherClaudeAccountFree,
   claudeAccountEnvironment,
   isClaudeAccountExhausted,
   markClaudeAccountExhausted,
@@ -8135,11 +8136,14 @@ export const makeClaudeAdapterV2 = Effect.fn("makeClaudeAdapterV2")(function* (
               if (!context.announcedUsageLimits.has(limitKey)) {
                 context.announcedUsageLimits.add(limitKey);
                 const nativeItemId = `usage-limit:${context.providerTurnId}:${limitKey}`;
-                const notice = describeClaudeUsageLimit(
-                  rateLimitInfo,
-                  DateTime.toEpochMillis(now),
-                  names,
-                );
+                // t4 fork: with another Claude account free the thread goes on in
+                // about a minute; say that, not the account's own reset.
+                const t4Live = yield* Ref.get(queryContext);
+                const notice =
+                  t4Live !== null &&
+                  anotherClaudeAccountFree(t4Live.t4Account, DateTime.toEpochMillis(now))
+                    ? "Claude usage limit reached on this account. The thread continues on another Claude account in about a minute."
+                    : describeClaudeUsageLimit(rateLimitInfo, DateTime.toEpochMillis(now), names);
                 yield* emitProviderEvent({
                   type: "turn_item.updated",
                   driver: CLAUDE_PROVIDER,

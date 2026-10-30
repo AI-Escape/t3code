@@ -140,4 +140,53 @@ describe("t4 watch_workflow_run", () => {
     expect(h.delivered[1]!.text).toContain("production #11: success");
     expect(await h.use((w) => w.watchingThreads)).toEqual(new Set(["t4-rm"]));
   });
+
+  it("holds runs that finish while others still run, and posts a failure at once", async () => {
+    const h = harness();
+    h.runs.set("20", { commit: "def5678", displayTitle: "staging", status: "in_progress" });
+    h.runs.set("21", { commit: "def5678", displayTitle: "train decision", status: "in_progress" });
+    h.runs.set("22", { commit: "def5678", displayTitle: "dashboard", status: "in_progress" });
+    await h.use((w) => w.watchCommit({ ...input, commit: "def5678" }));
+
+    // A decision succeeds and another is cancelled while staging runs: no wake.
+    h.runs.set("21", { ...h.runs.get("21"), status: "completed", conclusion: "success" });
+    h.runs.set("23", {
+      commit: "def5678",
+      displayTitle: "train decision",
+      status: "completed",
+      conclusion: "cancelled",
+    });
+    await h.use((w) => w.sweep);
+    expect(h.delivered).toEqual([]);
+
+    // A failure posts with what was held, while staging still runs.
+    h.runs.set("22", { ...h.runs.get("22"), status: "completed", conclusion: "failure", jobs: [] });
+    await h.use((w) => w.sweep);
+    expect(h.delivered).toHaveLength(1);
+    expect(h.delivered[0]!.text).toContain("train decision #21: success");
+    expect(h.delivered[0]!.text).toContain("dashboard #22: failure");
+    expect(h.delivered[0]!.text).toContain("(1 more skipped or cancelled.)");
+    expect(h.delivered[0]!.text).toContain("Still running: staging #20");
+
+    h.runs.set("20", { ...h.runs.get("20"), status: "completed", conclusion: "success" });
+    await h.use((w) => w.sweep);
+    expect(h.delivered).toHaveLength(2);
+    expect(h.delivered[1]!.text).toContain("staging #20: success");
+    expect(h.delivered[1]!.text).not.toContain("#21");
+  });
+
+  it("does not watch a run twice when its commit is already watched", async () => {
+    const h = harness();
+    h.runs.set("30", {
+      commit: "aaa1111",
+      headSha: "aaa1111ffff",
+      displayTitle: "staging",
+      status: "in_progress",
+      jobs: [],
+    });
+    await h.use((w) => w.watchCommit({ ...input, commit: "aaa1111" }));
+    const watched = await h.use((w) => w.watch({ ...input, runId: "30" }));
+    expect(watched.watching).toBe(true);
+    expect(h.meta.get("workflow-run-watches")).toBeUndefined();
+  });
 });

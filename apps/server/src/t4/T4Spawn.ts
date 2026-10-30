@@ -2,10 +2,13 @@
  * t4 fork: what a thread launch does on top of T3's - t4's `spawn`.
  *
  * Behaviour contract: `cmd_spawn` in t4's `t3agents.py`.
- *   - Live-thread guard: a thread spawning work refuses while other threads
- *     are live in the project (running, or active in the last 3 hours;
- *     excluding itself and release managers) unless `anyway` - if one already
- *     owns the work, message it instead.
+ *   - Live-thread guard: a thread spawning work that names no issue refuses
+ *     while other threads are live in the project (running, or active in the
+ *     last 3 hours; excluding itself and release managers) unless `anyway` -
+ *     if one already owns the work, message it instead. A launch that names
+ *     its issues is checked by issue ownership alone: on a busy project the
+ *     list is never empty, and agents re-ran with `anyway` within seconds
+ *     (usa-rs, 2026-10-30).
  *   - Issues: each is linked to the new thread; one an open thread already
  *     owns is refused unless `anyway`.
  *   - A parent thread gets a parent->child `spawn` ledger entry, and the
@@ -47,7 +50,7 @@ export const beforeLaunch = Effect.fn("t4.beforeLaunch")(function* (input: {
   const now = yield* Clock.currentTimeMillis;
   const world = yield* ledger.world();
 
-  if (input.caller !== undefined && !input.anyway) {
+  if (input.caller !== undefined && !input.anyway && input.issues.length === 0) {
     const live = world.threads.filter(
       (thread) =>
         thread.projectId === input.projectId &&

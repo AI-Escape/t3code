@@ -126,6 +126,18 @@ export function resolveThreadRef<T extends Pick<Shell, "id" | "title" | "archive
   const titled =
     exactTitle.length > 0 ? exactTitle : pool.filter((t) => t.title.toLowerCase().includes(low));
   if (titled.length === 1) return { type: "found", thread: titled[0]! };
+  // A title that has since changed ("USA-1525 Save real warehouse…" after the
+  // thread renamed itself): the issue id it leads with still names the thread.
+  if (prefixed.length === 0 && titled.length === 0) {
+    const issue = /^([a-z][a-z0-9]{0,9}-\d+)\b/i.exec(wanted)?.[1]?.toUpperCase();
+    if (issue !== undefined) {
+      const byIssue = pool.filter((t) => issueIdIn(t.title) === issue);
+      const open = byIssue.filter((t) => t.archivedAt === null);
+      if (open.length === 1) return { type: "found", thread: open[0]! };
+      if (byIssue.length === 1) return { type: "found", thread: byIssue[0]! };
+      if (byIssue.length > 1) return { type: "ambiguous", matches: byIssue };
+    }
+  }
   const matches = prefixed.length > 0 ? prefixed : titled;
   return matches.length === 0 ? { type: "none" } : { type: "ambiguous", matches };
 }

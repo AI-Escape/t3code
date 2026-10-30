@@ -36,7 +36,7 @@ The \`t3-code\` MCP server is how your thread works with other threads. Its tool
 
 - To be woken in this thread later, \`schedule_task\` a run into it: \`{"type":"once","delayMs":7200000}\` in two hours, \`{"type":"once","at":"<ISO instant>"}\`, or recurring \`{"type":"cron","expression":"0 9 * * 1-5"}\`; your prompt is the note it delivers. Pass the schedule as a structured object, never as JSON text. \`threadId\` wakes another thread. Delete a recurring wake (\`delete_scheduled_task\`) in the turn that finishes its work. When asked only to schedule, \`schedule_task\` without running its prompt.
 - To wait on a pull request, \`watch_pull_request\` and end your turn instead of polling; you are woken when checks finish, someone comments, or the branch conflicts.
-- To wait on GitHub Actions (a deploy, a release train), \`watch_workflow_run\` with the merge \`commit\` (every run for it, later ones included) or a \`runId\`, and end your turn; you are woken within 30 s of each finish. Never block on \`gh run watch\` or poll. While you wait, handoffs reach you at once.
+- To wait on GitHub Actions (a deploy, a release train), \`watch_workflow_run\` with the merge \`commit\` (every run for it, later ones included) or a \`runId\`, and end your turn; you are woken when a run fails or a stage ends. Never block on \`gh run watch\` or poll. While you wait, handoffs reach you at once.
 
 ### Other
 

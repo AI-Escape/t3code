@@ -1008,6 +1008,26 @@ const withToolAnalytics =
     return yield* registration.pipe(Effect.provideService(McpServer.McpServer, recordingServer));
   });
 
+/**
+ * t4 fork: the thread tools every t4 agent uses, loaded into Claude's prompt
+ * up front instead of deferred behind tool search - agents fetched them by
+ * name 214 times in 57 threads in a day (2026-10-30), each a round trip.
+ */
+const T4_ALWAYS_LOAD = new Set([
+  "t3_handoff",
+  "t3_owed",
+  "t3_decisions",
+  "link_issue",
+  "t3_thread_list",
+  "t3_thread_read",
+  "t3_thread_send",
+  "t3_thread_organize",
+  "t3_thread_update",
+  "schedule_task",
+  "watch_workflow_run",
+  "request_secret",
+]);
+
 /** `McpServer.registerToolkit` advertises the full codec schema; agents get the compact one. */
 const withAdvertisedSchemas = Effect.fn("McpHttpServer.withAdvertisedSchemas")(function* <
   Tools extends Record<string, Tool.Any>,
@@ -1029,6 +1049,9 @@ const withAdvertisedSchemas = Effect.fn("McpHttpServer.withAdvertisedSchemas")(f
               tool: new McpSchema.Tool({
                 ...options.tool,
                 inputSchema: advertisedJsonSchema(tool),
+                ...(T4_ALWAYS_LOAD.has(options.tool.name)
+                  ? { _meta: { ...options.tool._meta, "anthropic/alwaysLoad": true } }
+                  : {}),
               }),
             },
       );

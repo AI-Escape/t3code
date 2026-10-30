@@ -144,6 +144,25 @@ export const markClaudeAccountExhausted = (
   return Math.min(...keys.map((other) => state.get(other)!));
 };
 
+/**
+ * Whether a limit on `current` hands the thread to another account at once:
+ * any other configured account (the main login included) not used up. The
+ * limit notice then says so instead of "paused until the limit resets in
+ * 2h 46m" for a thread that goes on within a minute (2026-10-30).
+ */
+export const anotherClaudeAccountFree = (
+  current: string,
+  nowMs: number,
+  env: NodeJS.ProcessEnv = process.env,
+): boolean => {
+  const files = accountFiles(env);
+  if (files.length === 0) return false;
+  const state = loadState(env, files);
+  return [...files.map(keyOf), MAIN_CLAUDE_ACCOUNT].some(
+    (key) => key !== current && (state.get(key) ?? 0) <= nowMs,
+  );
+};
+
 /** Test hook: forget the loaded state. */
 export const resetClaudeAccountState = () => {
   exhaustedUntil = null;

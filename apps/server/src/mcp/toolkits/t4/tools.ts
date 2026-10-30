@@ -123,12 +123,27 @@ const DecisionEntry = Schema.Struct({
 const DecisionsTool = Tool.make("t3_decisions", {
   ...common,
   description:
-    "The user's answers to ask-user questions, newest first: this project (or `all` projects) over the last `days` (default 14). An answer that isn't one of the offered options is a note the user wrote - treat it as a standing rule.",
+    'The user\'s typed answers to ask-user questions - notes they wrote instead of picking an option, each a standing rule - newest first: this project (or `all` projects) over the last `days` (default 14). `picks` adds the plain option picks ("Approve", "Merge"); `search` keeps entries whose question, answer or thread title contain it.',
   parameters: Schema.Struct({
     days: Schema.optional(Schema.Number),
     all: Schema.optional(Schema.Boolean),
+    picks: Schema.optional(
+      Schema.Boolean.annotate({ description: "Include option picks too (default: notes only)." }),
+    ),
+    search: Schema.optional(
+      Schema.String.annotate({ description: "Case-insensitive text to filter by." }),
+    ),
   }),
-  success: Schema.Struct({ decisions: Schema.Array(DecisionEntry) }),
+  success: Schema.Struct({
+    decisions: Schema.Array(DecisionEntry),
+    omittedPicks: Schema.Number.annotate({
+      description: "Option picks left out (pass `picks` to see them).",
+    }),
+    truncated: Schema.Boolean.annotate({
+      description:
+        "Older entries were cut to keep the answer short; narrow with `search` or `days`.",
+    }),
+  }),
 })
   .annotate(Tool.Readonly, true)
   .annotate(Tool.Destructive, false);
@@ -188,7 +203,7 @@ const WatchWorkflowRunTool = Tool.make("watch_workflow_run", {
   ...common,
   dependencies: [...common.dependencies, T4RunWatch.T4RunWatch],
   description:
-    "Be woken when GitHub Actions runs finish, instead of blocking on `gh run watch` / `ci watch` or polling, then END YOUR TURN. `commit` (a merge commit's SHA) follows EVERY run for that commit, including runs that start later - a staging train and the production deploy it triggers - and wakes you as each finishes (checked every 30 s); use it for a release. `runId` follows one run. While you wait, handoffs and messages start your turn at once. A run that already finished is reported right away.",
+    "Be woken when GitHub Actions runs finish, instead of blocking on `gh run watch` / `ci watch` or polling, then END YOUR TURN. `commit` (a merge commit's SHA) follows EVERY run for that commit, including runs that start later - a staging train and the production deploy it triggers - and wakes you when a run fails or when nothing for the commit is still running (each stage's end; checked every 30 s); use it for a release. `runId` follows one run. While you wait, handoffs and messages start your turn at once. A run that already finished is reported right away.",
   parameters: Schema.Struct({
     commit: Schema.optional(
       Schema.String.annotate({

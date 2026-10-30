@@ -15,7 +15,12 @@ import * as T4Store from "./T4Store.ts";
 
 const HOUR = 3600_000;
 
-const harness = (input: { watching?: boolean; wakeInMs?: number; running?: boolean }) => {
+const harness = (input: {
+  watching?: boolean;
+  wakeInMs?: number;
+  running?: boolean;
+  awaiting?: boolean;
+}) => {
   const rm = {
     id: "t4-rm",
     title: "Release manager — app",
@@ -42,7 +47,12 @@ const harness = (input: { watching?: boolean; wakeInMs?: number; running?: boole
           byId: new Map([["t4-rm", rm]]),
           releaseManagers: new Set(["t4-rm"]),
           open: [],
-          live: [{ toThreadId: "t4-rm", fromThreadId: "t4-owner", fromTitle: "APP-1 Fix it" }],
+          live: [
+            { toThreadId: "t4-rm", fromThreadId: "t4-owner", fromTitle: "APP-1 Fix it" },
+            ...(input.awaiting
+              ? [{ toThreadId: "t4-diag", fromThreadId: "t4-rm", fromTitle: "Release manager" }]
+              : []),
+          ],
         } as never),
       isReleaseManager: () => true,
       facts: () => ({ isReleaseManager: true, owes: 1, owedBy: 0 }),
@@ -106,8 +116,14 @@ describe("t4 release guard", () => {
     );
   });
 
-  it("leaves it alone while a run is watched, a wake is due soon, or it is running", async () => {
-    for (const input of [{ watching: true }, { wakeInMs: 10 * 60_000 }, { running: true }]) {
+  it("leaves it alone while a run is watched, a wake is set, it waits on a thread, or it runs", async () => {
+    for (const input of [
+      { watching: true },
+      { wakeInMs: 10 * 60_000 },
+      { wakeInMs: 3 * 24 * HOUR },
+      { awaiting: true },
+      { running: true },
+    ]) {
       const h = harness(input);
       await h.run(
         Effect.gen(function* () {

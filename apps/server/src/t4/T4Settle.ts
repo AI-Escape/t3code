@@ -75,6 +75,17 @@ export const make = Effect.gen(function* () {
           .join("; ");
         return `you still owe an answer to: ${names} - answer with \`t3_handoff\` (to that thread, done) first (\`t3_owed\`)`;
       }
+      // Its `shipped:` would reopen this thread, and done means verified in
+      // production: 5 of 12 reopened threads on 2026-10-30 had settled first.
+      const release = world.live.find(
+        (entry) =>
+          entry.fromThreadId === thread.id &&
+          world.byId.get(entry.toThreadId) !== undefined &&
+          ledger.isReleaseManager(world, world.byId.get(entry.toThreadId)!),
+      );
+      if (release !== undefined) {
+        return "the release manager still owes you `shipped:` (or `release failed`) for your handoff - settle after it arrives and you have checked production; if the release is no longer wanted, tell the release manager with `t3_handoff` and wait for its answer";
+      }
       return undefined;
     },
     Effect.orElseSucceed(() => undefined),

@@ -5,8 +5,11 @@
  * the merged PR (which never fires) while both deploys ran, and sat idle: no
  * owner heard back (2026-10-30). Every 2 minutes, a release manager that is
  * idle, still owes handoffs, and has nothing set to wake it - no workflow-run
- * watch, no wake due within 35 minutes - after 10 quiet minutes gets one note
- * to pick its queue back up; at most one an hour per thread.
+ * watch, no wake scheduled, no other thread owing it an answer - after 10
+ * quiet minutes gets one note to pick its queue back up; at most one an hour
+ * per thread. Any wake counts, however far off: shopify-theme-v2's release
+ * manager was nudged three times while holding a release until the Monday
+ * the user had named (2026-10-30).
  */
 import { ThreadId } from "@t3tools/contracts";
 import * as Clock from "effect/Clock";
@@ -21,12 +24,11 @@ import * as T4Store from "./T4Store.ts";
 import { isRetired, isRunning, lastActivityMs, shortId } from "./T4Threads.ts";
 
 const QUIET_MS = 10 * 60_000;
-const WAKE_SOON_MS = 35 * 60_000;
 const REPEAT_MS = 60 * 60_000;
 const nudgedKey = (threadId: string) => `release-guard:${threadId}`;
 
 export const guardNote = (owes: ReadonlyArray<string>) =>
-  `t4: you still owe ${owes.length} release${owes.length === 1 ? "" : "s"} (${owes.join("; ")}) and nothing is set to wake you - no workflow-run watch and no wake due soon. Read your queue file and the real state (\`ci runs\`, \`gh pr list\`): for every deploy still running, \`watch_workflow_run\` with its run id; for every finished one, verify it and send the owner's \`shipped:\` or \`release failed\` notice now. Then end your turn.`;
+  `t4: you still owe ${owes.length} release${owes.length === 1 ? "" : "s"} (${owes.join("; ")}) and nothing is set to wake you - no workflow-run watch, no wake, no thread owing you an answer. Read your queue file and the real state (\`ci runs\`, \`gh pr list\`): for every release still running, \`watch_workflow_run\` with its merge \`commit\`; for every finished one, verify it and send the owner's \`shipped:\` or \`release failed\` notice now. Then end your turn.`;
 
 export const sweep = Effect.gen(function* () {
   const ledger = yield* T4Ledger.T4Ledger;
@@ -51,14 +53,16 @@ export const sweep = Effect.gen(function* () {
   for (const rm of managers) {
     const owed = world.live.filter((entry) => entry.toThreadId === rm.id);
     if (owed.length === 0 || watching.has(rm.id)) continue;
-    const wakeSoon = tasks.some(
+    // Waiting on another thread's answer (a diagnosis it asked for) is not quiet.
+    if (world.live.some((entry) => entry.fromThreadId === rm.id)) continue;
+    const wake = tasks.some(
       (task) =>
         task.threadId === rm.id &&
         task.enabled &&
         task.nextRunAt !== null &&
-        Date.parse(String(task.nextRunAt)) - now <= WAKE_SOON_MS,
+        Date.parse(String(task.nextRunAt)) > now,
     );
-    if (wakeSoon) continue;
+    if (wake) continue;
     const last = yield* store.meta(nudgedKey(rm.id)).pipe(Effect.orElseSucceed(() => undefined));
     if (last !== undefined && now - Number(last) < REPEAT_MS) continue;
     const fresh = yield* threads

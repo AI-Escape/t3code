@@ -18,6 +18,7 @@ import * as Option from "effect/Option";
 
 import * as ThreadLaunch from "../../../orchestration-v2/ThreadLaunchService.ts";
 import * as Project from "../../../project/ProjectService.ts";
+import * as ScheduledTasks from "../../../scheduledTasks/ScheduledTaskService.ts";
 import * as T4Config from "../../../t4/T4Config.ts";
 import * as T4Delivery from "../../../t4/T4Delivery.ts";
 import * as FyiDigest from "../../../t4/fyiDigest.ts";
@@ -88,6 +89,72 @@ const callerThread = Effect.gen(function* () {
 });
 
 const nowMs = Clock.currentTimeMillis;
+
+/**
+ * The user's latest word in an owner's thread - the last question they
+ * answered and the last message they typed - for a handoff to the release
+ * manager. It read the owner's thread to check the merge word on 117 of 136
+ * reads, 5 MB in a day (usa-rs, 2026-10-30); now the handoff carries it.
+ */
+const latestUserWord = Effect.fn("t4.latestUserWord")(function* (me: Shell, now: number) {
+  const { threads } = yield* readCaller();
+  const records = yield* threads
+    .getProjectThreadRecords(
+      { projectId: me.projectId, threadId: me.id },
+      ["messages", "runtimeRequests", "turnItems"],
+      { messageRoles: ["user"], turnItemTypes: ["user_input_request"] },
+    )
+    .pipe(Effect.orElseSucceed(() => null));
+  if (records === null) return "";
+  const lines: Array<string> = [];
+  const answered = records.runtimeRequests
+    .filter(
+      (request) =>
+        request.kind === "user_input" &&
+        request.status === "resolved" &&
+        request.resolvedAt !== null,
+    )
+    .toSorted(
+      (left, right) =>
+        DateTime.toEpochMillis(right.resolvedAt!) - DateTime.toEpochMillis(left.resolvedAt!),
+    )[0];
+  if (answered !== undefined && answered.resolvedAt !== null) {
+    const item = records.turnItems.find(
+      (candidate) => candidate.type === "user_input_request" && candidate.requestId === answered.id,
+    );
+    const questions = item?.type === "user_input_request" ? item.questions : [];
+    for (const [questionId, raw] of Object.entries(answered.answers ?? {})) {
+      const question = questions.find((q) => q.id === questionId);
+      const answer = Array.isArray(raw) ? raw.map(String).join(", ") : String(raw);
+      const asked = (question?.question ?? question?.header ?? questionId)
+        .replaceAll(/\s+/g, " ")
+        .slice(0, 160);
+      lines.push(
+        `- answered "${asked}": "${answer.replaceAll(/\s+/g, " ").slice(0, 300)}" (${ago(DateTime.toEpochMillis(answered.resolvedAt), now)})`,
+      );
+    }
+  }
+  const typed = records.messages
+    .filter(
+      (message) =>
+        message.role === "user" &&
+        message.createdBy === "user" &&
+        message.senderThreadId === undefined &&
+        message.scheduledTaskId === undefined,
+    )
+    .toSorted(
+      (left, right) =>
+        DateTime.toEpochMillis(right.createdAt) - DateTime.toEpochMillis(left.createdAt),
+    )[0];
+  if (typed !== undefined) {
+    lines.push(
+      `- typed: "${typed.text.replaceAll(/\s+/g, " ").slice(0, 300)}" (${ago(DateTime.toEpochMillis(typed.createdAt), now)})`,
+    );
+  }
+  return lines.length === 0
+    ? ""
+    : `The user's latest word in this thread (from T3, not the sender):\n${lines.join("\n")}\n\n`;
+});
 
 const parseIssue = (input: {
   readonly identifier?: string | undefined;
@@ -190,7 +257,10 @@ export const layer = McpToolAccess.toLayer(T4Toolkit, {
         ...(done ? ["answers your handoff"] : []),
         ask ? "reply expected" : "no reply needed",
       ];
-      const header = `HANDOFF from "${me.title}" (${shortId(me.id)}, ${whereOf(me)}) — ${labels.join(" · ")}:\n\n`;
+      const toReleaseManager =
+        !meIsRm && (target === undefined || ledger.isReleaseManager(world, target));
+      const userWord = toReleaseManager ? yield* latestUserWord(me, now) : "";
+      const header = `HANDOFF from "${me.title}" (${shortId(me.id)}, ${whereOf(me)}) — ${labels.join(" · ")}:\n\n${userWord}`;
       const footer = ask
         ? `\n\n---\nAnswer with \`t3_handoff\` (to: "${shortId(me.id)}", done: true; add fyi: true if you ask nothing back). \`t3_owed\` lists what you still owe.`
         : "";
@@ -297,10 +367,39 @@ export const layer = McpToolAccess.toLayer(T4Toolkit, {
           ],
         };
       }
+      // t4 fork: owners schedule a check for `shipped:`; 31 of 59 such wakes
+      // fired after it had arrived (usa-rs, 2026-10-30). Name them so the owner
+      // deletes the ones that were only for this release.
+      let wakesNote = "";
+      if (meIsRm && done && !ledger.isReleaseManager(world, target)) {
+        const scheduled = yield* Effect.serviceOption(ScheduledTasks.ScheduledTaskService);
+        if (Option.isSome(scheduled)) {
+          const { tasks } = yield* scheduled.value
+            .list()
+            .pipe(Effect.orElseSucceed(() => ({ tasks: [] as ReadonlyArray<never> })));
+          const pending = tasks.filter(
+            (task) =>
+              task.threadId === target.id &&
+              task.enabled &&
+              task.schedule.type === "once" &&
+              task.nextRunAt !== null &&
+              Date.parse(String(task.nextRunAt)) > now,
+          );
+          if (pending.length > 0) {
+            wakesNote =
+              `\n\n---\nYour pending wake${pending.length === 1 ? "" : "s"}: ` +
+              pending
+                .slice(0, 5)
+                .map((task) => `"${task.title}" (${task.id}, ${String(task.nextRunAt)})`)
+                .join("; ") +
+              ". Delete any that was only to check for this release (`delete_scheduled_task`).";
+          }
+        }
+      }
       const delivered = yield* delivery
         .deliver({
           target,
-          text: header + body + footer,
+          text: header + body + footer + wakesNote,
           senderThreadId: me.id,
           interrupt: input.interrupt === true,
           notice: !ask,
@@ -463,11 +562,45 @@ export const layer = McpToolAccess.toLayer(T4Toolkit, {
           }
         }
       }
-      return {
-        decisions: decisions.toSorted((left, right) =>
-          right.answeredAt.localeCompare(left.answeredAt),
-        ),
-      };
+      // Notes only unless asked: every new thread calls this, and with every
+      // "Approve + merge when green" pick it returned ~160 KB (usa-rs,
+      // 2026-10-30, 341 of 503 entries were picks).
+      const needle = input.search?.trim().toLowerCase() ?? "";
+      const seen = new Set<string>();
+      const kept: typeof decisions = [];
+      let omittedPicks = 0;
+      let size = 0;
+      let truncated = false;
+      for (const entry of decisions.toSorted((left, right) =>
+        right.answeredAt.localeCompare(left.answeredAt),
+      )) {
+        if (
+          needle !== "" &&
+          ![entry.question, entry.answer, entry.threadTitle].some((text) =>
+            text.toLowerCase().includes(needle),
+          )
+        )
+          continue;
+        if (!entry.isNote && input.picks !== true) {
+          omittedPicks += 1;
+          continue;
+        }
+        const key = `${entry.question}\u0000${entry.answer}`;
+        if (seen.has(key)) continue;
+        seen.add(key);
+        const short = {
+          ...entry,
+          question: entry.question.slice(0, 120),
+          answer: entry.answer.slice(0, 800),
+        };
+        size += short.question.length + short.answer.length + short.threadTitle.length + 120;
+        if (size > 20_000) {
+          truncated = true;
+          break;
+        }
+        kept.push(short);
+      }
+      return { decisions: kept, omittedPicks, truncated };
     }),
   ),
 

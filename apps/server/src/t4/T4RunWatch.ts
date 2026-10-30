@@ -62,6 +62,15 @@ const CommitWatch = Schema.Struct({
   reported: Schema.Array(Schema.String),
   /** When a run last finished or started; the watch ends after a quiet spell. */
   lastActivity: Schema.Number,
+  /**
+   * Finished runs not posted yet. Successes, skips and cancellations wait
+   * until nothing is running for the commit or a run fails: posting each one
+   * woke usa-rs's release manager 216 times in 18 h, 115 of them only to say
+   * "still running" (2026-10-30).
+   */
+  held: Schema.optional(Schema.Array(Schema.String)),
+  /** Skipped or cancelled runs folded into the next message as a count. */
+  quietRuns: Schema.optional(Schema.Number),
 });
 type CommitWatch = typeof CommitWatch.Type;
 const CommitWatches = Schema.fromJsonString(Schema.Array(CommitWatch));
@@ -84,6 +93,7 @@ export interface WorkflowRun {
   readonly name: string;
   readonly title: string;
   readonly branch: string;
+  readonly headSha: string;
   readonly url: string;
   readonly status: string;
   readonly conclusion: string;
@@ -94,6 +104,7 @@ const RunView = Schema.Struct({
   name: Schema.optional(Schema.String),
   displayTitle: Schema.optional(Schema.String),
   headBranch: Schema.optional(Schema.String),
+  headSha: Schema.optional(Schema.String),
   url: Schema.optional(Schema.String),
   status: Schema.optional(Schema.String),
   conclusion: Schema.optional(Schema.String),
@@ -109,6 +120,8 @@ const RunView = Schema.Struct({
 const decodeRunView = Schema.decodeUnknownEffect(Schema.fromJsonString(RunView));
 
 const FAILED = new Set(["failure", "timed_out", "startup_failure", "action_required"]);
+/** Runs that did nothing worth reading on their own (a train decision that declined). */
+const QUIET = new Set(["skipped", "cancelled", "neutral", "stale"]);
 
 /** The message a finished run posts into its thread. */
 export const finishedMessage = (watch: Watch, run: WorkflowRun) =>
@@ -198,7 +211,7 @@ export const make = Effect.gen(function* () {
           runId,
           ...(repository === null ? [] : ["--repo", repository]),
           "--json",
-          "name,displayTitle,headBranch,url,status,conclusion,jobs",
+          "name,displayTitle,headBranch,headSha,url,status,conclusion,jobs",
         ],
         ...(cwd === null ? {} : { cwd }),
         timeout: "30 seconds",
@@ -217,6 +230,7 @@ export const make = Effect.gen(function* () {
       name: run.name ?? "",
       title: run.displayTitle ?? "",
       branch: run.headBranch ?? "",
+      headSha: run.headSha ?? "",
       url: run.url ?? "",
       status: run.status ?? "",
       conclusion: run.conclusion ?? "",
@@ -317,38 +331,60 @@ export const make = Effect.gen(function* () {
       );
       const running = runs.filter((run) => run.status !== "completed");
       let lastActivity = w.lastActivity;
-      if (finished.length > 0) {
-        lastActivity = now;
-        const lines = [];
-        for (const run of finished) {
-          const detail =
-            run.conclusion === "success"
-              ? null
-              : yield* view(String(run.databaseId), w.repository, w.cwd).pipe(
-                  Effect.orElseSucceed(() => null),
-                );
-          lines.push(
-            `- ${run.displayTitle || run.name || run.workflowName} #${run.databaseId}: ${run.conclusion || "completed"}${detail && detail.failedJobs.length > 0 ? ` (failed: ${detail.failedJobs.join(", ")})` : ""} ${run.url ?? ""}`.trim(),
-          );
+      const held = [...(w.held ?? [])];
+      let quietRuns = w.quietRuns ?? 0;
+      let failed = false;
+      if (finished.length > 0) lastActivity = now;
+      for (const run of finished) {
+        const conclusion = run.conclusion || "completed";
+        if (QUIET.has(conclusion)) {
+          quietRuns += 1;
+          continue;
         }
+        const detail =
+          conclusion === "success"
+            ? null
+            : yield* view(String(run.databaseId), w.repository, w.cwd).pipe(
+                Effect.orElseSucceed(() => null),
+              );
+        if (conclusion !== "success") failed = true;
+        held.push(
+          `- ${run.displayTitle || run.name || run.workflowName} #${run.databaseId}: ${conclusion}${detail && detail.failedJobs.length > 0 ? ` (failed: ${detail.failedJobs.join(", ")})` : ""} ${run.url ?? ""}`.trim(),
+        );
+      }
+      const reported = [...w.reported, ...finished.map((run) => String(run.databaseId))];
+      const expired = now - w.since > MAX_AGE_MS;
+      // Post on a failure, or once nothing for the commit is running (a
+      // stage of the release is over); hold everything in between.
+      if (held.length > 0 && (failed || running.length === 0 || expired)) {
         yield* post(
           w.threadId,
           [
             `WORKFLOW RUNS finished for commit ${w.commit.slice(0, 10)}:`,
-            ...lines,
+            ...held,
+            quietRuns > 0 ? `(${quietRuns} more skipped or cancelled.)` : null,
             running.length > 0
-              ? `Still running: ${running.map((run) => `${run.displayTitle || run.name} #${run.databaseId}`).join("; ")} - you will be woken when they finish.`
-              : "Nothing else is running for this commit yet; a run it triggers later is still watched for 20 minutes.",
+              ? `Still running: ${running.map((run) => `${run.displayTitle || run.name} #${run.databaseId}`).join("; ")} - you will be woken when they finish or one fails.`
+              : expired
+                ? "The watch ended after six hours."
+                : "Nothing else is running for this commit; a run it triggers later is still watched for 20 minutes.",
             w.note ? `Your note: ${w.note}` : null,
           ]
             .filter((line) => line !== null)
             .join("\n"),
         );
+        held.length = 0;
+        quietRuns = 0;
       }
-      const reported = [...w.reported, ...finished.map((run) => String(run.databaseId))];
       const quiet = running.length === 0 && now - lastActivity > COMMIT_QUIET_MS;
-      if (quiet || now - w.since > MAX_AGE_MS) continue;
-      next.push({ ...w, reported, lastActivity: running.length > 0 ? now : lastActivity });
+      if (quiet || expired) continue;
+      next.push({
+        ...w,
+        reported,
+        held,
+        quietRuns,
+        lastActivity: running.length > 0 ? now : lastActivity,
+      });
     }
     yield* lock.withPermits(1)(
       Effect.gen(function* () {
@@ -368,6 +404,19 @@ export const make = Effect.gen(function* () {
   ) {
     const run = yield* view(input.runId, input.repository, input.cwd);
     if (run.status === "completed") return { run, watching: false };
+    // Already followed by this thread's watch on the run's commit: a second
+    // watch only posts the same finish twice (46 duplicates on 2026-10-30).
+    const commits = yield* loadCommits;
+    if (
+      run.headSha !== "" &&
+      commits.some(
+        (w) =>
+          w.threadId === input.threadId &&
+          (run.headSha.startsWith(w.commit) || w.commit.startsWith(run.headSha)),
+      )
+    ) {
+      return { run, watching: true };
+    }
     const now = yield* Clock.currentTimeMillis;
     yield* lock.withPermits(1)(
       Effect.gen(function* () {
