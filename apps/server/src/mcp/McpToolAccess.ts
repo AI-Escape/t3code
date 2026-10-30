@@ -22,6 +22,8 @@ import {
 } from "../orchestration-v2/DispatchModeLimit.ts";
 import * as PeerForwarding from "../peer/PeerForwarding.ts";
 import { assertNotLinked, assertSameLink, callerLinkOrigin } from "./linkOrigin.ts";
+// t4 fork: withThreadRef.
+import { withThreadRef } from "../t4/threadRefs.ts";
 import * as McpInvocationContext from "./McpInvocationContext.ts";
 import { resolveInteractionMode, resolveRuntimeMode } from "./delegatedTaskModes.ts";
 import {
@@ -85,7 +87,10 @@ export class Declaration<out Handler> {
   }
   static {
     declare = (handle, remote) => new Declaration(builtHere, handle, remote);
-    checkedHandler = Struct.lambda<CheckedHandler>((declaration) => declaration.#handle);
+    // t4 fork: a `threadId` names a thread the way t4's tools take it (t4/threadRefs.ts).
+    checkedHandler = Struct.lambda<CheckedHandler>((declaration) =>
+      withThreadRef(declaration.#handle),
+    );
     remoteCheckOf = (declaration) => declaration.#remote;
   }
 }

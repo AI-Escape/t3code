@@ -32,8 +32,14 @@ type Shell = Pick<
 const ms = (value: DateTime.Utc | null | undefined) =>
   value == null ? null : DateTime.toEpochMillis(value);
 
-/** `short()`: the 8-character id prefix agents and the dashboard show. */
-export const shortId = (id: string) => (id.split(":").at(-1) ?? id).slice(0, 8);
+/** An id without its `mcp:` scope or t4's `t4-` prefix: the part an agent quotes. */
+const bareId = (id: string) => (id.split(":").at(-1) ?? id).replace(/^t4-/, "");
+
+/**
+ * `short()`: the 8-character id prefix agents and the dashboard show. Without
+ * `t4-`, which left `t4-1c558` five characters of id (2026-10-29).
+ */
+export const shortId = (id: string) => bareId(id).slice(0, 8);
 
 /** `is_running()`: a run is under way (starting, running, or waiting on a tool/turn). */
 export const isRunning = (t: Pick<Shell, "activeRunId" | "status">) =>
@@ -107,8 +113,12 @@ export function resolveThreadRef<T extends Pick<Shell, "id" | "title" | "archive
     options.allowArchived === false ? threads.filter((t) => t.archivedAt === null) : threads;
   const exact = pool.find((t) => t.id === wanted);
   if (exact !== undefined) return { type: "found", thread: exact };
+  const bareWanted = bareId(wanted);
   const prefixed = pool.filter(
-    (t) => t.id.startsWith(wanted) || (t.id.split(":").at(-1) ?? t.id).startsWith(wanted),
+    (t) =>
+      t.id.startsWith(wanted) ||
+      (t.id.split(":").at(-1) ?? t.id).startsWith(wanted) ||
+      (bareWanted.length >= 4 && bareId(t.id).startsWith(bareWanted)),
   );
   if (prefixed.length === 1) return { type: "found", thread: prefixed[0]! };
   const low = wanted.toLowerCase();
