@@ -3003,7 +3003,27 @@ export const layer: Layer.Layer<ProjectionStoreV2, never, SqlClient.SqlClient> =
           decodeTurnItemPayload,
           threadId,
         )(boundedTurnItemRows);
-        const turnItems = decodedTurnItems.map((item, index) => {
+        // t4 fork: an open question or approval stays in a windowed read. The
+        // web app draws its card only from the item, and on a long thread (the
+        // release manager's thousands) newer turns pushed the item out of the
+        // window: the question was pending - the t4 dashboard listed it - but
+        // no card showed in T3 (usa-rs, 2026-10-30).
+        const openRequestItemRows =
+          window === undefined || (fields !== undefined && !fields.includes("turnItems"))
+            ? []
+            : yield* sql<PayloadRow>`
+                SELECT payload_json FROM orchestration_v2_projection_turn_items
+                WHERE thread_id = ${threadId}
+                  AND type IN ('user_input_request', 'approval_request')
+                  AND status NOT IN ('completed', 'cancelled', 'failed', 'interrupted')
+                ORDER BY ordinal ASC, turn_item_id ASC
+              `;
+        const windowItemIds = new Set(decodedTurnItems.map((item) => item.id));
+        const openRequestItems = (yield* decodeRows(
+          decodeTurnItemPayload,
+          threadId,
+        )(openRequestItemRows)).filter((item) => !windowItemIds.has(item.id));
+        const windowTurnItems = decodedTurnItems.map((item, index) => {
           const row = boundedTurnItemRows[index]!;
           return row.work_last_id == null ||
             row.work_item_count == null ||
@@ -3024,6 +3044,7 @@ export const layer: Layer.Layer<ProjectionStoreV2, never, SqlClient.SqlClient> =
                 },
               };
         });
+        const turnItems = [...openRequestItems, ...windowTurnItems];
         const cohortJson = (field: string) =>
           JSON.stringify(
             turnItems.flatMap((payload) => {
