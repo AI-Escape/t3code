@@ -154,8 +154,13 @@ export function isRestartNoteSource(
  * waits on it. Most are dev servers and their watchdogs, so their note waits for the next
  * user message.
  */
-export function isAwaitedWork(work: Pick<Work, "kind" | "awaited">): boolean {
-  return work.awaited === true || (work.kind !== "shell" && work.kind !== "monitor");
+// t4 fork: every killed background job counts - a background shell or monitor
+// is how agents wait on CI, a production job or a log line, and upstream
+// skipped them unless marked awaited. USA-1496 started a 40-minute background
+// wait for a production push, the restart killed it, and the thread heard
+// nothing until the user asked three hours later (usa-rs, 2026-10-30).
+export function isAwaitedWork(_work: Pick<Work, "kind" | "awaited">): boolean {
+  return true;
 }
 
 export function runOutcome(

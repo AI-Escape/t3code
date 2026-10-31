@@ -23,6 +23,7 @@ import {
 import * as ThreadSearch from "../../../orchestration-v2/ThreadSearch.ts";
 import * as ScheduledTasks from "../../../scheduledTasks/ScheduledTaskService.ts";
 import { queuedRunsInDeliveryOrder } from "../../../orchestration-v2/QueuedRunOrder.ts";
+import * as T4Ledger from "../../../t4/T4Ledger.ts";
 import * as T4Settle from "../../../t4/T4Settle.ts";
 import { ThreadToolkit } from "./tools.ts";
 
@@ -358,6 +359,21 @@ export const layer = McpToolAccess.toLayer(ThreadToolkit, {
         return yield* threads
           .settleThread({ ...common, byOwnAgent: caller?.id === projection.thread.id })
           .pipe(Effect.mapError(dispatchFailure));
+      }
+      // t4 fork: a release manager stays visible. shopify-theme-v2's snoozed
+      // itself until the Monday the user named for a release, and so vanished
+      // from the dashboard and T3's sidebar (2026-10-30).
+      if (input.action === "snooze" || input.action === "archive") {
+        const t4Ledger = yield* Effect.serviceOption(T4Ledger.T4Ledger);
+        if (Option.isSome(t4Ledger)) {
+          const world = yield* t4Ledger.value.world().pipe(Effect.orElseSucceed(() => null));
+          if (world !== null && t4Ledger.value.isReleaseManager(world, projection.thread)) {
+            return yield* new OrchestratorMcpFailure({
+              code: "invalid_request",
+              message: `a release manager is never ${input.action}d - it stays visible to the user. To hold a release until a time, \`schedule_task\` a wake into this thread for then and end your turn.`,
+            });
+          }
+        }
       }
       let command: OrchestrationV2Command;
       switch (input.action) {

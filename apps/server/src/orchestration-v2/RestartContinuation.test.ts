@@ -597,10 +597,11 @@ const devServer = {
 it.effect.each([
   ["completed", scratchProjectId, backgroundSubagent, true],
   ["waiting", ProjectId.make("restart-project"), backgroundSubagent, true],
-  ["completed", ProjectId.make("restart-project"), devServer, false],
-  ["waiting", scratchProjectId, devServer, false],
+  // t4 fork: a killed background shell wakes its thread too (isAwaitedWork).
+  ["completed", ProjectId.make("restart-project"), devServer, true],
+  ["waiting", scratchProjectId, devServer, true],
 ] as const)(
-  "cleans up background work of a %s run in project %s and wakes it only for awaited work",
+  "cleans up background work of a %s run in project %s and wakes it for killed work",
   ([status, projectId, background, wakes]) =>
     Effect.gen(function* () {
       const base = makeProjection();
@@ -734,7 +735,8 @@ it.effect("wakes a run whose subagent's own shell the restart cut, past a wake i
         providerTurns: [{ ...base.providerTurns[0]!, status: "completed" }],
       }) as unknown as OrchestrationV2ThreadProjection;
     assert.equal(restartContinuationRun(withShell("agent:1"), now)?.id, runId);
-    assert.isUndefined(restartContinuationRun(withShell(), now));
+    // t4 fork: the run's own background shell wakes it too.
+    assert.equal(restartContinuationRun(withShell(), now)?.id, runId);
 
     const texts = yield* continuationTexts({
       ...base,
