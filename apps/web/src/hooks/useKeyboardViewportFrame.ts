@@ -18,26 +18,6 @@ import { useCallback, useEffect, useLayoutEffect, useRef, useState } from "react
 
 import { isElectron } from "../env";
 
-// Temporary diagnostics: what the phone actually reports, posted to the
-// server log (t4.client-log), at most twice a second. Remove once the keyboard
-// frame is confirmed on a phone.
-let lastReport = 0;
-const report = (data: Record<string, unknown>) => {
-  const now = Date.now();
-  if (now - lastReport < 500) return;
-  lastReport = now;
-  try {
-    navigator.sendBeacon(
-      "/api/t4/client-log",
-      new Blob([JSON.stringify({ kind: "keyboard-frame", ua: navigator.userAgent, ...data })], {
-        type: "text/plain",
-      }),
-    );
-  } catch {
-    // Diagnostics only.
-  }
-};
-
 interface Frame {
   readonly height: number;
   readonly shift: number;
@@ -81,31 +61,17 @@ export function useKeyboardViewportFrame(): {
         return;
       }
       // On the phone getBoundingClientRect is already relative to the visible
-      // area: subtracting visualViewport.offsetTop as well pushed the header
-      // to mid-screen (2026-10-31). The rendered shift is taken out.
+      // area. Measured on an iPhone (iOS 18.7, in-app browser): with the
+      // keyboard up, offsetTop = pageTop = scrollY = 293, innerHeight 682 ->
+      // 389, and the fixed view's rect.top -293; subtracting offsetTop as well
+      // pushed the header to mid-screen. The rendered shift is taken out.
       const rectTop = node.getBoundingClientRect().top;
       const unshiftedTop = rectTop - applied.current;
       if (restingTop.current === null) restingTop.current = Math.max(0, unshiftedTop);
       const resting = restingTop.current;
-      const next = {
+      setFrame({
         height: Math.max(0, Math.round(viewport.height - resting)),
         shift: Math.round(resting - unshiftedTop),
-      };
-      setFrame(next);
-      report({
-        rectTop: Math.round(rectTop),
-        applied: applied.current,
-        resting,
-        next,
-        vv: {
-          height: Math.round(viewport.height),
-          offsetTop: Math.round(viewport.offsetTop),
-          pageTop: Math.round(viewport.pageTop),
-        },
-        innerHeight: window.innerHeight,
-        clientHeight: document.documentElement.clientHeight,
-        scrollY: Math.round(window.scrollY),
-        focused: document.activeElement?.tagName ?? null,
       });
     };
     const update = () => {

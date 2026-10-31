@@ -143,16 +143,6 @@ export const RESUME_NOTE =
   "have been stopped while you were idle - bring it back only if you need it.)";
 
 export const layer = Layer.mergeAll(
-  // Temporary client diagnostics (the phone keyboard frame): logged, nothing kept.
-  route("POST", "/api/t4/client-log", AuthOrchestrationReadScope, () =>
-    Effect.gen(function* () {
-      const request = yield* HttpServerRequest.HttpServerRequest;
-      const text = yield* request.text.pipe(Effect.orElseSucceed(() => ""));
-      yield* Effect.logInfo("t4.client-log", { text: text.slice(0, 4000) });
-      return json({ ok: true });
-    }),
-  ),
-
   route("GET", "/api/t4/state", AuthOrchestrationReadScope, () =>
     Effect.gen(function* () {
       const ledger = yield* T4Ledger.T4Ledger;
