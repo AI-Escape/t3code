@@ -10,6 +10,8 @@
  * in both `visualViewport.offsetTop` and `scrollY`), so this one measures:
  * after every viewport change it reads where the view sits relative to the
  * visible area and moves it to the top of it, sized to the visible height.
+ * The view is `position: fixed` while framed: #root clips its overflow, and a
+ * view shifted inside it lost everything below the shift.
  */
 import type { CSSProperties, RefCallback } from "react";
 import { useCallback, useEffect, useLayoutEffect, useRef, useState } from "react";
@@ -45,7 +47,8 @@ export function useKeyboardViewportFrame(): {
       isElectron ||
       viewport === undefined ||
       viewport === null ||
-      !window.matchMedia("(pointer: coarse)").matches
+      // Phones only: a tablet keeps its sidebar beside the view.
+      !window.matchMedia("(pointer: coarse) and (max-width: 767px)").matches
     ) {
       return;
     }
@@ -91,6 +94,10 @@ export function useKeyboardViewportFrame(): {
       frame === null
         ? undefined
         : {
+            position: "fixed",
+            top: 0,
+            left: 0,
+            right: 0,
             height: `${frame.height}px`,
             ...(frame.shift === 0 ? {} : { transform: `translateY(${frame.shift}px)` }),
           },
