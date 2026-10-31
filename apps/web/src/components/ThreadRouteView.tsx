@@ -5,6 +5,8 @@ import { useEffect, useState } from "react";
 import ChatView from "./ChatView";
 import { BackgroundThreadContext } from "./chat/backgroundThread";
 import { SidebarInset } from "./ui/sidebar";
+// t4 fork: keep the composer above a phone's keyboard.
+import { useKeyboardViewportFrame } from "../hooks/useKeyboardViewportFrame";
 import { useComposerDraftStore } from "../composerDraftStore";
 import { useSidebarPendingFileDropStore } from "../sidebarPendingFileDropStore";
 import { useEnvironmentThreadRefs, useQuietThreadShell } from "../state/entities";
@@ -53,6 +55,7 @@ export function ThreadRouteView({
   // The ChatView that carried a draft keeps its key through the redirect to its thread, and only
   // until the route leaves that thread, so later visits reuse the shared unkeyed ChatView.
   const [handoffKey, setHandoffKey] = useState<{ threadKey: string; key: string } | null>(null);
+  const keyboardFrame = useKeyboardViewportFrame();
   const nextHandoffKey =
     draftId !== null && draftSession === null && draftRedirect
       ? handoffKey?.key === draftId
@@ -152,6 +155,7 @@ export function ThreadRouteView({
     <SidebarInset
       className="h-svh min-h-0 overflow-hidden overscroll-y-none md:h-dvh"
       inert={background}
+      style={keyboardFrame}
     >
       <BackgroundThreadContext value={background}>{view}</BackgroundThreadContext>
       {background ? null : redirect}
