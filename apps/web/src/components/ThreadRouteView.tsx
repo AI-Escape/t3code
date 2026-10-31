@@ -155,7 +155,8 @@ export function ThreadRouteView({
     <SidebarInset
       className="h-svh min-h-0 overflow-hidden overscroll-y-none md:h-dvh"
       inert={background}
-      style={keyboardFrame}
+      ref={keyboardFrame.ref}
+      style={keyboardFrame.style}
     >
       <BackgroundThreadContext value={background}>{view}</BackgroundThreadContext>
       {background ? null : redirect}

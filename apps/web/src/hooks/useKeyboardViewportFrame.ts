@@ -2,30 +2,46 @@
  * t4 fork: on a touch screen the thread view is the visible part of the
  * screen, so the composer always sits right above the software keyboard.
  *
- * The thread route is `h-svh` under a body that cannot scroll. Safari reveals
- * a focused editor by panning the page, but the in-app browser a Home Screen
- * app opens links in shrinks the whole page for the keyboard instead - and
- * `svh` does not shrink with it, so the view kept its full height and the
- * composer was cut off under the keyboard: the user typed blind (ai-escape,
- * 2026-10-31). Sizing the view to `visualViewport.height`, and following its
- * offset and any page scroll, covers both: a shrunken page and a panned one.
+ * The thread route is `h-svh` under a body that cannot scroll, and T3 relies
+ * on iOS revealing the focused editor. In the in-app browser a Home Screen
+ * app opens links in, the composer stayed under the keyboard and the user
+ * typed blind (ai-escape, 2026-10-31). Two attempts that computed the offset
+ * from viewport numbers failed on the phone (iOS reports the keyboard's pan
+ * in both `visualViewport.offsetTop` and `scrollY`), so this one measures:
+ * after every viewport change it reads where the view sits relative to the
+ * visible area and moves it to the top of it, sized to the visible height.
  */
-import type { CSSProperties } from "react";
-import { useEffect, useState } from "react";
+import type { CSSProperties, RefCallback } from "react";
+import { useCallback, useEffect, useLayoutEffect, useRef, useState } from "react";
 
 import { isElectron } from "../env";
 
 interface Frame {
   readonly height: number;
-  readonly top: number;
+  readonly shift: number;
 }
 
-export function useKeyboardViewportFrame(): CSSProperties | undefined {
+export function useKeyboardViewportFrame(): {
+  readonly ref: RefCallback<HTMLElement>;
+  readonly style: CSSProperties | undefined;
+} {
+  const [node, setNode] = useState<HTMLElement | null>(null);
   const [frame, setFrame] = useState<Frame | null>(null);
+  // The shift the view is rendered with now; a measurement subtracts it.
+  const applied = useRef(0);
+  // Where the view's top sits in the visible area with nothing panned.
+  const restingTop = useRef<number | null>(null);
+
+  const ref = useCallback<RefCallback<HTMLElement>>((next) => setNode(next), []);
+
+  useLayoutEffect(() => {
+    applied.current = frame?.shift ?? 0;
+  }, [frame]);
 
   useEffect(() => {
     const viewport = typeof window === "undefined" ? undefined : window.visualViewport;
     if (
+      node === null ||
       isElectron ||
       viewport === undefined ||
       viewport === null ||
@@ -33,34 +49,50 @@ export function useKeyboardViewportFrame(): CSSProperties | undefined {
     ) {
       return;
     }
-    const update = () => {
+    let request: number | null = null;
+    const measure = () => {
+      request = null;
       // Pinch zoom moves the visual viewport too; leave a zoomed page alone.
       if (Math.abs(viewport.scale - 1) > 0.01) {
         setFrame(null);
         return;
       }
+      // getBoundingClientRect is relative to the layout viewport, the visible
+      // area starts offsetTop below it, and the rendered shift is taken out.
+      const unshiftedTop = node.getBoundingClientRect().top - viewport.offsetTop - applied.current;
+      if (restingTop.current === null) restingTop.current = Math.max(0, unshiftedTop);
+      const resting = restingTop.current;
       setFrame({
-        height: Math.round(viewport.height),
-        top: Math.round(viewport.offsetTop + window.scrollY),
+        height: Math.max(0, Math.round(viewport.height - resting)),
+        shift: Math.round(resting - unshiftedTop),
       });
     };
-    update();
+    const update = () => {
+      if (request !== null) cancelAnimationFrame(request);
+      request = requestAnimationFrame(measure);
+    };
+    measure();
     viewport.addEventListener("resize", update);
     viewport.addEventListener("scroll", update);
     window.addEventListener("scroll", update);
     window.addEventListener("resize", update);
     return () => {
+      if (request !== null) cancelAnimationFrame(request);
       viewport.removeEventListener("resize", update);
       viewport.removeEventListener("scroll", update);
       window.removeEventListener("scroll", update);
       window.removeEventListener("resize", update);
     };
-  }, []);
+  }, [node]);
 
-  return frame === null
-    ? undefined
-    : {
-        height: `${frame.height}px`,
-        ...(frame.top === 0 ? {} : { transform: `translateY(${frame.top}px)` }),
-      };
+  return {
+    ref,
+    style:
+      frame === null
+        ? undefined
+        : {
+            height: `${frame.height}px`,
+            ...(frame.shift === 0 ? {} : { transform: `translateY(${frame.shift}px)` }),
+          },
+  };
 }
