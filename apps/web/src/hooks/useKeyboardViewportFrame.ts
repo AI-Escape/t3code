@@ -1,20 +1,19 @@
 /**
- * t4 fork: while a phone's software keyboard is open, the thread view takes
- * the visible part of the screen, so the composer sits right above the
- * keyboard.
+ * t4 fork: on a touch screen the thread view is the visible part of the
+ * screen, so the composer always sits right above the software keyboard.
  *
- * The thread route is `h-svh` under a body that cannot scroll, and T3 relies
- * on iOS panning the page to reveal the focused editor. Inside a Home Screen
- * app's in-app browser it did not: the composer stayed under the keyboard and
- * the user typed without seeing the text (ai-escape, 2026-10-31). Sizing the
- * view to `visualViewport.height` puts the composer above the keyboard, and
- * following `offsetTop` keeps it in place when iOS does pan.
+ * The thread route is `h-svh` under a body that cannot scroll. Safari reveals
+ * a focused editor by panning the page, but the in-app browser a Home Screen
+ * app opens links in shrinks the whole page for the keyboard instead - and
+ * `svh` does not shrink with it, so the view kept its full height and the
+ * composer was cut off under the keyboard: the user typed blind (ai-escape,
+ * 2026-10-31). Sizing the view to `visualViewport.height`, and following its
+ * offset and any page scroll, covers both: a shrunken page and a panned one.
  */
 import type { CSSProperties } from "react";
 import { useEffect, useState } from "react";
 
 import { isElectron } from "../env";
-import { useSoftwareKeyboardOpen } from "./useSoftwareKeyboardOpen";
 
 interface Frame {
   readonly height: number;
@@ -22,13 +21,16 @@ interface Frame {
 }
 
 export function useKeyboardViewportFrame(): CSSProperties | undefined {
-  const keyboardOpen = useSoftwareKeyboardOpen();
   const [frame, setFrame] = useState<Frame | null>(null);
 
   useEffect(() => {
     const viewport = typeof window === "undefined" ? undefined : window.visualViewport;
-    if (!keyboardOpen || isElectron || viewport === undefined || viewport === null) {
-      setFrame(null);
+    if (
+      isElectron ||
+      viewport === undefined ||
+      viewport === null ||
+      !window.matchMedia("(pointer: coarse)").matches
+    ) {
       return;
     }
     const update = () => {
@@ -37,8 +39,6 @@ export function useKeyboardViewportFrame(): CSSProperties | undefined {
         setFrame(null);
         return;
       }
-      // iOS reveals a focused field by moving the visual viewport or by
-      // scrolling the page; either way the frame follows what is on screen.
       setFrame({
         height: Math.round(viewport.height),
         top: Math.round(viewport.offsetTop + window.scrollY),
@@ -48,14 +48,19 @@ export function useKeyboardViewportFrame(): CSSProperties | undefined {
     viewport.addEventListener("resize", update);
     viewport.addEventListener("scroll", update);
     window.addEventListener("scroll", update);
+    window.addEventListener("resize", update);
     return () => {
       viewport.removeEventListener("resize", update);
       viewport.removeEventListener("scroll", update);
       window.removeEventListener("scroll", update);
+      window.removeEventListener("resize", update);
     };
-  }, [keyboardOpen]);
+  }, []);
 
   return frame === null
     ? undefined
-    : { height: `${frame.height}px`, transform: `translateY(${frame.top}px)` };
+    : {
+        height: `${frame.height}px`,
+        ...(frame.top === 0 ? {} : { transform: `translateY(${frame.top}px)` }),
+      };
 }
