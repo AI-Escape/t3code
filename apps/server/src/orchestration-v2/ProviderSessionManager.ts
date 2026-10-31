@@ -53,8 +53,17 @@ import * as ProviderAdapter from "@t3tools/provider-core/server/ProviderAdapter"
 import * as ProviderAdapterRegistry from "./ProviderAdapterRegistry.ts";
 import * as ProjectionStore from "./ProjectionStore.ts";
 
-const DEFAULT_IDLE_TIMEOUT_MS = 30 * 60 * 1000;
-const DEFAULT_MAX_IDLE_PIN_MS = 4 * 60 * 60 * 1000;
+// t4 fork: T4_PROVIDER_IDLE_MINUTES stops an idle provider process sooner (a
+// session with no turn, no background task, no running subagent and nothing
+// buffered); it resumes with its history on the next message. 31 idle Claude
+// processes held ~8 GB of usa-rs's 20 (2026-10-31). T4_KEEP_BACKGROUND_SESSIONS=1
+// never stops a session while it has background work - upstream gave up after
+// four hours and the work died with the process.
+const t4IdleMinutes = Number(process.env.T4_PROVIDER_IDLE_MINUTES);
+const DEFAULT_IDLE_TIMEOUT_MS =
+  Number.isFinite(t4IdleMinutes) && t4IdleMinutes > 0 ? t4IdleMinutes * 60 * 1000 : 30 * 60 * 1000;
+const DEFAULT_MAX_IDLE_PIN_MS =
+  process.env.T4_KEEP_BACKGROUND_SESSIONS === "1" ? Number.POSITIVE_INFINITY : 4 * 60 * 60 * 1000;
 const RELEASE_SCOPE_CLOSE_TIMEOUT_MS = 30 * 1000;
 
 const busyTurnPrefix = (providerThreadId: ProviderThreadId) => `${providerThreadId}#`;
