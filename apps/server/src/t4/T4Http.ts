@@ -48,6 +48,13 @@ type Shell = OrchestrationV2ThreadShell;
 
 const json = (body: unknown, status = 200) => HttpServerResponse.jsonUnsafe(body, { status });
 
+const PENDING_CACHE_MS = 15_000;
+let pendingCache: {
+  readonly fingerprint: string;
+  readonly at: number;
+  readonly pending: ReadonlyArray<Record<string, unknown>>;
+} | null = null;
+
 /** The request's session, or a 401/403 response to return instead. */
 const authorize = Effect.fn("t4.T4Http.authorize")(function* (
   scope: typeof AuthOrchestrationReadScope | typeof AuthOrchestrationOperateScope,
@@ -194,6 +201,20 @@ export const layer = Layer.mergeAll(
           thread.deletedAt === null &&
           thread.archivedAt === null,
       );
+      // The dashboard and its push loop poll this every few seconds and every
+      // waiting thread costs two reads: reuse the last answer while the same
+      // threads wait, unchanged, for at most PENDING_CACHE_MS.
+      const now = yield* Clock.currentTimeMillis;
+      const fingerprint = waiting
+        .map((thread) => `${thread.id}@${DateTime.formatIso(thread.updatedAt)}`)
+        .join("|");
+      if (
+        pendingCache !== null &&
+        pendingCache.fingerprint === fingerprint &&
+        now - pendingCache.at < PENDING_CACHE_MS
+      ) {
+        return json({ pending: pendingCache.pending });
+      }
       const pending: Array<Record<string, unknown>> = [];
       for (const thread of waiting) {
         // Only the item types read below, and tool calls of the running turn
@@ -296,6 +317,7 @@ export const layer = Layer.mergeAll(
           }
         }
       }
+      pendingCache = { fingerprint, at: now, pending };
       return json({ pending });
     }),
   ),
