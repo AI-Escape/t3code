@@ -15,7 +15,12 @@
  * released). usa-rs, 2026-10-29: two Team seats ahead of the main login.
  *
  * Which account was used up until when is kept beside the tokens
- * (`state.json`), so a restart does not retry an exhausted one.
+ * (`state.json`), so a restart does not retry an exhausted one. The file is
+ * re-read when it changes: the dashboard clears a mark the account's live
+ * limits contradict. On 2026-11-01 the main login sat marked used up until its
+ * weekly reset, three days out, with 9% of its week used (it had just moved
+ * to a plan with no 5-hour limit); once both seats ran out, five threads
+ * waited hours for a seat's reset.
  */
 // @effect-diagnostics-next-line nodeBuiltinImport:off -- token files and a small state file, read synchronously at process start.
 import * as FS from "node:fs";
@@ -43,15 +48,26 @@ const statePath = (env: NodeJS.ProcessEnv, files: ReadonlyArray<string>) =>
   env.T4_CLAUDE_ACCOUNTS_STATE?.trim() || Path.join(Path.dirname(files[0]!), "state.json");
 
 let exhaustedUntil: Map<string, number> | null = null;
+/** The state file's mtime when it was last read or written here. */
+let loadedMtimeMs: number | null = null;
+
+const fileMtimeMs = (file: string): number | null => {
+  try {
+    return FS.statSync(file).mtimeMs;
+  } catch {
+    return null;
+  }
+};
 
 const loadState = (env: NodeJS.ProcessEnv, files: ReadonlyArray<string>) => {
-  if (exhaustedUntil !== null) return exhaustedUntil;
+  const file = statePath(env, files);
+  const mtimeMs = fileMtimeMs(file);
+  if (exhaustedUntil !== null && (mtimeMs === null || mtimeMs === loadedMtimeMs))
+    return exhaustedUntil;
   exhaustedUntil = new Map();
+  loadedMtimeMs = mtimeMs;
   try {
-    const saved = JSON.parse(FS.readFileSync(statePath(env, files), "utf8")) as Record<
-      string,
-      unknown
-    >;
+    const saved = JSON.parse(FS.readFileSync(file, "utf8")) as Record<string, unknown>;
     for (const [key, until] of Object.entries(saved.exhaustedUntil ?? {})) {
       if (typeof until === "number") exhaustedUntil.set(key, until);
     }
@@ -70,6 +86,7 @@ const saveState = (env: NodeJS.ProcessEnv, files: ReadonlyArray<string>) => {
       { mode: 0o600 },
     );
     FS.renameSync(`${file}.tmp`, file);
+    loadedMtimeMs = fileMtimeMs(file);
   } catch {
     // Best effort: the in-memory state still steers this process.
   }
@@ -166,4 +183,5 @@ export const anotherClaudeAccountFree = (
 /** Test hook: forget the loaded state. */
 export const resetClaudeAccountState = () => {
   exhaustedUntil = null;
+  loadedMtimeMs = null;
 };

@@ -59,6 +59,21 @@ describe("t4 claudeAccounts", () => {
     expect(FS.statSync(Path.join(dir, "state.json")).mode & 0o777).toBe(0o600);
   });
 
+  it("sees a mark cleared in the state file by someone else (the dashboard)", () => {
+    const { env, dir } = setup();
+    markClaudeAccountExhausted("1", 50_000, 1_000, env);
+    markClaudeAccountExhausted("2", 50_000, 1_000, env);
+    markClaudeAccountExhausted("main", 900_000, 1_000, env);
+    expect(markClaudeAccountExhausted("2", 50_000, 1_000, env)).toBe(50_000);
+    const file = Path.join(dir, "state.json");
+    FS.writeFileSync(file, JSON.stringify({ exhaustedUntil: { "1": 50_000, "2": 50_000 } }));
+    const later = FS.statSync(file).mtimeMs / 1000 + 5;
+    FS.utimesSync(file, later, later);
+    expect(isClaudeAccountExhausted("main", 2_000, env)).toBe(false);
+    expect(pickClaudeAccount(2_000, env)).toEqual({ key: "main" });
+    expect(isClaudeAccountExhausted("1", 2_000, env)).toBe(true);
+  });
+
   it("skips an account whose token file is missing", () => {
     const { env, dir } = setup();
     FS.rmSync(Path.join(dir, "1.token"));
