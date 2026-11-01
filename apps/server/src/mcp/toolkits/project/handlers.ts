@@ -20,6 +20,7 @@ import * as ThreadLaunch from "../../../orchestration-v2/ThreadLaunchService.ts"
 import * as ThreadMessageIntake from "../../../orchestration-v2/ThreadMessageIntake.ts";
 import * as Claims from "../../../orchestration-v2/AttachmentClaims.ts";
 import * as Project from "../../../project/ProjectService.ts";
+import * as ProcessRunner from "../../../processRunner.ts";
 import * as ManagedProjectFolders from "../../../project/ManagedProjectFolders.ts";
 import * as Repositories from "../../../sourceControl/SourceControlRepositoryService.ts";
 import * as GitVcsDriver from "../../../vcs/GitVcsDriver.ts";
@@ -152,6 +153,19 @@ export const layer = McpToolAccess.toLayer(ProjectToolkit, {
         }
         // Reject unresolved base refs before accepting a launch; worktree provisioning happens later.
         const strategy = input.workspaceStrategy;
+        // t4 fork: a worktree needs a git checkout (upstream's base check passes on git errors).
+        const t4Processes = yield* Effect.serviceOption(ProcessRunner.ProcessRunner);
+        if (!replaying && strategy?.type === "worktree" && Option.isSome(t4Processes)) {
+          const project = yield* readProject;
+          const refused =
+            project === undefined
+              ? undefined
+              : yield* T4Spawn.worktreeRefusal(project).pipe(
+                  Effect.provideService(ProcessRunner.ProcessRunner, t4Processes.value),
+                );
+          if (refused !== undefined)
+            return yield* new OrchestratorMcpFailure({ code: "invalid_request", message: refused });
+        }
         if (!replaying && strategy?.type === "worktree")
           yield* ThreadLaunch.ThreadLaunchService.pipe(
             Effect.flatMap((launches) =>

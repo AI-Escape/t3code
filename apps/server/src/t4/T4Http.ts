@@ -371,6 +371,8 @@ export const layer = Layer.mergeAll(
         const projects = yield* Project.ProjectService;
         const project = Option.getOrUndefined(yield* projects.getById(input.projectId));
         if (project === undefined) return json({ error: "project not found" }, 404);
+        const refused = yield* T4Spawn.worktreeRefusal(project);
+        if (refused !== undefined) return json({ error: refused }, 400);
         const processes = yield* ProcessRunner.ProcessRunner;
         const exists = yield* processes
           .run({
@@ -405,7 +407,7 @@ export const layer = Layer.mergeAll(
             : {
                 type: "worktree",
                 baseRef: input.baseRef ?? "main",
-                branch: input.branch,
+                branch: branch ?? input.branch,
                 startFromOrigin: true,
               },
         initialMessage: {

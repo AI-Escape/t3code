@@ -14,12 +14,19 @@
  *   - A parent thread gets a parent->child `spawn` ledger entry, and the
  *     child's prompt ends with the spawn footer (release-manager wording when
  *     the parent is one).
+ *   - A worktree launch in a project that is not a git checkout is refused
+ *     before the thread exists. Upstream's base check treats a git error as
+ *     "fine", so the launch was accepted and failed at worktree creation: a
+ *     leftover usa-rs project on /srv/data/opencode (it held only imported CLI
+ *     sessions, archived 2026-10-31) became the dashboard's default, and four
+ *     Linear spawns on 2026-11-01 landed there as failed threads.
  */
 import type { OrchestrationV2ThreadShell, ProjectId } from "@t3tools/contracts";
 import * as Clock from "effect/Clock";
 import * as DateTime from "effect/DateTime";
 import * as Effect from "effect/Effect";
 
+import * as ProcessRunner from "../processRunner.ts";
 import * as T4Ledger from "./T4Ledger.ts";
 import * as T4Store from "./T4Store.ts";
 import { isRetired, isRunning, lastActivityMs, shortId, stateOf, whereOf } from "./T4Threads.ts";
@@ -36,6 +43,27 @@ export function spawnFooter(parent: Shell, parentIsReleaseManager: boolean): str
     ? `\n\n---\nSpawned by the release manager (${ref}). When your PR is green and has the merge word, \`t3_handoff\` with done (no \`to\`) hands it the release and answers this spawn in one step. Blocked and need it to decide something: \`t3_handoff\` to "${ref}" with ask.`
     : `\n\n---\nSpawned by thread "${parent.title}" (${ref}). When the work is finished: \`t3_handoff\` to "${ref}" with done and fyi. Blocked and need it to decide something: \`t3_handoff\` to "${ref}" with ask.`;
 }
+
+/** Refusal text when a worktree can't be made in the project's folder. */
+export const worktreeRefusal = Effect.fn("t4.worktreeRefusal")(function* (project: {
+  readonly title: string;
+  readonly workspaceRoot: string;
+}) {
+  const processes = yield* ProcessRunner.ProcessRunner;
+  const isRepo = yield* processes
+    .run({
+      command: "git",
+      args: ["-C", project.workspaceRoot, "rev-parse", "--is-inside-work-tree"],
+      timeout: "15 seconds",
+    })
+    .pipe(
+      Effect.map((out) => out.code === 0 && out.stdout.trim() === "true"),
+      Effect.orElseSucceed(() => false),
+    );
+  return isRepo
+    ? undefined
+    : `project "${project.title}" (${project.workspaceRoot}) is not a git repository, so it can't hold a worktree - nothing was created. Launch in the repo's own project.`;
+});
 
 /** Refusal text, or the message to launch with. */
 export const beforeLaunch = Effect.fn("t4.beforeLaunch")(function* (input: {
