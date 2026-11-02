@@ -20,6 +20,7 @@ import * as ThreadLaunch from "../../../orchestration-v2/ThreadLaunchService.ts"
 import * as Project from "../../../project/ProjectService.ts";
 import * as ScheduledTasks from "../../../scheduledTasks/ScheduledTaskService.ts";
 import * as T4Config from "../../../t4/T4Config.ts";
+import * as T4Decisions from "../../../t4/T4Decisions.ts";
 import * as T4Delivery from "../../../t4/T4Delivery.ts";
 import * as FyiDigest from "../../../t4/fyiDigest.ts";
 import * as T4Ledger from "../../../t4/T4Ledger.ts";
@@ -491,7 +492,7 @@ export const layer = McpToolAccess.toLayer(T4Toolkit, {
     Effect.gen(function* () {
       const ledger = yield* T4Ledger.T4Ledger;
       const now = yield* nowMs;
-      const { caller, threads } = yield* readCaller();
+      const { caller } = yield* readCaller();
       const days = input.days ?? 14;
       const cutoffMs = now - days * 86_400_000;
       const world = yield* ledger.world().pipe(Effect.mapError(ledgerUnavailable));
@@ -508,59 +509,32 @@ export const layer = McpToolAccess.toLayer(T4Toolkit, {
         answer: string;
         isNote: boolean;
       }> = [];
-      for (const thread of scope) {
-        // Requests first, then only the question items: a whole thread's items
-        // (the release manager's were 38,616, 236 MB) held T3's one reader for
-        // 40 s and froze every client of the server (usa-rs, 2026-10-30).
-        const requests = yield* threads
-          .getProjectThreadRecords({ projectId: thread.projectId, threadId: thread.id }, [
-            "runtimeRequests",
-          ])
-          .pipe(
-            Effect.map((records) =>
-              records.runtimeRequests.filter(
-                (request) =>
-                  request.kind === "user_input" &&
-                  request.status === "resolved" &&
-                  request.resolvedAt !== null &&
-                  DateTime.toEpochMillis(request.resolvedAt) >= cutoffMs,
-              ),
-            ),
-            Effect.orElseSucceed(() => []),
-          );
-        if (requests.length === 0) continue;
-        const records = yield* threads
-          .getProjectThreadRecords(
-            { projectId: thread.projectId, threadId: thread.id },
-            ["turnItems"],
-            { turnItemTypes: ["user_input_request"] },
-          )
-          .pipe(Effect.orElseSucceed(() => null));
-        if (records === null) continue;
-        for (const request of requests) {
-          if (request.resolvedAt === null) continue;
-          const item = records.turnItems.find(
-            (candidate) =>
-              candidate.type === "user_input_request" && candidate.requestId === request.id,
-          );
-          const questions = item?.type === "user_input_request" ? item.questions : [];
-          for (const [questionId, raw] of Object.entries(request.answers ?? {})) {
-            const question = questions.find((q) => q.id === questionId);
-            const answer = Array.isArray(raw) ? raw.map(String).join(", ") : String(raw);
-            const labels = new Set((question?.options ?? []).map((option) => option.label));
-            const picked = answer.split(",").map((part) => part.trim());
-            decisions.push({
-              answeredAt: DateTime.formatIso(request.resolvedAt),
-              threadId: thread.id,
-              threadTitle: thread.title,
-              question: (question?.question ?? question?.header ?? questionId)
-                .replaceAll(/\s+/g, " ")
-                .slice(0, 160),
-              answer: answer.replaceAll(/\s+/g, " "),
-              isNote: !(labels.has(answer) || picked.every((part) => labels.has(part))),
-            });
-          }
-        }
+      // Two indexed queries over every thread in scope (T4Decisions.ts). Read
+      // thread by thread, ~190 threads held T3's one reader ~30 s a call and
+      // stalled everything behind it (usa-rs, 2026-11-02).
+      const byId = new Map(scope.map((thread) => [thread.id as string, thread]));
+      const answered = yield* T4Decisions.answeredQuestions(
+        [...byId.keys()],
+        DateTime.formatIso(DateTime.makeUnsafe(cutoffMs)),
+      ).pipe(Effect.orElseSucceed(() => []));
+      for (const entry of answered) {
+        const thread = byId.get(entry.threadId);
+        if (thread === undefined) continue;
+        const question = entry.question;
+        const raw = entry.answer;
+        const answer = Array.isArray(raw) ? raw.map(String).join(", ") : String(raw);
+        const labels = new Set((question?.options ?? []).map((option) => option.label));
+        const picked = answer.split(",").map((part) => part.trim());
+        decisions.push({
+          answeredAt: entry.resolvedAt,
+          threadId: thread.id,
+          threadTitle: thread.title,
+          question: (question?.question ?? question?.header ?? entry.questionId)
+            .replaceAll(/\s+/g, " ")
+            .slice(0, 160),
+          answer: answer.replaceAll(/\s+/g, " "),
+          isNote: !(labels.has(answer) || picked.every((part) => labels.has(part))),
+        });
       }
       // Notes only unless asked: every new thread calls this, and with every
       // "Approve + merge when green" pick it returned ~160 KB (usa-rs,

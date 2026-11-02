@@ -2,6 +2,7 @@ import * as NodeServices from "@effect/platform-node/NodeServices";
 import { expect, it } from "@effect/vitest";
 import { ProviderInstanceId } from "@t3tools/contracts";
 import { McpProviderSessions } from "@t3tools/provider-core/server/McpProviderSessions";
+import * as NodeSqliteClient from "@t3tools/shared/nodeSqliteClient";
 import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
 import { McpServer } from "effect/ai";
@@ -65,6 +66,8 @@ const toolHandlerServices = Layer.mergeAll(
     facts: () => ({ isReleaseManager: false, owes: 0, owedBy: 0 }),
   }),
   Layer.mock(T4Store)({}),
+  // t4 fork: t3_decisions reads T3's database (t4/T4Decisions.ts).
+  NodeSqliteClient.layer({ filename: ":memory:" }),
   Layer.mock(T4RunWatch)({}),
   Layer.succeed(T4ServerConfig, defaultT4ServerConfig),
   Layer.mock(PeerLinkRequests)({}),

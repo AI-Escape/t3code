@@ -17,7 +17,6 @@ import * as References from "effect/References";
 import * as Schema from "effect/Schema";
 import * as Scheduler from "effect/Scheduler";
 import * as Scope from "effect/Scope";
-import * as Semaphore from "effect/Semaphore";
 import * as Context from "effect/Context";
 import * as Stream from "effect/Stream";
 import * as Tracer from "effect/Tracer";
@@ -26,6 +25,8 @@ import * as Client from "effect/sql/SqlClient";
 import type { Borrower, Connection } from "effect/sql/SqlConnection";
 import { SqlError, classifySqliteError } from "effect/sql/SqlError";
 import * as Statement from "effect/sql/Statement";
+
+import { makeFairLock } from "./t4FairLock.ts";
 
 const ATTR_DB_SYSTEM_NAME = "db.system.name";
 
@@ -1071,11 +1072,13 @@ const make = Effect.fn("makeWithDatabase")(function* (
     });
   });
 
-  const semaphore = yield* Semaphore.make(1);
+  // t4 fork: first come, first served (t4FairLock.ts); Effect's Semaphore let
+  // a loop of small reads starve every other caller.
+  const semaphore = makeFairLock();
   const connection = yield* makeConnection;
   const acquireReader =
     options.readerWorker && isFileDatabase ? yield* makeReader(options) : undefined;
-  const readerSemaphore = yield* Semaphore.make(1);
+  const readerSemaphore = makeFairLock();
 
   const writer = { name: "writer" as const, lock: semaphore, connection };
   let activeWriter: ConnectionOwner | undefined;

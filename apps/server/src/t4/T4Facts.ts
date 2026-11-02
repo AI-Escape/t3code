@@ -19,11 +19,15 @@ export interface T4ThreadFacts {
   readonly issues: ReadonlyArray<string>;
 }
 
-export const factsFor = Effect.fn("t4.factsFor")(function* (threadIds: ReadonlyArray<string>) {
+export const factsFor = Effect.fn("t4.factsFor")(function* (
+  threadIds: ReadonlyArray<string>,
+  // The caller's world, when it already read one (each read is every thread's shell).
+  known?: T4Ledger.T4World,
+) {
   const ledger = yield* T4Ledger.T4Ledger;
   const store = yield* T4Store.T4Store;
   const now = yield* Clock.currentTimeMillis;
-  const world = yield* ledger.world();
+  const world = known ?? (yield* ledger.world());
   const links = yield* store.issueLinks();
   const facts = new Map<string, T4ThreadFacts>();
   for (const id of threadIds) {

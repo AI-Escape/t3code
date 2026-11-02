@@ -87,6 +87,7 @@ import * as DesktopBrowserChannel from "./preview/DesktopBrowserChannel.ts";
 import * as ServerBrowserStream from "./preview/ServerBrowserStream.ts";
 import * as PreviewBrowser from "./preview/PreviewBrowser.ts";
 import * as ProcessRunner from "./processRunner.ts";
+import * as SpawnBroker from "./t4/spawnBroker.ts";
 import * as GitManager from "./git/GitManager.ts";
 import * as EnvironmentTheme from "./environmentTheme.ts";
 import * as Keybindings from "./keybindings.ts";
@@ -334,7 +335,13 @@ const layerHttpServer = Layer.unwrap(
   }),
 );
 
-const layerPlatformServices = DocumentText.layer.pipe(Layer.provideMerge(NodeServices.layer));
+// t4 fork: git, gh, ps and lsof start from a small helper process
+// (t4/spawnBroker.ts); a start from T3 itself froze its main thread ~55 ms.
+const layerNodeServices = Layer.merge(
+  NodeServices.layer,
+  SpawnBroker.layer.pipe(Layer.provide(NodeServices.layer)),
+);
+const layerPlatformServices = DocumentText.layer.pipe(Layer.provideMerge(layerNodeServices));
 
 const layerPersistence = Layer.empty.pipe(Layer.provideMerge(SqlitePersistence.layerConfig));
 

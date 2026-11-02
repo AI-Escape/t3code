@@ -7,6 +7,7 @@
 import { OrchestratorMcpFailure, ProjectId, ThreadId } from "@t3tools/contracts";
 import * as Crypto from "effect/Crypto";
 import * as Schema from "effect/Schema";
+import * as SqlClient from "effect/sql/SqlClient";
 import { Tool, Toolkit } from "effect/ai";
 
 import * as ThreadLaunch from "../../../orchestration-v2/ThreadLaunchService.ts";
@@ -37,6 +38,8 @@ const common = {
     T4Ledger.T4Ledger,
     T4Store.T4Store,
     Crypto.Crypto,
+    // T3's database, for `t3_decisions` (t4/T4Decisions.ts).
+    SqlClient.SqlClient,
   ],
 };
 

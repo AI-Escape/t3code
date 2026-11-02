@@ -154,8 +154,24 @@ export const layer = Layer.mergeAll(
     Effect.gen(function* () {
       const ledger = yield* T4Ledger.T4Ledger;
       const store = yield* T4Store.T4Store;
-      const world = yield* ledger.world();
-      const facts = yield* factsFor(world.threads.map((thread) => thread.id));
+      // `?threads=0` leaves out each thread's facts, which need every thread's
+      // shell (active and archived): the dashboard polls this and never reads
+      // them, and building them twice a call took ~1 s of T3's one database
+      // reader, 12% of it (usa-rs, 2026-11-02).
+      const request = yield* HttpServerRequest.HttpServerRequest;
+      const withThreads =
+        new URL(request.url, "http://t4.local").searchParams.get("threads") !== "0";
+      const facts = withThreads
+        ? yield* ledger.world().pipe(
+            Effect.flatMap((world) =>
+              factsFor(
+                world.threads.map((thread) => thread.id),
+                world,
+              ),
+            ),
+          )
+        : new Map<string, never>();
+      const open = yield* store.openHandoffs();
       // Wakes: scheduled tasks posted into a thread (V2 lists them only over WebSocket).
       const scheduledTasks = yield* Effect.serviceOption(ScheduledTasks.ScheduledTaskService);
       const tasks =
@@ -174,7 +190,7 @@ export const layer = Layer.mergeAll(
             schedule: task.schedule,
             nextRunAt: task.nextRunAt,
           })),
-        handoffs: world.open,
+        handoffs: open,
         releaseManagers: Object.fromEntries([...(yield* store.releaseManagers()).entries()]),
         issueLinks: yield* store.issueLinks(),
         settleRequests: Object.fromEntries([...(yield* store.settleRequests()).entries()]),
