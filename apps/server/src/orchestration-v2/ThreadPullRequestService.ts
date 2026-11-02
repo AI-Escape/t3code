@@ -35,6 +35,17 @@ class ThreadPullRequestServiceV2 extends Context.Service<
   }
 >()("t3/orchestration-v2/ThreadPullRequestService/ThreadPullRequestServiceV2") {}
 
+// t4 fork: the full sweep starts several git processes per open thread, and
+// each start blocks the main thread while Node copies the 1.3 GB server
+// (~55 ms here, ~1 ms for a small process). On usa-rs (~80 open threads) a
+// sweep was 424 starts, the server froze ~23 s each minute an app was open,
+// and database reads waited up to 31 s behind it (2026-11-02). Every thread
+// is still refreshed when its run ends or its checkpoint is captured; the
+// sweep only catches pull requests opened outside a turn.
+const sweepMinutes = Number(process.env.T4_PR_SWEEP_MINUTES ?? "15");
+const SWEEP_EVERY =
+  `${Number.isFinite(sweepMinutes) && sweepMinutes > 0 ? sweepMinutes : 15} minutes` as const;
+
 function samePullRequest(
   left: ThreadLinkedPullRequest | null | undefined,
   right: ThreadLinkedPullRequest | null,
@@ -393,7 +404,7 @@ export const make = Effect.gen(function* () {
           if (!(yield* backgroundPolicy.shouldRunOpportunisticWork)) return;
           yield* worker.enqueue({ threadId: null, refresh: false });
           yield* worker.drain;
-        }).pipe(Effect.repeat(Schedule.spaced("1 minute")), Effect.delay("1 minute"));
+        }).pipe(Effect.repeat(Schedule.spaced(SWEEP_EVERY)), Effect.delay(SWEEP_EVERY));
       }).pipe(Effect.asVoid),
     );
   });
