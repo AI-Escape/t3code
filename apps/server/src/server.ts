@@ -11,7 +11,6 @@ import * as DelegatedTaskQuestionReactor from "./orchestration-v2/DelegatedTaskQ
 import * as NodeHttp from "node:http";
 
 import * as NodeHttpServer from "@effect/platform-node/NodeHttpServer";
-import * as NodeServices from "@effect/platform-node/NodeServices";
 import { EnvironmentHttpApi, type RepositoryIdentity } from "@t3tools/contracts";
 import * as Cause from "effect/Cause";
 import * as Duration from "effect/Duration";
@@ -337,11 +336,9 @@ const layerHttpServer = Layer.unwrap(
 
 // t4 fork: git, gh, ps and lsof start from a small helper process
 // (t4/spawnBroker.ts); a start from T3 itself froze its main thread ~55 ms.
-const layerNodeServices = Layer.merge(
-  NodeServices.layer,
-  SpawnBroker.layer.pipe(Layer.provide(NodeServices.layer)),
+const layerPlatformServices = DocumentText.layer.pipe(
+  Layer.provideMerge(SpawnBroker.layerNodeServices),
 );
-const layerPlatformServices = DocumentText.layer.pipe(Layer.provideMerge(layerNodeServices));
 
 const layerPersistence = Layer.empty.pipe(Layer.provideMerge(SqlitePersistence.layerConfig));
 

@@ -23,6 +23,7 @@ import * as NodeFs from "node:fs/promises";
 import * as NodePath from "node:path";
 import { PassThrough, Writable } from "node:stream";
 
+import * as NodeServices from "@effect/platform-node/NodeServices";
 import * as NodeSink from "@effect/platform-node/NodeSink";
 import * as NodeStream from "@effect/platform-node/NodeStream";
 import * as Deferred from "effect/Deferred";
@@ -516,4 +517,10 @@ export const layer = Layer.effect(
     const spawner = yield* ChildProcessSpawner.ChildProcessSpawner;
     return enabled() ? wrap(spawner) : spawner;
   }),
+);
+
+/** Node's services with the helper's spawner; the root of the CLI and server runtimes. */
+export const layerNodeServices = Layer.merge(
+  NodeServices.layer,
+  layer.pipe(Layer.provide(NodeServices.layer)),
 );

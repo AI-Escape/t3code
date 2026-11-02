@@ -1,6 +1,5 @@
 import { doctorCommand } from "./cli/doctor.ts";
 import * as NodeRuntime from "@effect/platform-node/NodeRuntime";
-import * as NodeServices from "@effect/platform-node/NodeServices";
 import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
 import { Argument, Command } from "effect/cli";
@@ -31,8 +30,12 @@ import { servicePreflightCommand } from "./cli/servicePreflight.ts";
 import { themeCommand } from "./cli/theme.ts";
 import { traceCommand } from "./cli/trace.ts";
 import { triageCommand } from "./cli/triage.ts";
+import * as SpawnBroker from "./t4/spawnBroker.ts";
 
-const layerCliRuntime = Layer.mergeAll(NodeServices.layer, NetService.layer);
+// t4 fork: git, gh, ps and lsof start from a small helper process
+// (t4/spawnBroker.ts). The server takes services built from here too
+// (ProcessRunner), so the spawner is replaced at the root.
+const layerCliRuntime = Layer.mergeAll(SpawnBroker.layerNodeServices, NetService.layer);
 
 const connectPublicConfigMissingMessage =
   "T3 Connect commands are unavailable: this build is missing T3 Connect public configuration.";
