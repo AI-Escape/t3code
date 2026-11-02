@@ -42,6 +42,10 @@ class ThreadPullRequestServiceV2 extends Context.Service<
 // and database reads waited up to 31 s behind it (2026-11-02). Every thread
 // is still refreshed when its run ends or its checkpoint is captured; the
 // sweep only catches pull requests opened outside a turn.
+// T4_PR_DISCOVERY=off turns discovery off altogether: no sweep, no lookup
+// when a run ends. Nothing in t4 reads discovered PRs (agents link theirs
+// with link_pull_request), so every client runs with it off.
+const discoveryOff = process.env.T4_PR_DISCOVERY === "off";
 const sweepMinutes = Number(process.env.T4_PR_SWEEP_MINUTES ?? "15");
 const SWEEP_EVERY =
   `${Number.isFinite(sweepMinutes) && sweepMinutes > 0 ? sweepMinutes : 15} minutes` as const;
@@ -393,6 +397,7 @@ export const make = Effect.gen(function* () {
   const start: ThreadPullRequestServiceV2["Service"]["start"] = Effect.fn(
     "ThreadPullRequestServiceV2.start",
   )(function* () {
+    if (discoveryOff) return;
     yield* forkParked(Stream.runForEach(orchestrator.streamDomainEvents, processEvent));
     yield* forkParked(
       Effect.gen(function* () {
