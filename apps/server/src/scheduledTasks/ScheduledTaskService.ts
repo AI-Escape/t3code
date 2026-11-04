@@ -1047,6 +1047,44 @@ export const layer = Layer.effect(
       ),
     );
 
+    // t4 fork: an enabled repeating task left with no next run never runs again
+    // (the due-task filter needs one). Cron's daylight-saving bug left the daily
+    // Sentry triages so from 2026-11-01; give each its next run on start.
+    yield* Effect.gen(function* () {
+      const rows = yield* selectAllRows();
+      const now = yield* localNow;
+      yield* Effect.forEach(
+        rows.filter(
+          (row) =>
+            row.enabled === 1 && row.next_run_at === null && row.last_run_status !== "running",
+        ),
+        (row) =>
+          Effect.gen(function* () {
+            const decoded = yield* Effect.result(decodeRow(row));
+            if (Result.isFailure(decoded)) return;
+            const type = decoded.success.schedule.type;
+            if (type === "once" || type === "webhook") return;
+            const next = nextRunAt(decoded.success, now);
+            if (next === null) return;
+            yield* Effect.logInfo("Restoring a schedule task's next run", {
+              taskId: row.task_id,
+              nextRunAt: next,
+            });
+            yield* sql`
+              UPDATE scheduled_tasks
+              SET next_run_at = ${next}, updated_at = ${iso(now)}
+              WHERE task_id = ${row.task_id} AND next_run_at IS NULL
+            `;
+          }),
+        { concurrency: 1, discard: true },
+      );
+      yield* notifyChanged;
+    }).pipe(
+      Effect.catch((cause) =>
+        Effect.logWarning("Could not restore schedule tasks' next runs", { cause }),
+      ),
+    );
+
     yield* scheduler.register("scheduled-tasks", runDueTasks());
 
     const list: ScheduledTaskService["Service"]["list"] = () =>

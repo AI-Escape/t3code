@@ -34,6 +34,33 @@ describe("t4 cron", () => {
       "2026-10-19T08:00:00.000Z",
     );
   });
+  it("crosses daylight-saving changes in the schedule's zone", () => {
+    const pacific = (input: string) =>
+      DateTime.makeZonedUnsafe(input, { timeZone: "America/Los_Angeles" });
+    // The run before the fall-back (2026-11-01): the next 07:00 is PST.
+    assert.equal(
+      iso(nextCronRunAt("0 7 * * *", pacific("2026-10-31T14:00:00.789Z"))),
+      "2026-11-01T15:00:00.000Z",
+    );
+    // A job in the repeated hour runs on its first pass only.
+    assert.equal(
+      iso(nextCronRunAt("30 1 * * *", pacific("2026-11-01T07:00:00.000Z"))),
+      "2026-11-01T08:30:00.000Z",
+    );
+    assert.equal(
+      iso(nextCronRunAt("30 1 * * *", pacific("2026-11-01T08:30:00.000Z"))),
+      "2026-11-02T09:30:00.000Z",
+    );
+    // Spring forward (2026-03-08): Monday midnight after a 23-hour Sunday.
+    assert.equal(
+      iso(nextCronRunAt("0 0 * * 1", pacific("2026-03-07T12:00:00.000Z"))),
+      "2026-03-09T07:00:00.000Z",
+    );
+    assert.equal(
+      iso(nextCronRunAt("0 7 * * 1-5", pacific("2026-03-06T15:00:00.000Z"))),
+      "2026-03-09T14:00:00.000Z",
+    );
+  });
   it("rejects malformed expressions", () => {
     assert.isNull(parseCron("0 9 * *"));
     assert.isNull(parseCron("61 * * * *"));

@@ -53,34 +53,39 @@ export function parseCron(expression: string): ParsedCron | null {
   };
 }
 
-/** The first matching minute after `from`, within a year; null if none or invalid. */
+const MINUTE_MS = 60_000;
+const HOUR_MS = 60 * MINUTE_MS;
+
+/**
+ * The first matching minute after `from`, within a year; null if none or invalid.
+ * Steps by elapsed time, never by setting wall-clock fields: those resolve a repeated
+ * fall-back hour to its first pass and looped (2026-11-01). A repeated hour runs once.
+ */
 export function nextCronRunAt(
   expression: string,
   from: DateTime.DateTime,
 ): DateTime.DateTime | null {
   const cron = parseCron(expression);
   if (cron === null) return null;
-  let t = DateTime.add(DateTime.setParts(from, { second: 0, millisecond: 0 }), { minutes: 1 });
-  for (let i = 0; i < 366 * 24 * 60; i++) {
+  const start = DateTime.toEpochMillis(from);
+  const limit = start + 366 * 24 * HOUR_MS;
+  let t = DateTime.addDuration(from, MINUTE_MS - (((start % MINUTE_MS) + MINUTE_MS) % MINUTE_MS));
+  while (DateTime.toEpochMillis(t) <= limit) {
     const p = DateTime.toParts(t);
-    if (!cron.months.has(p.month)) {
-      t = DateTime.add(DateTime.setParts(t, { day: 1, hour: 0, minute: 0 }), { months: 1 });
-      continue;
-    }
     const dayOk =
       cron.dayAny || cron.weekdayAny
         ? cron.days.has(p.day) && cron.weekdays.has(p.weekDay)
         : cron.days.has(p.day) || cron.weekdays.has(p.weekDay);
-    if (!dayOk) {
-      t = DateTime.add(DateTime.setParts(t, { hour: 0, minute: 0 }), { days: 1 });
-      continue;
-    }
-    if (!cron.hours.has(p.hour)) {
-      t = DateTime.add(DateTime.setParts(t, { minute: 0 }), { hours: 1 });
+    const before = DateTime.toParts(DateTime.addDuration(t, -HOUR_MS));
+    const repeatedHour = before.day === p.day && before.hour === p.hour;
+    if (!cron.months.has(p.month) || !dayOk || !cron.hours.has(p.hour) || repeatedHour) {
+      // To the next hour boundary; zones here shift by whole hours, so this
+      // visits every wall-clock hour.
+      t = DateTime.addDuration(t, (60 - p.minute) * MINUTE_MS);
       continue;
     }
     if (cron.minutes.has(p.minute)) return t;
-    t = DateTime.add(t, { minutes: 1 });
+    t = DateTime.addDuration(t, MINUTE_MS);
   }
   return null;
 }
