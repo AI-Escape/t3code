@@ -47,8 +47,13 @@ export function limitRecoveryCommand(
       },
     };
   }
+  // t4: a resume this sweep armed on its own (`limit-arm:`) follows the
+  // setting as it is now. usa-rs turned auto-resume off with 27 threads
+  // already armed for one reset (2026-11-06); a resume the user asked for
+  // still runs.
   if (
     !recovery.autoResume ||
+    (!autoResume && recovery.requestId?.startsWith("limit-arm:")) ||
     resetMs > nowMs ||
     (thread.snoozedUntil != null && DateTime.toEpochMillis(thread.snoozedUntil) > nowMs)
   )

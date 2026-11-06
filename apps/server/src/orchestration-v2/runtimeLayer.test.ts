@@ -6743,6 +6743,8 @@ it.layer(layerTest)("usage-limit recovery", (it) => {
           )!;
           scheduledResume = limitRecoveryCommand(armed, true, Date.parse(resetAt));
           assert.isNotNull(scheduledResume);
+          // t4: auto-resume turned off after the sweep armed it - it doesn't run.
+          assert.isNull(limitRecoveryCommand(armed, false, Date.parse(resetAt)));
         }
         const resume = (suffix: string) => ({
           type: "message.dispatch" as const,
