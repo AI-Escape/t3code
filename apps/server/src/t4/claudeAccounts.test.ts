@@ -74,6 +74,44 @@ describe("t4 claudeAccounts", () => {
     expect(isClaudeAccountExhausted("1", 2_000, env)).toBe(true);
   });
 
+  it("takes the order from the dashboard's list file, the main login anywhere in it", () => {
+    const { dir } = setup();
+    FS.writeFileSync(Path.join(dir, "fallback.token"), "token-fallback\n");
+    const list = Path.join(dir, "accounts.json");
+    const write = (keys: ReadonlyArray<string>, bump: number) => {
+      const files: Record<string, string> = {
+        "1": `${dir}/1.token`,
+        "2": `${dir}/2.token`,
+        fallback: `${dir}/fallback.token`,
+      };
+      FS.writeFileSync(
+        list,
+        JSON.stringify({
+          accounts: keys.map((key) => (key === "main" ? { key } : { key, file: files[key] })),
+        }),
+      );
+      const at = FS.statSync(list).mtimeMs / 1000 + bump;
+      FS.utimesSync(list, at, at);
+    };
+    // The env list is ignored once the file exists.
+    const env = {
+      T4_CLAUDE_ACCOUNTS: `${dir}/2.token`,
+      T4_CLAUDE_ACCOUNTS_FILE: list,
+    } as NodeJS.ProcessEnv;
+    write(["1", "main", "fallback"], 0);
+    expect(pickClaudeAccount(1_000, env)).toEqual({ key: "1", token: "token-one" });
+    expect(markClaudeAccountExhausted("1", 50_000, 1_000, env)).toBe(1_000);
+    expect(pickClaudeAccount(1_000, env)).toEqual({ key: "main" });
+    markClaudeAccountExhausted("main", 60_000, 1_000, env);
+    expect(pickClaudeAccount(1_000, env)).toEqual({ key: "fallback", token: "token-fallback" });
+    expect(FS.existsSync(Path.join(dir, "state.json"))).toBe(true);
+    // Reordered live; an account taken off the list counts as used up.
+    write(["fallback", "2"], 5);
+    expect(pickClaudeAccount(1_000, env)).toEqual({ key: "fallback", token: "token-fallback" });
+    expect(isClaudeAccountExhausted("1", 100_000, env)).toBe(true);
+    expect(isClaudeAccountExhausted("2", 1_000, env)).toBe(false);
+  });
+
   it("skips an account whose token file is missing", () => {
     const { env, dir } = setup();
     FS.rmSync(Path.join(dir, "1.token"));

@@ -14,6 +14,14 @@
  * login moves back to an account when it next starts (an idle session is
  * released). usa-rs, 2026-10-29: two Team seats ahead of the main login.
  *
+ * The order can instead come from `T4_CLAUDE_ACCOUNTS_FILE`, a JSON list the
+ * t4 dashboard writes (`{"accounts": [{"key", "file"?}]}`; `main` is the
+ * shared login and can sit anywhere, e.g. before a fallback account every
+ * client shares). It is re-read when it changes, so accounts are added,
+ * signed in again, reordered or removed without restarting the container; an
+ * account taken off the list counts as used up, so its live processes move
+ * on at their next turn. Without the file, `T4_CLAUDE_ACCOUNTS` applies.
+ *
  * Which account was used up until when is kept beside the tokens
  * (`state.json`), so a restart does not retry an exhausted one. The file is
  * re-read when it changes: the dashboard clears a mark the account's live
@@ -36,16 +44,65 @@ export interface ClaudeAccount {
   readonly token?: string;
 }
 
-const accountFiles = (env: NodeJS.ProcessEnv): ReadonlyArray<string> =>
-  (env.T4_CLAUDE_ACCOUNTS ?? "")
-    .split(",")
-    .map((file) => file.trim())
-    .filter((file) => file.length > 0);
+interface AccountEntry {
+  readonly key: string;
+  /** The token file; none for the main login. */
+  readonly file?: string;
+}
 
 const keyOf = (file: string) => Path.basename(file).replace(/\.[^.]*$/, "");
 
+let listCache: {
+  file: string;
+  mtimeMs: number | null;
+  entries: ReadonlyArray<AccountEntry>;
+} | null = null;
+
+const listFromFile = (file: string): ReadonlyArray<AccountEntry> | null => {
+  const mtimeMs = fileMtimeMs(file);
+  if (mtimeMs === null) return null;
+  if (listCache?.file === file && listCache.mtimeMs === mtimeMs) return listCache.entries;
+  let entries: ReadonlyArray<AccountEntry> | null = null;
+  try {
+    const saved = JSON.parse(FS.readFileSync(file, "utf8")) as { accounts?: unknown };
+    if (Array.isArray(saved.accounts)) {
+      entries = saved.accounts.flatMap((a): AccountEntry[] => {
+        const entry = a as { key?: unknown; file?: unknown };
+        if (typeof entry.key !== "string" || entry.key.length === 0) return [];
+        if (entry.key === MAIN_CLAUDE_ACCOUNT) return [{ key: MAIN_CLAUDE_ACCOUNT }];
+        return typeof entry.file === "string" ? [{ key: entry.key, file: entry.file }] : [];
+      });
+    }
+  } catch {
+    // Mid-write or unreadable: keep the last good list.
+    return listCache?.file === file ? listCache.entries : null;
+  }
+  if (entries === null) return null;
+  listCache = { file, mtimeMs, entries };
+  return entries;
+};
+
+/** The accounts in the order new Claude processes try them, the main login once. */
+const accountList = (env: NodeJS.ProcessEnv): ReadonlyArray<AccountEntry> => {
+  const listFile = env.T4_CLAUDE_ACCOUNTS_FILE?.trim();
+  const listed =
+    (listFile ? listFromFile(listFile) : null) ??
+    (env.T4_CLAUDE_ACCOUNTS ?? "")
+      .split(",")
+      .map((file) => file.trim())
+      .filter((file) => file.length > 0)
+      .map((file) => ({ key: keyOf(file), file }));
+  const seen = new Set<string>();
+  const entries = listed.filter((entry) => !seen.has(entry.key) && seen.add(entry.key));
+  return seen.has(MAIN_CLAUDE_ACCOUNT) ? entries : [...entries, { key: MAIN_CLAUDE_ACCOUNT }];
+};
+
+const accountFiles = (env: NodeJS.ProcessEnv): ReadonlyArray<string> =>
+  accountList(env).flatMap((entry) => (entry.file === undefined ? [] : [entry.file]));
+
 const statePath = (env: NodeJS.ProcessEnv, files: ReadonlyArray<string>) =>
-  env.T4_CLAUDE_ACCOUNTS_STATE?.trim() || Path.join(Path.dirname(files[0]!), "state.json");
+  env.T4_CLAUDE_ACCOUNTS_STATE?.trim() ||
+  Path.join(Path.dirname(env.T4_CLAUDE_ACCOUNTS_FILE?.trim() || files[0]!), "state.json");
 
 let exhaustedUntil: Map<string, number> | null = null;
 /** The state file's mtime when it was last read or written here. */
@@ -111,10 +168,12 @@ export const isClaudeAccountExhausted = (
 ): boolean => {
   const files = accountFiles(env);
   if (files.length === 0) return false;
+  // Taken off the list: its processes move to a listed account.
+  if (!accountList(env).some((entry) => entry.key === key)) return true;
   return (loadState(env, files).get(key) ?? 0) > nowMs;
 };
 
-/** The first account not used up, else the main login. */
+/** The first account in order not used up (the main login included), else the main login. */
 export const pickClaudeAccount = (
   nowMs: number,
   env: NodeJS.ProcessEnv = process.env,
@@ -122,9 +181,9 @@ export const pickClaudeAccount = (
   const files = accountFiles(env);
   if (files.length === 0) return { key: MAIN_CLAUDE_ACCOUNT };
   const state = loadState(env, files);
-  for (const file of files) {
-    const key = keyOf(file);
+  for (const { key, file } of accountList(env)) {
     if ((state.get(key) ?? 0) > nowMs) continue;
+    if (file === undefined) return { key: MAIN_CLAUDE_ACCOUNT };
     const token = readToken(file);
     if (token !== undefined) return { key, token };
   }
@@ -156,7 +215,7 @@ export const markClaudeAccountExhausted = (
   const state = loadState(env, files);
   state.set(key, resetAtMs !== null && resetAtMs > nowMs ? resetAtMs : nowMs + UNKNOWN_RESET_MS);
   saveState(env, files);
-  const keys = [...files.map(keyOf), MAIN_CLAUDE_ACCOUNT];
+  const keys = accountList(env).map((entry) => entry.key);
   if (keys.some((other) => (state.get(other) ?? 0) <= nowMs)) return nowMs;
   return Math.min(...keys.map((other) => state.get(other)!));
 };
@@ -175,13 +234,12 @@ export const anotherClaudeAccountFree = (
   const files = accountFiles(env);
   if (files.length === 0) return false;
   const state = loadState(env, files);
-  return [...files.map(keyOf), MAIN_CLAUDE_ACCOUNT].some(
-    (key) => key !== current && (state.get(key) ?? 0) <= nowMs,
-  );
+  return accountList(env).some(({ key }) => key !== current && (state.get(key) ?? 0) <= nowMs);
 };
 
 /** Test hook: forget the loaded state. */
 export const resetClaudeAccountState = () => {
   exhaustedUntil = null;
   loadedMtimeMs = null;
+  listCache = null;
 };
