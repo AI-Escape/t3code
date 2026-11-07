@@ -97,6 +97,17 @@ const accountList = (env: NodeJS.ProcessEnv): ReadonlyArray<AccountEntry> => {
   return seen.has(MAIN_CLAUDE_ACCOUNT) ? entries : [...entries, { key: MAIN_CLAUDE_ACCOUNT }];
 };
 
+/**
+ * Whether the main login exists: Claude's own credentials in the config dir.
+ * t4 keeps its own ~/.claude apart from the host's since 2026-11-07, with no
+ * login copied (two copies of one rotating login log each other out), so
+ * until one is made there, "main" is skipped like a used-up account.
+ */
+const mainLoginAvailable = (env: NodeJS.ProcessEnv): boolean => {
+  const dir = env.CLAUDE_CONFIG_DIR?.trim() || (env.HOME ? Path.join(env.HOME, ".claude") : null);
+  return dir === null || fileMtimeMs(Path.join(dir, ".credentials.json")) !== null;
+};
+
 const accountFiles = (env: NodeJS.ProcessEnv): ReadonlyArray<string> =>
   accountList(env).flatMap((entry) => (entry.file === undefined ? [] : [entry.file]));
 
@@ -170,6 +181,7 @@ export const isClaudeAccountExhausted = (
   if (files.length === 0) return false;
   // Taken off the list: its processes move to a listed account.
   if (!accountList(env).some((entry) => entry.key === key)) return true;
+  if (key === MAIN_CLAUDE_ACCOUNT && !mainLoginAvailable(env)) return true;
   return (loadState(env, files).get(key) ?? 0) > nowMs;
 };
 
@@ -183,7 +195,10 @@ export const pickClaudeAccount = (
   const state = loadState(env, files);
   for (const { key, file } of accountList(env)) {
     if ((state.get(key) ?? 0) > nowMs) continue;
-    if (file === undefined) return { key: MAIN_CLAUDE_ACCOUNT };
+    if (file === undefined) {
+      if (mainLoginAvailable(env)) return { key: MAIN_CLAUDE_ACCOUNT };
+      continue;
+    }
     const token = readToken(file);
     if (token !== undefined) return { key, token };
   }
@@ -215,7 +230,10 @@ export const markClaudeAccountExhausted = (
   const state = loadState(env, files);
   state.set(key, resetAtMs !== null && resetAtMs > nowMs ? resetAtMs : nowMs + UNKNOWN_RESET_MS);
   saveState(env, files);
-  const keys = accountList(env).map((entry) => entry.key);
+  const keys = accountList(env)
+    .map((entry) => entry.key)
+    .filter((other) => other !== MAIN_CLAUDE_ACCOUNT || mainLoginAvailable(env));
+  if (keys.length === 0) return nowMs + UNKNOWN_RESET_MS;
   if (keys.some((other) => (state.get(other) ?? 0) <= nowMs)) return nowMs;
   return Math.min(...keys.map((other) => state.get(other)!));
 };
@@ -234,7 +252,12 @@ export const anotherClaudeAccountFree = (
   const files = accountFiles(env);
   if (files.length === 0) return false;
   const state = loadState(env, files);
-  return accountList(env).some(({ key }) => key !== current && (state.get(key) ?? 0) <= nowMs);
+  return accountList(env).some(
+    ({ key }) =>
+      key !== current &&
+      (key !== MAIN_CLAUDE_ACCOUNT || mainLoginAvailable(env)) &&
+      (state.get(key) ?? 0) <= nowMs,
+  );
 };
 
 /** Test hook: forget the loaded state. */

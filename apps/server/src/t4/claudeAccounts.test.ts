@@ -112,6 +112,22 @@ describe("t4 claudeAccounts", () => {
     expect(isClaudeAccountExhausted("2", 1_000, env)).toBe(false);
   });
 
+  it("skips the main login when its config dir has no credentials", () => {
+    const { dir, env } = setup();
+    const home = FS.mkdtempSync(Path.join(OS.tmpdir(), "t4-home-"));
+    FS.mkdirSync(Path.join(home, ".claude"));
+    const list = Path.join(dir, "accounts.json");
+    FS.writeFileSync(
+      list,
+      JSON.stringify({ accounts: [{ key: "main" }, { key: "2", file: `${dir}/2.token` }] }),
+    );
+    const noLogin = { ...env, HOME: home, T4_CLAUDE_ACCOUNTS_FILE: list } as NodeJS.ProcessEnv;
+    expect(pickClaudeAccount(1_000, noLogin)).toEqual({ key: "2", token: "token-two" });
+    expect(isClaudeAccountExhausted("main", 1_000, noLogin)).toBe(true);
+    FS.writeFileSync(Path.join(home, ".claude", ".credentials.json"), "{}");
+    expect(pickClaudeAccount(1_000, noLogin)).toEqual({ key: "main" });
+  });
+
   it("skips an account whose token file is missing", () => {
     const { env, dir } = setup();
     FS.rmSync(Path.join(dir, "1.token"));
