@@ -30,6 +30,7 @@ import * as HttpServerResponse from "effect/http/HttpServerResponse";
 import * as EnvironmentAuth from "../auth/EnvironmentAuth.ts";
 import * as ThreadLaunch from "../orchestration-v2/ThreadLaunchService.ts";
 import * as ProcessRunner from "../processRunner.ts";
+import * as AgentSessionImporter from "../project/AgentSessionImporter.ts";
 import * as Project from "../project/ProjectService.ts";
 import * as ThreadManagementService from "../orchestration-v2/ThreadManagementService.ts";
 import * as ScheduledTasks from "../scheduledTasks/ScheduledTaskService.ts";
@@ -493,6 +494,31 @@ export const layer = Layer.mergeAll(
       }
       return json({ threadId, restored: done });
     }),
+  ),
+
+  // Import the project's recent Claude Code / Codex CLI sessions (the last 30
+  // days, those run in its folder) as T3 threads - what the welcome wizard's
+  // import step does, which is the only place T3's web app offers it. Used to
+  // move a session started outside T3 into a client (2026-11-07: the host
+  // session that built much of t4, into ai-escape's t4 project).
+  route(
+    "POST",
+    "/api/t4/projects/:projectId/import-sessions",
+    AuthOrchestrationOperateScope,
+    (params) =>
+      Effect.gen(function* () {
+        const importer = yield* Effect.serviceOption(AgentSessionImporter.AgentSessionImporter);
+        if (Option.isNone(importer))
+          return json({ error: "session import is not available here" }, 501);
+        const result = yield* importer.value
+          .importRecentAgentThreads({ projectId: ProjectId.make(params.projectId ?? "") })
+          .pipe(
+            Effect.catch((error) =>
+              Effect.succeed({ error: String((error as { message?: string }).message ?? error) }),
+            ),
+          );
+        return "error" in result ? json(result, 400) : json(result);
+      }),
   ),
 
   // `t4 run`'s throwaway threads.
