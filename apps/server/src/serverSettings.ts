@@ -293,6 +293,28 @@ const LegacyProviderSettingsJson = fromLenientJson(
   }),
 );
 const decodeLegacyProviderSettingsJsonExit = Schema.decodeUnknownExit(LegacyProviderSettingsJson);
+// t4 fork: read the restart opt-out on its own, so one bad field elsewhere no
+// longer turns restart wakes off. Personal's `projectSettingsFolded: {}` did,
+// and a box check the restart killed never woke its thread (AI-50).
+const ContinuationSettingsJson = fromLenientJson(
+  Schema.Struct({
+    continueThreadsAfterServerUpdate: Schema.optionalKey(Schema.Unknown),
+    projectSettingsOverrides: Schema.optionalKey(Schema.Record(Schema.String, Schema.Unknown)),
+  }),
+);
+const decodeContinuationSettingsJsonExit = Schema.decodeUnknownExit(ContinuationSettingsJson);
+function continuesAfterServerUpdate(raw: string): boolean {
+  const decoded = decodeContinuationSettingsJsonExit(raw);
+  if (decoded._tag === "Failure") return false;
+  const { projectSettingsOverrides = {}, ...global } = decoded.value;
+  return [global, ...Object.values(projectSettingsOverrides)].every((scope) => {
+    const value =
+      typeof scope === "object" && scope !== null
+        ? Reflect.get(scope, "continueThreadsAfterServerUpdate")
+        : undefined;
+    return value === undefined || value === true;
+  });
+}
 
 const LEGACY_BITBUCKET_SECRET_NAMES: Readonly<Record<string, string>> = {
   accessToken: "bitbucket-access-token",
@@ -665,7 +687,10 @@ const make = Effect.gen(function* () {
       if (decoded._tag === "Failure" || legacySettings._tag === "Failure") {
         const failure = decoded._tag === "Failure" ? decoded : legacySettings;
         // The file may hold an opt-out we can no longer read; never resume threads on a guess.
-        settings = { ...DEFAULT_SERVER_SETTINGS, continueThreadsAfterServerUpdate: false };
+        settings = {
+          ...DEFAULT_SERVER_SETTINGS,
+          continueThreadsAfterServerUpdate: continuesAfterServerUpdate(raw),
+        };
         if (failure._tag === "Failure") {
           parseFailure = Option.some(Cause.squash(failure.cause));
           yield* Effect.logWarning("failed to parse settings.json, using defaults", {

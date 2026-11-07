@@ -946,6 +946,28 @@ it.layer(NodeServices.layer)("server settings", (it) => {
     }).pipe(Effect.provide(layerServerSettings())),
   );
 
+  // t4 fork: only a readable opt-out stops restart wakes in an invalid file.
+  it.effect.each([
+    ['{"projectSettingsFolded":{}}', true],
+    ['{"projectSettingsFolded":{},"continueThreadsAfterServerUpdate":true}', true],
+    [
+      '{"projectSettingsFolded":{},"projectSettingsOverrides":{"p":{"continueThreadsAfterServerUpdate":false}}}',
+      false,
+    ],
+  ] as const)("reads the restart opt-out from invalid settings %s", ([raw, continues]) =>
+    Effect.gen(function* () {
+      const serverConfig = yield* ServerConfig.ServerConfig;
+      const fileSystem = yield* FileSystem.FileSystem;
+      const serverSettings = yield* ServerSettingsModule.ServerSettingsService;
+      yield* fileSystem.writeFileString(serverConfig.settingsPath, raw);
+
+      const settings = yield* serverSettings.getSettings;
+
+      assert.equal(settings.continueThreadsAfterServerUpdate, continues);
+      assert.equal(yield* fileSystem.readFileString(serverConfig.settingsPath), raw);
+    }).pipe(Effect.provide(layerServerSettings())),
+  );
+
   it.effect("keeps a default-off provider's new instance disabled and sparse on disk", () =>
     Effect.gen(function* () {
       const serverConfig = yield* ServerConfig.ServerConfig;
