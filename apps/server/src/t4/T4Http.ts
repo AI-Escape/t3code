@@ -104,10 +104,13 @@ const LaunchBody = Schema.Struct({
   modelSelection: Schema.optional(ModelSelection),
   force: Schema.optional(Schema.Boolean),
 });
+const AnswerValue = Schema.Union([Schema.String, Schema.Array(Schema.String)]);
 const AnswerBody = Schema.Struct({
   requestId: Schema.String,
-  /** The answer to the request's only (or first) question: an option label, or free text. */
-  answer: Schema.Union([Schema.String, Schema.Array(Schema.String)]),
+  /** The answer to the request's only question: an option label (or several), or free text. */
+  answer: Schema.optional(AnswerValue),
+  /** t4 fork: every question's answer, by question id (the dashboard's own question window). */
+  answers: Schema.optional(Schema.Record(Schema.String, AnswerValue)),
 });
 const MessageBody = Schema.Struct({
   text: Schema.String,
@@ -588,6 +591,84 @@ export const layer = Layer.mergeAll(
   ),
 
   // The dashboard answers a one-question card the way T3's own card does.
+  // t4 fork: an open question in full, with what the agent wrote around it
+  // (the messages of the turn that asked), for the dashboard's own question
+  // window. Read on demand, never polled.
+  route("GET", "/api/t4/threads/:threadId/question", AuthOrchestrationReadScope, (params) =>
+    Effect.gen(function* () {
+      const threads = yield* ThreadManagementService.ThreadManagementService;
+      const request = yield* HttpServerRequest.HttpServerRequest;
+      const requestId = new URL(request.url, "http://t4.local").searchParams.get("requestId");
+      const threadId = ThreadId.make(params.threadId ?? "");
+      const thread = yield* threads.getThreadShell(threadId);
+      if (thread === null) return json({ error: "thread not found" }, 404);
+      const records = yield* threads.getProjectThreadRecords(
+        { projectId: thread.projectId, threadId },
+        ["turnItems", "runtimeRequests"],
+        { turnItemTypes: ["user_input_request"] },
+      );
+      const open = records.runtimeRequests.find(
+        (candidate) =>
+          candidate.status === "pending" && (requestId === null || candidate.id === requestId),
+      );
+      if (open === undefined) return json({ error: "that question is no longer open" }, 409);
+      const item = records.turnItems.find(
+        (candidate) => candidate.type === "user_input_request" && candidate.requestId === open.id,
+      );
+      if (item?.type !== "user_input_request") return json({ error: "not a question" }, 400);
+      // The turn that asked and any since (a follow-up and its reply), at most six.
+      const runs =
+        item.runId === null
+          ? []
+          : yield* threads
+              .getProjectThreadRecords({ projectId: thread.projectId, threadId }, ["runs"])
+              .pipe(
+                Effect.map((r) => r.runs),
+                Effect.orElseSucceed(() => []),
+              );
+      const asked = runs.find((run) => run.id === item.runId);
+      const runIds =
+        asked === undefined
+          ? item.runId === null
+            ? []
+            : [item.runId]
+          : runs
+              .filter((run) => run.ordinal >= asked.ordinal)
+              .sort((a, b) => a.ordinal - b.ordinal)
+              .slice(0, 6)
+              .map((run) => run.id);
+      const messages =
+        runIds.length === 0
+          ? []
+          : yield* threads
+              .getProjectThreadRecords({ projectId: thread.projectId, threadId }, ["messages"], {
+                messageRunIds: runIds,
+              })
+              .pipe(
+                Effect.map((r) => r.messages),
+                Effect.orElseSucceed(() => []),
+              );
+      return json({
+        requestId: open.id,
+        threadId,
+        title: thread.title,
+        responseMode: open.responseCapability.type,
+        askedAt: DateTime.formatIso(open.createdAt),
+        questions: item.questions.map((q) => ({
+          id: q.id,
+          header: q.header,
+          question: q.question,
+          multiSelect: q.multiSelect === true,
+          options: q.options.map((o) => ({ label: o.label, description: o.description })),
+        })),
+        messages: messages
+          .filter((m) => m.role !== "system" && m.text.trim().length > 0)
+          .slice(-12)
+          .map((m) => ({ role: m.role, text: m.text, createdAt: DateTime.formatIso(m.createdAt) })),
+      });
+    }),
+  ),
+
   route("POST", "/api/t4/threads/:threadId/answer", AuthOrchestrationOperateScope, (params) =>
     Effect.gen(function* () {
       const input = yield* body(AnswerBody);
@@ -609,23 +690,36 @@ export const layer = Layer.mergeAll(
           candidate.type === "user_input_request" && candidate.requestId === request.id,
       );
       const questions = item?.type === "user_input_request" ? item.questions : [];
-      if (questions.length !== 1) {
-        return json({ error: "answer this one in T3: it asks more than one question" }, 400);
-      }
-      const raw = input.answer;
-      const answer =
+      if (questions.length === 0) return json({ error: "that request asks no question" }, 400);
+      const clean = (raw: typeof AnswerValue.Type) =>
         typeof raw === "string"
           ? raw.trim()
           : raw.map((pick) => pick.trim()).filter((pick) => pick.length > 0);
-      if (answer.length === 0) return json({ error: "empty answer" }, 400);
+      const given: Record<string, typeof AnswerValue.Type> =
+        input.answers ??
+        (input.answer !== undefined && questions.length === 1
+          ? { [questions[0]!.id]: input.answer }
+          : {});
+      const answers: Record<string, string | ReadonlyArray<string>> = {};
+      for (const question of questions) {
+        const raw = given[question.id];
+        const answer = raw === undefined ? "" : clean(raw);
+        if (answer.length === 0)
+          return json(
+            { error: `answer every question (missing: ${question.header || question.question})` },
+            400,
+          );
+        answers[question.id] = answer;
+      }
       const crypto = yield* Crypto.Crypto;
       yield* threads.dispatch({
         type: "runtime-request.respond",
         commandId: CommandId.make(`t4:dashboard-answer:${yield* crypto.randomUUIDv4()}`),
         threadId,
         requestId: request.id,
-        answers: { [questions[0]!.id]: answer },
+        answers,
       });
+      pendingCache = null;
       return json({ ok: true });
     }),
   ),
