@@ -7,6 +7,7 @@ import { afterEach, describe, expect, it } from "vite-plus/test";
 
 import {
   claudeAccountEnvironment,
+  claudeSideProcessEnvironment,
   isClaudeAccountExhausted,
   markClaudeAccountExhausted,
   pickClaudeAccount,
@@ -126,6 +127,27 @@ describe("t4 claudeAccounts", () => {
     expect(isClaudeAccountExhausted("main", 1_000, noLogin)).toBe(true);
     FS.writeFileSync(Path.join(home, ".claude", ".credentials.json"), "{}");
     expect(pickClaudeAccount(1_000, noLogin)).toEqual({ key: "main" });
+  });
+
+  it("signs the status check and text generation in with an account, used up or not", () => {
+    const { dir, env } = setup();
+    const home = FS.mkdtempSync(Path.join(OS.tmpdir(), "t4-home-"));
+    const noLogin = { ...env, HOME: home } as NodeJS.ProcessEnv;
+    expect(claudeSideProcessEnvironment({ A: "1" }, 1_000, noLogin)).toEqual({
+      A: "1",
+      CLAUDE_CODE_OAUTH_TOKEN: "token-one",
+    });
+    markClaudeAccountExhausted("1", 90_000, 1_000, noLogin);
+    expect(claudeSideProcessEnvironment({}, 1_000, noLogin).CLAUDE_CODE_OAUTH_TOKEN).toBe("token-two");
+    // Every account used up and no main login: a used-up account still signs in.
+    markClaudeAccountExhausted("2", 90_000, 1_000, noLogin);
+    expect(claudeSideProcessEnvironment({}, 1_000, noLogin).CLAUDE_CODE_OAUTH_TOKEN).toBe("token-one");
+    // No usable account at all: left as it is, so T3 reports it unauthenticated.
+    FS.rmSync(Path.join(dir, "1.token"));
+    FS.rmSync(Path.join(dir, "2.token"));
+    expect(claudeSideProcessEnvironment({ A: "1" }, 1_000, noLogin)).toEqual({ A: "1" });
+    // Without t4 accounts nothing changes.
+    expect(claudeSideProcessEnvironment({ A: "1" }, 1_000, { HOME: home })).toEqual({ A: "1" });
   });
 
   it("skips an account whose token file is missing", () => {

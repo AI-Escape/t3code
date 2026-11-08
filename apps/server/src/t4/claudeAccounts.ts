@@ -214,6 +214,31 @@ export const claudeAccountEnvironment = (
     : { ...environment, CLAUDE_CODE_OAUTH_TOKEN: account.token };
 
 /**
+ * The environment for a Claude process T3 starts beside the sessions: the
+ * provider status check (whose "not authenticated" answer is T3's red banner)
+ * and Claude text generation. They ran on the main login only, which t4's own
+ * ~/.claude doesn't have since 2026-11-07, so every client said "Claude is
+ * unauthenticated" while its sessions ran on the dashboard's accounts. They
+ * get the account a new session would, else the first one with a token: a
+ * used-up account still signs in, so only a client with no usable account at
+ * all is reported unauthenticated.
+ */
+export const claudeSideProcessEnvironment = (
+  environment: NodeJS.ProcessEnv,
+  nowMs: number,
+  env: NodeJS.ProcessEnv = process.env,
+): NodeJS.ProcessEnv => {
+  const picked = pickClaudeAccount(nowMs, env);
+  if (picked.token !== undefined || mainLoginAvailable(env))
+    return claudeAccountEnvironment(environment, picked);
+  for (const file of accountFiles(env)) {
+    const token = readToken(file);
+    if (token !== undefined) return claudeAccountEnvironment(environment, { key: keyOf(file), token });
+  }
+  return environment;
+};
+
+/**
  * Records that `key` hit its usage limit until `resetAtMs` (an hour when
  * Claude gave no reset). Returns when the thread can go on: `nowMs` when
  * another account is free, else the earliest time any account frees up -
