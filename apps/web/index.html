@@ -212,6 +212,19 @@
           }
         };
 
+        // t4: the t4 app opens T3 in a frame with ?appearance=dark; a frame
+        // with no theme chosen yet takes t4's (a Home Screen app has its own
+        // storage, so Safari's choice does not carry over).
+        try {
+          const t4Appearance = new URLSearchParams(window.location.search).get("appearance");
+          if (
+            (t4Appearance === "dark" || t4Appearance === "light") &&
+            window.localStorage.getItem("t3code:theme") === null
+          ) {
+            window.localStorage.setItem("t3code:theme", t4Appearance);
+          }
+        } catch {}
+
         try {
           const storedTheme = window.localStorage.getItem("t3code:theme");
           const prefersDark = window.matchMedia("(prefers-color-scheme: dark)").matches;
