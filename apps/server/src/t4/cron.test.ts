@@ -1,5 +1,7 @@
 import { assert, describe, it } from "@effect/vitest";
+import { ScheduledTaskSchedule } from "@t3tools/contracts";
 import * as DateTime from "effect/DateTime";
+import * as Schema from "effect/Schema";
 
 import { nextScheduledRunAt } from "../scheduledTasks/Schedule.ts";
 import { nextCronRunAt, parseCron } from "./cron.ts";
@@ -70,12 +72,31 @@ describe("t4 cron", () => {
 
 describe("t4 once schedule", () => {
   it("runs once in the future and never again", () => {
-    const schedule = { type: "once" as const, at: "2026-10-17T12:00:00.000Z" };
+    const schedule = { type: "once" as const, runAt: "2026-10-17T12:00:00.000Z" };
     assert.equal(
       iso(nextScheduledRunAt(schedule, utc("2026-10-17T10:00:00.000Z"))),
       "2026-10-17T12:00:00.000Z",
     );
     assert.isNull(nextScheduledRunAt(schedule, utc("2026-10-17T12:00:00.000Z")));
+  });
+
+  it("decodes a wake stored as {type:'once', at} to upstream's runAt", () => {
+    const decode = Schema.decodeUnknownSync(ScheduledTaskSchedule);
+    assert.deepEqual(decode({ type: "once", at: "2026-10-17T12:00:00.000Z" }), {
+      type: "once",
+      runAt: "2026-10-17T12:00:00.000Z",
+    });
+    assert.deepEqual(decode({ type: "once", runAt: "2026-10-17T12:00:00.000Z" }), {
+      type: "once",
+      runAt: "2026-10-17T12:00:00.000Z",
+    });
+    assert.deepEqual(
+      Schema.encodeSync(ScheduledTaskSchedule)({ type: "once", runAt: "2026-10-17T12:00:00.000Z" }),
+      {
+        type: "once",
+        runAt: "2026-10-17T12:00:00.000Z",
+      },
+    );
   });
 });
 

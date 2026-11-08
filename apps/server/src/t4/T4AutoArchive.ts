@@ -16,7 +16,7 @@
  */
 import { CommandId, type OrchestrationV2ThreadShell, ThreadId } from "@t3tools/contracts";
 import * as Clock from "effect/Clock";
-import * as Crypto from "effect/Crypto";
+import * as SecureRandom from "effect/crypto/SecureRandom";
 import * as DateTime from "effect/DateTime";
 import * as Effect from "effect/Effect";
 
@@ -74,7 +74,7 @@ export const sweep = Effect.gen(function* () {
   if (ARCHIVE_SETTLED_MS === null) return;
   const ledger = yield* T4Ledger.T4Ledger;
   const threads = yield* ThreadManagementService.ThreadManagementService;
-  const crypto = yield* Crypto.Crypto;
+  const crypto = yield* SecureRandom.SecureRandom;
   const world = yield* ledger.world();
   const now = yield* Clock.currentTimeMillis;
   const targets = toArchive(
@@ -86,7 +86,7 @@ export const sweep = Effect.gen(function* () {
   if (targets.length === 0) return;
   let done = 0;
   for (const thread of targets) {
-    const uuid = yield* crypto.randomUUIDv4().pipe(Effect.orDie);
+    const uuid = yield* crypto.uuidV4().pipe(Effect.orDie);
     const ok = yield* threads
       .dispatch({
         type: "thread.archive",

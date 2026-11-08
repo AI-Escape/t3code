@@ -1,4 +1,5 @@
 import * as Schema from "effect/Schema";
+import * as SchemaTransformation from "effect/SchemaTransformation";
 
 import {
   CommandId,
@@ -42,6 +43,34 @@ const ScheduledTaskFixedTimeSchedule = Schema.Struct({
     ).annotate({
       description: "Default: every day.",
     }),
+  ),
+});
+
+const ISO_WITH_OFFSET =
+  /^(\d{4})-(\d{2})-(\d{2})T([01]\d|2[0-3]):[0-5]\d(:[0-5]\d(\.\d+)?)?(Z|[+-]\d{2}:\d{2})$/;
+
+const YEAR_0000 = Date.parse("0000-01-01T00:00:00Z");
+const YEAR_10000 = Date.parse("+010000-01-01T00:00:00Z");
+
+/** Date.parse rolls impossible days like Feb 30 into the next month, so check the day too. */
+function isIsoWithOffset(value: string): boolean {
+  const match = ISO_WITH_OFFSET.exec(value);
+  // The server stores UTC, which must stay a four-digit year to decode again.
+  const time = Date.parse(value);
+  if (!match || !(time >= YEAR_0000 && time < YEAR_10000)) return false;
+  const [year, month, day] = [Number(match[1]), Number(match[2]), Number(match[3])];
+  const leap = year % 4 === 0 && (year % 100 !== 0 || year % 400 === 0);
+  const days = [31, leap ? 29 : 28, 31, 30, 31, 30, 31, 31, 30, 31, 30, 31][month - 1];
+  return days !== undefined && day >= 1 && day <= days;
+}
+
+// Checked by filter, not pattern, to keep the MCP tool schema small.
+const ScheduledTaskOnceSchedule = Schema.Struct({
+  type: Schema.Literal("once"),
+  runAt: TrimmedNonEmptyString.check(
+    Schema.makeFilter(
+      (value) => isIsoWithOffset(value) || "Expected an ISO date and time with an offset.",
+    ),
   ),
 });
 
@@ -162,13 +191,23 @@ const ScheduledTaskUpsertWebhookSchedule = Schema.Struct({
     "Run per webhook request. Prompt can use {{body.path}}, {{headers.name}}, {{query.name}}, {{body}}, {{request}}.",
 });
 
-// t4 fork: one-shot and cron schedules (t4's wakes). A `once` task has no
-// next run after it fires.
-const ScheduledTaskOnceSchedule = Schema.Struct({
-  type: Schema.Literal("once").annotate({ description: "Run once, at a given time." }),
-  at: IsoDateTime.annotate({ description: "When to run, as an ISO 8601 instant." }),
-}).annotate({ description: "Run once at a given time." });
+// t4 fork: t4's wakes were stored as {type:'once', at} before upstream's own
+// {type:'once', runAt} (v0.1.7); stored wakes and agents that pass `at` still
+// decode, to runAt.
+const ScheduledTaskLegacyOnceSchedule = Schema.Struct({
+  type: Schema.Literal("once"),
+  at: TrimmedNonEmptyString.annotate({ description: "When to run, as an ISO 8601 instant." }),
+}).pipe(
+  Schema.decodeTo(
+    ScheduledTaskOnceSchedule,
+    SchemaTransformation.transform({
+      decode: ({ at }) => ({ type: "once" as const, runAt: at }),
+      encode: ({ runAt }) => ({ type: "once" as const, at: runAt }),
+    }),
+  ),
+);
 
+// t4 fork: cron schedules (t4's wakes).
 const ScheduledTaskCronSchedule = Schema.Struct({
   type: Schema.Literal("cron").annotate({ description: "Select cron scheduling." }),
   expression: TrimmedNonEmptyString.check(
@@ -183,8 +222,9 @@ const ScheduledTaskCronSchedule = Schema.Struct({
 export const ScheduledTaskSchedule = Schema.Union([
   ScheduledTaskIntervalSchedule,
   ScheduledTaskFixedTimeSchedule,
-  ScheduledTaskWebhookSchedule,
   ScheduledTaskOnceSchedule,
+  ScheduledTaskWebhookSchedule,
+  ScheduledTaskLegacyOnceSchedule,
   ScheduledTaskCronSchedule,
 ]);
 export type ScheduledTaskSchedule = typeof ScheduledTaskSchedule.Type;
@@ -199,8 +239,9 @@ export const ScheduledTaskUpsertSchedule = Schema.Union([
     }),
   }),
   ScheduledTaskFixedTimeSchedule,
-  ScheduledTaskUpsertWebhookSchedule,
   ScheduledTaskOnceSchedule,
+  ScheduledTaskUpsertWebhookSchedule,
+  ScheduledTaskLegacyOnceSchedule,
   ScheduledTaskCronSchedule,
 ]);
 export type ScheduledTaskUpsertSchedule = typeof ScheduledTaskUpsertSchedule.Type;
@@ -237,6 +278,8 @@ export const ScheduledTask = Schema.Struct({
   lastRunError: Schema.NullOr(Schema.String),
   runCount: Schema.Int.check(Schema.isGreaterThanOrEqualTo(0)),
   webhook: Schema.optional(ScheduledTaskWebhookEndpoint),
+  /** Why the task cannot run regardless of `enabled`, such as a managed policy refusing webhooks. */
+  blockedByPolicy: Schema.optionalKey(Schema.String),
 });
 export type ScheduledTask = typeof ScheduledTask.Type;
 

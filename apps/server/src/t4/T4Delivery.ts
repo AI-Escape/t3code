@@ -29,7 +29,7 @@ import {
   type ThreadId,
 } from "@t3tools/contracts";
 import * as Context from "effect/Context";
-import * as Crypto from "effect/Crypto";
+import * as SecureRandom from "effect/crypto/SecureRandom";
 import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
 import * as Schema from "effect/Schema";
@@ -126,8 +126,8 @@ export const make = Effect.gen(function* () {
   const store = yield* T4Store.T4Store;
   const ledger = yield* T4Ledger.T4Ledger;
   const config = yield* T4Config.T4ServerConfig;
-  const crypto = yield* Crypto.Crypto;
-  const uuid = crypto.randomUUIDv4().pipe(Effect.orDie);
+  const crypto = yield* SecureRandom.SecureRandom;
+  const uuid = crypto.uuidV4().pipe(Effect.orDie);
 
   const fail = (message: string) => (cause: unknown) => new T4DeliveryError({ message, cause });
 

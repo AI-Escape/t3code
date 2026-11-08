@@ -16,7 +16,7 @@ import {
   ThreadId,
 } from "@t3tools/contracts";
 import * as Clock from "effect/Clock";
-import * as Crypto from "effect/Crypto";
+import * as SecureRandom from "effect/crypto/SecureRandom";
 import * as DateTime from "effect/DateTime";
 import * as Duration from "effect/Duration";
 import * as Effect from "effect/Effect";
@@ -364,7 +364,7 @@ export const layer = Layer.mergeAll(
       const input = yield* body(LaunchBody);
       const launches = yield* ThreadLaunch.ThreadLaunchService;
       const config = yield* T4Config.T4ServerConfig;
-      const crypto = yield* Crypto.Crypto;
+      const crypto = yield* SecureRandom.SecureRandom;
       const issues = input.issues ?? [];
       const before = yield* T4Spawn.beforeLaunch({
         caller: undefined,
@@ -383,7 +383,7 @@ export const layer = Layer.mergeAll(
           { error: "pass modelPreset or modelSelection (the client has no default model)" },
           400,
         );
-      const id = yield* crypto.randomUUIDv4().pipe(Effect.orDie);
+      const id = yield* crypto.uuidV4().pipe(Effect.orDie);
       // V2 creates the worktree after accepting the launch, so a branch that
       // already exists would fail later; take a fresh one beside it now.
       let branch = input.branch;
@@ -458,13 +458,13 @@ export const layer = Layer.mergeAll(
   route("POST", "/api/t4/threads/:threadId/restore", AuthOrchestrationOperateScope, (params) =>
     Effect.gen(function* () {
       const threads = yield* ThreadManagementService.ThreadManagementService;
-      const crypto = yield* Crypto.Crypto;
+      const crypto = yield* SecureRandom.SecureRandom;
       const threadId = ThreadId.make(params.threadId ?? "");
       const thread = yield* threads.getThreadShell(threadId);
       if (thread === null) return json({ error: "thread not found" }, 404);
       const done: Array<string> = [];
       const command = (type: string) =>
-        crypto.randomUUIDv4().pipe(
+        crypto.uuidV4().pipe(
           Effect.orDie,
           Effect.map((uuid) => CommandId.make(`t4:restore:${type}:${uuid}`)),
         );
@@ -528,11 +528,11 @@ export const layer = Layer.mergeAll(
   route("POST", "/api/t4/threads/:threadId/delete", AuthOrchestrationOperateScope, (params) =>
     Effect.gen(function* () {
       const threads = yield* ThreadManagementService.ThreadManagementService;
-      const crypto = yield* Crypto.Crypto;
+      const crypto = yield* SecureRandom.SecureRandom;
       const threadId = ThreadId.make(params.threadId ?? "");
       if ((yield* threads.getThreadShell(threadId)) === null)
         return json({ error: "thread not found" }, 404);
-      const uuid = yield* crypto.randomUUIDv4().pipe(Effect.orDie);
+      const uuid = yield* crypto.uuidV4().pipe(Effect.orDie);
       yield* threads.dispatch({
         type: "thread.delete",
         commandId: CommandId.make(`t4:delete:${uuid}`),
@@ -711,10 +711,10 @@ export const layer = Layer.mergeAll(
           );
         answers[question.id] = answer;
       }
-      const crypto = yield* Crypto.Crypto;
+      const crypto = yield* SecureRandom.SecureRandom;
       yield* threads.dispatch({
         type: "runtime-request.respond",
-        commandId: CommandId.make(`t4:dashboard-answer:${yield* crypto.randomUUIDv4()}`),
+        commandId: CommandId.make(`t4:dashboard-answer:${yield* crypto.uuidV4()}`),
         threadId,
         requestId: request.id,
         answers,

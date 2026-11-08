@@ -14,7 +14,7 @@ import type { OrchestrationV2ThreadShell } from "@t3tools/contracts";
 import { CommandId } from "@t3tools/contracts";
 import * as Clock from "effect/Clock";
 import * as Context from "effect/Context";
-import * as Crypto from "effect/Crypto";
+import * as SecureRandom from "effect/crypto/SecureRandom";
 import * as DateTime from "effect/DateTime";
 import * as Effect from "effect/Effect";
 import * as FileSystem from "effect/FileSystem";
@@ -59,7 +59,7 @@ export const make = Effect.gen(function* () {
   const processes = yield* ProcessRunner.ProcessRunner;
   const fileSystem = yield* FileSystem.FileSystem;
   const path = yield* Path.Path;
-  const crypto = yield* Crypto.Crypto;
+  const crypto = yield* SecureRandom.SecureRandom;
 
   const refusal: T4SettleShape["refusal"] = Effect.fn("t4.T4Settle.refusal")(
     function* (thread: Parameters<T4SettleShape["refusal"]>[0]) {
@@ -227,7 +227,7 @@ export const make = Effect.gen(function* () {
         }
       }
       if (isRunning(thread) || thread.pendingRuntimeRequest !== null) continue;
-      const uuid = yield* crypto.randomUUIDv4().pipe(Effect.orDie);
+      const uuid = yield* crypto.uuidV4().pipe(Effect.orDie);
       const settled = yield* threads
         .dispatch({
           type: "thread.settle",

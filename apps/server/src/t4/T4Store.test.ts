@@ -1,3 +1,4 @@
+import * as NodeCrypto from "@effect/platform-node/NodeCrypto";
 import * as NodeServices from "@effect/platform-node/NodeServices";
 import { assert, describe, it } from "@effect/vitest";
 import * as Effect from "effect/Effect";
@@ -8,7 +9,7 @@ import * as T4Store from "./T4Store.ts";
 
 const layer = T4Store.layer.pipe(
   Layer.provideMerge(T4Sql.layerMemory),
-  Layer.provide(NodeServices.layer),
+  Layer.provide(Layer.mergeAll(NodeServices.layer, NodeCrypto.layer)),
 );
 
 describe("T4Store", () => {

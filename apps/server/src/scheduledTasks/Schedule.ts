@@ -1,5 +1,6 @@
 import { MIN_SCHEDULED_TASK_INTERVAL_MS, type ScheduledTaskSchedule } from "@t3tools/contracts";
 import * as DateTime from "effect/DateTime";
+import * as Option from "effect/Option";
 
 import { nextCronRunAt } from "../t4/cron.ts";
 
@@ -16,12 +17,14 @@ export function nextScheduledRunAt(
   from: DateTime.DateTime,
 ): DateTime.DateTime | null {
   if (schedule.type === "webhook") return null;
-  // t4 fork: one-shot and cron schedules.
   if (schedule.type === "once") {
-    const at = DateTime.make(schedule.at);
-    if (at._tag === "None") return null;
-    return DateTime.toEpochMillis(at.value) > DateTime.toEpochMillis(from) ? at.value : null;
+    const runAt = DateTime.make(schedule.runAt);
+    return Option.isSome(runAt) &&
+      DateTime.toEpochMillis(runAt.value) > DateTime.toEpochMillis(from)
+      ? runAt.value
+      : null;
   }
+  // t4 fork: cron schedules.
   if (schedule.type === "cron") return nextCronRunAt(schedule.expression, from);
   if (schedule.type === "interval") {
     // Intervals advance elapsed time, including across daylight-saving changes.
@@ -57,7 +60,8 @@ export function isSameSchedule(a: ScheduledTaskSchedule, b: ScheduledTaskSchedul
     return b.type === "interval" && a.everyMs === b.everyMs;
   }
   if (a.type === "webhook") return b.type === "webhook";
-  if (a.type === "once") return b.type === "once" && a.at === b.at;
+  if (a.type === "once") return b.type === "once" && Date.parse(a.runAt) === Date.parse(b.runAt);
+  // t4 fork: cron schedules.
   if (a.type === "cron") return b.type === "cron" && a.expression.trim() === b.expression.trim();
   if (b.type !== "fixed_time") return false;
   // Compare parsed times so padded-hour edits do not reschedule pending runs.

@@ -11,7 +11,7 @@ import {
   ThreadId,
 } from "@t3tools/contracts";
 import * as Clock from "effect/Clock";
-import * as Crypto from "effect/Crypto";
+import * as SecureRandom from "effect/crypto/SecureRandom";
 import * as DateTime from "effect/DateTime";
 import * as Effect from "effect/Effect";
 import * as Option from "effect/Option";
@@ -269,9 +269,9 @@ export const layer = McpToolAccess.toLayer(T4Toolkit, {
 
       if (target === undefined) {
         // No release manager yet: start one with this handoff as its first turn.
-        const crypto = yield* Crypto.Crypto;
+        const crypto = yield* SecureRandom.SecureRandom;
         const launches = yield* ThreadLaunch.ThreadLaunchService;
-        const id = yield* crypto.randomUUIDv4().pipe(Effect.orDie);
+        const id = yield* crypto.uuidV4().pipe(Effect.orDie);
         const title = `${config.releaseManagerTitlePrefix} — ${project.title}`;
         const repo = project.workspaceRoot.split("/").filter(Boolean).at(-1) ?? project.title;
         const intro =

@@ -6,7 +6,7 @@
  * legacy import) shares one copy of the persistence code.
  */
 import * as Context from "effect/Context";
-import * as Crypto from "effect/Crypto";
+import * as SecureRandom from "effect/crypto/SecureRandom";
 import * as DateTime from "effect/DateTime";
 import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
@@ -198,8 +198,8 @@ export const nowIso = DateTime.now.pipe(Effect.map(DateTime.formatIso));
 
 export const make = Effect.gen(function* () {
   const sql = yield* SqlClient.SqlClient;
-  const crypto = yield* Crypto.Crypto;
-  const newId = crypto.randomUUIDv4().pipe(
+  const crypto = yield* SecureRandom.SecureRandom;
+  const newId = crypto.uuidV4().pipe(
     Effect.orDie,
     Effect.map((uuid) => uuid.replaceAll("-", "").slice(0, 10)),
   );

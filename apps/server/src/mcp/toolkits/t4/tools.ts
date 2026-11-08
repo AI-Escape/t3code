@@ -5,7 +5,7 @@
  * `cmd_decisions`); docs/t4/DESIGN.md.
  */
 import { OrchestratorMcpFailure, ProjectId, ThreadId } from "@t3tools/contracts";
-import * as Crypto from "effect/Crypto";
+import * as SecureRandom from "effect/crypto/SecureRandom";
 import * as Schema from "effect/Schema";
 import * as SqlClient from "effect/sql/SqlClient";
 import { Tool, Toolkit } from "effect/ai";
@@ -37,7 +37,7 @@ const common = {
     T4Delivery.T4Delivery,
     T4Ledger.T4Ledger,
     T4Store.T4Store,
-    Crypto.Crypto,
+    SecureRandom.SecureRandom,
     // T3's database, for `t3_decisions` (t4/T4Decisions.ts).
     SqlClient.SqlClient,
   ],

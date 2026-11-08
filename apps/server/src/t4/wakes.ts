@@ -10,7 +10,7 @@ export const MAX_ONE_SHOT_MS = 30 * 86_400_000;
 export const MIN_WAKE_INTERVAL_MS = 5 * 60_000;
 
 export type WakeSchedule =
-  | { readonly type: "once"; readonly at: string }
+  | { readonly type: "once"; readonly runAt: string }
   | { readonly type: "once"; readonly delayMs: number }
   | { readonly type: "interval"; readonly everyMs: number }
   | { readonly type: "cron"; readonly expression: string }
@@ -41,7 +41,7 @@ export function wakeRefusal(
     return `that thread already has ${pendingForThread} pending wakes - cancel one first (list_scheduled_tasks, delete_scheduled_task)`;
   }
   if (schedule.type === "once") {
-    const due = "delayMs" in schedule ? nowMs + schedule.delayMs : Date.parse(schedule.at);
+    const due = "delayMs" in schedule ? nowMs + schedule.delayMs : Date.parse(schedule.runAt);
     if (!Number.isFinite(due) || due <= nowMs) return "a one-shot wake needs a time in the future";
     if (due - nowMs > MAX_ONE_SHOT_MS) return "one-shot wakes can be at most 30 days out";
   }

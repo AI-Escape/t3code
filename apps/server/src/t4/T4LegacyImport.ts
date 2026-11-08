@@ -142,7 +142,7 @@ export const run = Effect.gen(function* () {
               }
             : {
                 type: "once" as const,
-                at:
+                runAt:
                   Date.parse(w.due) > now
                     ? w.due
                     : DateTime.formatIso(DateTime.makeUnsafe(now + 60_000)),

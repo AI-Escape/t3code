@@ -9,7 +9,7 @@
  */
 import { CommandId, type OrchestrationV2ThreadShell } from "@t3tools/contracts";
 import * as Clock from "effect/Clock";
-import * as Crypto from "effect/Crypto";
+import * as SecureRandom from "effect/crypto/SecureRandom";
 import * as DateTime from "effect/DateTime";
 import * as Duration from "effect/Duration";
 import * as Effect from "effect/Effect";
@@ -109,7 +109,7 @@ export const sweep = Effect.gen(function* () {
   const store = yield* T4Store.T4Store;
   const delivery = yield* T4Delivery.T4Delivery;
   const threads = yield* ThreadManagementService.ThreadManagementService;
-  const crypto = yield* Crypto.Crypto;
+  const crypto = yield* SecureRandom.SecureRandom;
   const world = yield* ledger.world();
   for (const thread of world.threads.filter((t) => isRunning(t))) {
     const minutes = yield* silentMinutes(thread, config.stallRecovery.silenceMinutes);
@@ -119,7 +119,7 @@ export const sweep = Effect.gen(function* () {
       DateTime.makeUnsafe(now - config.stallRecovery.repeatHours * 3600_000),
     );
     const previous = yield* store.recentStalls(thread.id, since);
-    const uuid = yield* crypto.randomUUIDv4().pipe(Effect.orDie);
+    const uuid = yield* crypto.uuidV4().pipe(Effect.orDie);
     const interrupted = yield* threads
       .interruptThread({
         projectId: thread.projectId,
