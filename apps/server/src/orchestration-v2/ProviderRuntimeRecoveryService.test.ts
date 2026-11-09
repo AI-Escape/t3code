@@ -418,7 +418,8 @@ it.effect("cancels a stale waiting run when no checkpoint capture can finish it"
   }).pipe(Effect.provide(layer));
 });
 
-it.effect("recovery closes a secret card's form but leaves a link card open", () => {
+// t4 fork: a secret card waits on the user too, and its answer arrives as a message.
+it.effect("recovery leaves secret and link cards open", () => {
   const threadId = ThreadId.make("thread_secret_recovery");
   const runId = RunId.make("run_secret_recovery");
   let committedInput: Parameters<EventSink.EventSinkV2["Service"]["commitCommand"]>[0] | null =
@@ -490,12 +491,9 @@ it.effect("recovery closes a secret card's form but leaves a link card open", ()
     const cards = (committedInput?.events ?? []).flatMap((event) =>
       event.type === "turn-item.updated" ? [event.payload] : [],
     );
-    const secret = cards.find((card) => card.type === "secret_request");
-    assert.equal(secret?.status, "cancelled");
-    assert.equal(secret?.type === "secret_request" ? secret.secretStatus : null, "cancelled");
-    // Nothing in memory waits on a link card; the user can still answer it.
+    // Nothing in memory waits on either card; the user can still answer both.
     assert.equal(
-      cards.some((card) => card.type === "link_request"),
+      cards.some((card) => card.type === "secret_request" || card.type === "link_request"),
       false,
     );
   }).pipe(Effect.provide(layer));

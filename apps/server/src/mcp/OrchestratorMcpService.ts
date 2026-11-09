@@ -8,6 +8,7 @@ import {
   ORCHESTRATOR_MCP_RUNNING_TASK_NEXT,
   TurnItemId,
   type OrchestrationV2Run,
+  type OrchestrationV2SecretRequestStatus,
   type OrchestrationV2Subagent,
   type OrchestrationV2ThreadProjection,
   type OrchestrationV2ThreadShell,
@@ -123,7 +124,6 @@ import {
   taskPrompt,
 } from "./delegatedTaskModes.ts";
 import { isLiveCallerShell, threadNotFound } from "./threadAccess.ts";
-import * as SecretRequests from "../secrets/SecretRequests.ts";
 import * as PeerForwarding from "../peer/PeerForwarding.ts";
 import * as RemoteDelegation from "../peer/RemoteDelegation.ts";
 // t4 fork: agents delegate only on models the user chose.
@@ -138,7 +138,25 @@ const TASK_WAKE_EVENTS = [
   { thread: "child", eventType: "provider-thread.updated" },
   { thread: "child", eventType: "runtime-request.updated" },
 ] as const;
-const SECRET_REQUEST_POLL_INTERVAL_MS = 500;
+/** t4 fork: what request_secret answers for a card in each state. */
+const secretRequestResult = (
+  status: OrchestrationV2SecretRequestStatus,
+): OrchestratorMcpRequestSecretResult => {
+  switch (status) {
+    case "pending":
+      return {
+        status: "pending",
+        note: "The card is open and stays open until the user answers. End your turn now, with what the secret is for and where to get it in your final message. When the user enters it, a message brings you the file path (or secretRef). Do not ask again or schedule a re-ask for it.",
+      };
+    case "saved":
+      return {
+        status: "sent",
+        note: "The user already entered it; the file path (or secretRef) was sent to you in a message.",
+      };
+    default:
+      return { status };
+  }
+};
 const DEFAULT_THREAD_LIST_LIMIT = 50;
 const DEFAULT_THREAD_READ_LIMIT = 50;
 const DEFAULT_THREAD_RUN_LIMIT = 10;
@@ -1049,7 +1067,6 @@ const make = Effect.gen(function* () {
           ),
         )
       : Effect.succeed(project.defaultModelSelection);
-  const secretRequests = yield* SecretRequests.SecretRequests;
 
   const requireCapability = (scope: McpInvocationScope) =>
     scope.capabilities.has("orchestration")
@@ -2180,121 +2197,82 @@ const make = Effect.gen(function* () {
           "Asking for a secret requires an active run owned by this MCP provider session.",
         );
       }
-      const runId = run.id;
-      const nodeId = run.rootNodeId;
       const key = yield* requestKey(input.clientRequestId);
       const turnItemId = TurnItemId.make(
         `turn-item:secret-request:${stablePart(threadId)}:${stablePart(key)}`,
       );
-      const record = (secretStatus: "pending" | "cancelled") =>
-        threadManagement
+      const cards = yield* threadManagement
+        .getThreadRecords(threadId, ["turnItems"], {
+          turnItemTypes: ["secret_request"],
+          messageRoles: [],
+        })
+        .pipe(
+          Effect.map((records) =>
+            records.turnItems.flatMap((item) => (item.type === "secret_request" ? [item] : [])),
+          ),
+          Effect.mapError((error) =>
+            failure(
+              "orchestration_error",
+              `Unable to read the secret request: ${errorMessage(error)}`,
+            ),
+          ),
+        );
+      // A retry with the same clientRequestId finds its card as it stands.
+      const existing = cards.find((card) => card.id === turnItemId);
+      if (existing !== undefined) return secretRequestResult(existing.secretStatus);
+      const recordFailure = (error: unknown) =>
+        failure(
+          "orchestration_error",
+          `Could not record the secret request: ${errorMessage(error)}`,
+        );
+      // t4 fork: asking again for the same secret replaces the card still
+      // open, so the user sees one card for it.
+      for (const older of cards) {
+        if (
+          older.secretStatus !== "pending" ||
+          older.label !== input.label ||
+          older.runId === null ||
+          older.nodeId === null
+        ) {
+          continue;
+        }
+        yield* threadManagement
           .dispatch({
             type: "secret_request.record",
-            commandId: stableCommandId({
-              scope,
-              requestKey: key,
-              operation: `secret-${secretStatus}`,
-            }),
-            threadId: threadId,
-            runId,
-            nodeId,
-            turnItemId,
-            label: input.label,
-            reason: input.reason,
-            ...(input.placeholder === undefined ? {} : { placeholder: input.placeholder }),
-            ...(input.delivery === "file" ? { delivery: "file" as const } : {}),
-            secretStatus,
+            commandId: CommandId.make(`secret-request:${older.id}:replaced`),
+            threadId,
+            runId: older.runId,
+            nodeId: older.nodeId,
+            turnItemId: older.id,
+            label: older.label,
+            reason: older.reason,
+            ...(older.placeholder === undefined ? {} : { placeholder: older.placeholder }),
+            ...(older.delivery === undefined ? {} : { delivery: older.delivery }),
+            secretStatus: "cancelled",
           })
-          .pipe(
-            Effect.mapError((error) =>
-              failure(
-                "orchestration_error",
-                `Could not record the secret request: ${errorMessage(error)}`,
-              ),
-            ),
-          );
-      yield* record("pending");
-      // Only this call can hand the agent its ref, so the card must not
-      // outlive it: a timeout, a failed wait or an aborted call closes it as
-      // cancelled.
-      const closeCard = record("cancelled").pipe(
-        Effect.catch((error) =>
-          Effect.logWarning("Could not close a secret request card", { error: error.message }),
-        ),
-      );
-
-      const answered = yield* Effect.gen(function* () {
-        while (true) {
-          const projection = yield* threadManagement
-            .getThreadRecords(threadId, ["runs", "turnItems"], {
-              turnItemTypes: ["secret_request"],
-              messageRoles: [],
-            })
-            .pipe(
-              Effect.mapError((error) =>
-                failure(
-                  "orchestration_error",
-                  `Unable to read the secret request: ${errorMessage(error)}`,
-                ),
-              ),
-            );
-          const item = projection.turnItems.find((candidate) => candidate.id === turnItemId);
-          if (item?.type === "secret_request" && item.secretStatus !== "pending") {
-            return item.secretStatus;
-          }
-          const current = projection.runs.find((candidate) => candidate.id === runId);
-          if (
-            current === undefined ||
-            ThreadManagementService.isTerminalRunStatus(current.status)
-          ) {
-            yield* record("cancelled");
-            return "cancelled" as const;
-          }
-          yield* Effect.sleep(Duration.millis(SECRET_REQUEST_POLL_INTERVAL_MS));
-        }
-      }).pipe(
-        Effect.timeoutOption(
-          Duration.millis(
-            Math.min(input.timeoutMs ?? DEFAULT_WAIT_TIMEOUT_MS, MAX_WAIT_TIMEOUT_MS),
-          ),
-        ),
-        Effect.onExit((exit) => (Exit.isSuccess(exit) ? Effect.void : closeCard)),
-      );
-      if (Option.isNone(answered)) yield* closeCard;
-      const status = Option.isSome(answered)
-        ? answered.value
-        : yield* threadManagement
-            .getThreadRecords(threadId, ["turnItems"], {
-              turnItemTypes: ["secret_request"],
-              messageRoles: [],
-            })
-            .pipe(
-              Effect.map((records) => {
-                const item = records.turnItems.find((candidate) => candidate.id === turnItemId);
-                return item?.type === "secret_request" &&
-                  (item.secretStatus === "saved" || item.secretStatus === "declined")
-                  ? item.secretStatus
-                  : ("timed_out" as const);
-              }),
-              Effect.orElseSucceed(() => "timed_out" as const),
-            );
-      yield* Effect.annotateCurrentSpan({ "secret_request.status": status });
-      yield* Metrics.increment(Metrics.secretRequestsTotal, { status });
-      if (status !== "saved") return { status };
-      if (input.delivery === "file") {
-        const file = yield* secretRequests
-          .saveToFile({ threadId, turnItemId })
-          .pipe(Effect.mapError((error) => failure("orchestration_error", error.message)));
-        return { status, file };
+          .pipe(Effect.mapError(recordFailure));
       }
-      const secretRef = yield* secretRequests.savedRef({ threadId: threadId, turnItemId });
-      if (Option.isNone(secretRef)) {
-        return yield* failure(
-          "orchestration_error",
-          "The user saved the secret, but it could not be read. Ask again with a new clientRequestId.",
-        );
-      }
-      return { status, secretRef: secretRef.value };
+      // t4 fork: asking does not wait (upstream waited up to an hour, then
+      // closed the card). The card stays open until the user answers, and
+      // SecretRequests.answer sends the agent the file or secretRef as a message.
+      yield* threadManagement
+        .dispatch({
+          type: "secret_request.record",
+          commandId: stableCommandId({ scope, requestKey: key, operation: "secret-pending" }),
+          threadId,
+          runId: run.id,
+          nodeId: run.rootNodeId,
+          turnItemId,
+          label: input.label,
+          reason: input.reason,
+          ...(input.placeholder === undefined ? {} : { placeholder: input.placeholder }),
+          ...(input.delivery === "file" ? { delivery: "file" as const } : {}),
+          secretStatus: "pending",
+        })
+        .pipe(Effect.mapError(recordFailure));
+      yield* Effect.annotateCurrentSpan({ "secret_request.status": "pending" });
+      yield* Metrics.increment(Metrics.secretRequestsTotal, { status: "pending" });
+      return secretRequestResult("pending");
     }),
 
     capabilities: Effect.fn("OrchestratorMcpService.capabilities")(function* (scope, input = {}) {
@@ -3348,7 +3326,6 @@ export const layer: Layer.Layer<
   | ProviderAdapterRegistry.ProviderAdapterRegistryV2
   | ScheduledTaskService.ScheduledTaskService
   | ProjectService.ProjectService
-  | SecretRequests.SecretRequests
   | ServerSettings.ServerSettingsService
   | RemoteDelegation.RemoteDelegation
 > = Layer.effect(OrchestratorMcpService, make);

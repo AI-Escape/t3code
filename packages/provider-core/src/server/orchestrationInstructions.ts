@@ -41,7 +41,7 @@ The \`t3-code\` MCP server is how your thread works with other threads. Its tool
 ### Other
 
 - In your reply, mention a thread by its \`link\`, verbatim. Never a plain title or bare id.
-- A secret: call \`request_secret\` yourself. Pass its \`secretRef\` to a T3 tool, or use \`delivery: "file"\` for a shell command. Never ask in chat or invent one.
+- A secret: call \`request_secret\` yourself and end your turn; its \`secretRef\` (for a T3 tool) or, with \`delivery: "file"\`, a file path (for a shell command) arrives as a message. Never ask in chat or invent one.
 - Tool names may carry a harness prefix such as \`mcp__t3_code__t3_handoff\`; the meaning is the same. T3 tools may load late. Try the name once before you call it absent.`,
   `### Visuals and preview
 

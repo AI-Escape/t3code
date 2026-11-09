@@ -1,9 +1,10 @@
 // Answers stay in the secret store behind one-use refs; orchestration records only request status.
 // Consuming tools keep values out of transcripts, projections, clients and model context.
 // A `file` request instead moves its value to an owner-only file for the agent's own shell.
-import { pipe } from "effect/Function";
 import {
   CommandId,
+  MessageId,
+  type OrchestrationV2Notification,
   SecretRef,
   SecretRequestError,
   type ProjectId,
@@ -100,10 +101,10 @@ const make = Effect.gen(function* () {
       if (item.secretStatus !== "pending") {
         return yield* new SecretRequestError({ reason: "already_answered" });
       }
-      const run = records.runs.find((candidate) => candidate.id === item.runId);
-      if (run === undefined || ThreadManagementService.isTerminalRunStatus(run.status)) {
-        return yield* new SecretRequestError({ reason: "agent_stopped" });
-      }
+      // t4 fork: answerable any time while the card is open. The agent asked
+      // without waiting and hears the answer as a message, whether or not its
+      // run is still going.
+      const ref = refFor(salt, input.threadId, item.id);
       // Create before recording so racing answers cannot overwrite values or show saved before storage.
       // Existing values on pending cards finish earlier saves whose recording failed.
       if (input.answer.type === "save") {
@@ -112,18 +113,25 @@ const make = Effect.gen(function* () {
           value: input.answer.secret,
           savedAt: yield* Clock.currentTimeMillis,
         }).pipe(Effect.orDie);
-        yield* store
-          .create(
-            storeName(refFor(salt, input.threadId, item.id)),
-            new TextEncoder().encode(encoded),
-          )
-          .pipe(
-            Effect.catchIf(ServerSecretStore.isSecretAlreadyExistsError, () => Effect.void),
-            Effect.mapError(
-              (error) => new SecretRequestError({ reason: "store_failed", cause: error }),
-            ),
-          );
+        yield* store.create(storeName(ref), new TextEncoder().encode(encoded)).pipe(
+          Effect.catchIf(ServerSecretStore.isSecretAlreadyExistsError, () => Effect.void),
+          Effect.mapError(
+            (error) => new SecretRequestError({ reason: "store_failed", cause: error }),
+          ),
+        );
       }
+      // A `file` request's file is complete before the message naming it is sent.
+      const file =
+        input.answer.type === "save" && item.delivery === "file"
+          ? yield* deliverFile(ref, records.thread.projectId).pipe(
+              // A new answer stores its own value, not this one.
+              Effect.tapError(() => removeLogged(storeName(ref))),
+            )
+          : undefined;
+      const removeAnswer = Effect.gen(function* () {
+        yield* removeLogged(storeName(ref));
+        if (file !== undefined) yield* fileSystem.remove(file, { force: true }).pipe(Effect.ignore);
+      });
       const secretStatus = input.answer.type === "save" ? "saved" : "declined";
       yield* threadManagement
         .dispatch({
@@ -138,15 +146,15 @@ const make = Effect.gen(function* () {
           ...(item.placeholder === undefined ? {} : { placeholder: item.placeholder }),
           ...(item.delivery === undefined ? {} : { delivery: item.delivery }),
           secretStatus,
+          wake: {
+            messageId: MessageId.make(`message:secret-request:${item.id}`),
+            ...answerNotice(item.label, file, input.answer.type === "save" ? ref : undefined),
+          },
         })
         .pipe(
           Effect.mapError((cause) => new SecretRequestError({ reason: "record_failed", cause })),
           // Clear failed saves so the pending card can be answered again.
-          Effect.tapError(() =>
-            input.answer.type === "save"
-              ? pipe(refFor(salt, input.threadId, item.id), storeName, removeLogged)
-              : Effect.void,
-          ),
+          Effect.tapError(() => (input.answer.type === "save" ? removeAnswer : Effect.void)),
         );
       if (input.answer.type !== "save") return;
       // The wait may have closed the card; delete unrecorded answers because no one receives their refs.
@@ -160,7 +168,7 @@ const make = Effect.gen(function* () {
         );
       const card = recorded.turnItems.find((candidate) => candidate.id === item.id);
       if (card?.type === "secret_request" && card.secretStatus !== "saved") {
-        yield* pipe(refFor(salt, input.threadId, item.id), storeName, removeLogged);
+        yield* removeAnswer;
         return yield* new SecretRequestError({ reason: "agent_stopped" });
       }
     },
@@ -250,8 +258,15 @@ const make = Effect.gen(function* () {
     ) {
       return yield* new SecretRequestError({ reason: "not_a_file_request" });
     }
+    return yield* deliverFile(refFor(salt, input.threadId, item.id), records.thread.projectId);
+  });
+
+  /** Moves a stored value to its owner-only file and returns the path. */
+  const deliverFile = Effect.fn("SecretRequests.deliverFile")(function* (
+    ref: SecretRef,
+    projectId: ProjectId,
+  ) {
     if (filesDir === undefined) return yield* new SecretRequestError({ reason: "store_failed" });
-    const ref = refFor(salt, input.threadId, item.id);
     const file = path.join(filesDir, ref.slice(SECRET_REF_PREFIX.length));
     return yield* Effect.gen(function* () {
       // One use: the file counts as delivered only once the stored copy is gone. A retry with the
@@ -265,7 +280,7 @@ const make = Effect.gen(function* () {
         return yield* removeStored;
       }
       // The stored value goes only after the file is complete, so a failed write can retry.
-      const value = yield* readRef({ ref, projectId: records.thread.projectId });
+      const value = yield* readRef({ ref, projectId });
       const partial = `${file}.partial`;
       yield* fileSystem.makeDirectory(filesDir, { recursive: true, mode: 0o700 }).pipe(
         Effect.andThen(fileSystem.chmod(filesDir, 0o700)),
@@ -334,3 +349,42 @@ const make = Effect.gen(function* () {
 });
 
 export const layer = Layer.effect(SecretRequests, make);
+
+/**
+ * t4 fork: the message an answer sends the agent. It names where the value
+ * is, never the value.
+ */
+const answerNotice = (
+  label: string,
+  file: string | undefined,
+  ref: SecretRef | undefined,
+): { readonly text: string; readonly notification: OrchestrationV2Notification } => {
+  if (file !== undefined) {
+    return {
+      text: `The user entered "${label}". It is in the file ${file}: read it inside your commands, e.g. VALUE="$(cat ${file})", and never print it. The file is deleted after 24 hours.`,
+      notification: {
+        source: { kind: "background_task" },
+        outcome: "completed",
+        summary: `Entered ${label}`,
+      },
+    };
+  }
+  if (ref !== undefined) {
+    return {
+      text: `The user entered "${label}". Its secretRef is ${ref}: pass it to a tool that accepts a secretRef. It works once, within 24 hours.`,
+      notification: {
+        source: { kind: "background_task" },
+        outcome: "completed",
+        summary: `Entered ${label}`,
+      },
+    };
+  }
+  return {
+    text: `The user declined to enter "${label}".`,
+    notification: {
+      source: { kind: "background_task" },
+      outcome: "cancelled",
+      summary: `Declined to enter ${label}`,
+    },
+  };
+};
