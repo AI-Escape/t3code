@@ -799,17 +799,30 @@ function threadSnooze(
   };
 }
 
+/** A release manager links hundreds of PRs; detail carries the open ones and a count. */
 function threadPullRequests(
   links: OrchestrationV2ThreadShell["pullRequests"],
-): OrchestratorMcpThreadPullRequest[] {
-  return visibleThreadPullRequests(links ?? []).map((link) => ({
+): Pick<OrchestratorMcpThreadDetail, "pullRequests" | "pullRequestCount"> {
+  const visible = visibleThreadPullRequests(links ?? []);
+  return {
+    pullRequestCount: visible.length,
+    pullRequests: visible
+      .filter((link) => (link.snapshot?.state ?? "open") === "open")
+      .map(threadPullRequest),
+  };
+}
+
+function threadPullRequest(
+  link: NonNullable<OrchestrationV2ThreadShell["pullRequests"]>[number],
+): OrchestratorMcpThreadPullRequest {
+  return {
     host: normalizeThreadPullRequestKey(link).host,
     repository: link.repository,
     number: link.number,
     url: link.url,
     source: link.source,
     state: link.snapshot?.state ?? null,
-  }));
+  };
 }
 
 function listItemFromShell(
@@ -831,7 +844,6 @@ function listItemFromShell(
     runtimeMode: shell.runtimeMode,
     interactionMode: shell.interactionMode,
     linkedPullRequest: shell.linkedPullRequest ?? null,
-    pullRequests: threadPullRequests(shell.pullRequests),
     ...threadSettlement(shell),
     ...threadSnooze(shell, nowMs),
     parentThreadId: shell.lineage.parentThreadId,
@@ -866,7 +878,7 @@ function threadDetail(
     runtimeMode: projection.thread.runtimeMode,
     interactionMode: projection.thread.interactionMode,
     linkedPullRequest: projection.thread.linkedPullRequest ?? null,
-    pullRequests: threadPullRequests(projection.thread.pullRequests),
+    ...threadPullRequests(projection.thread.pullRequests),
     titleRegeneration:
       projection.thread.titleRegeneration === undefined ||
       projection.thread.titleRegeneration === null

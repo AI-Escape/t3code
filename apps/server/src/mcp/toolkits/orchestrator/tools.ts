@@ -140,12 +140,13 @@ const WorkflowStopTool = Tool.make("t3_workflow_stop", {
 
 const BackgroundWaitTool = Tool.make("t3_background_wait", {
   description:
-    "Keep this thread in Working while background work runs. Pass `taskIds`, a list, once started. Not for work left running (dev server, watcher). `waiting=false` clears. Does not stop the task. Claude only.",
+    "Keep this thread in Working while background work runs. Pass `taskIds` once started. Not for work left running (dev server, watcher). `waiting=false` clears. Does not stop the task. Claude only.",
   parameters: Schema.Struct({
-    taskIds: Schema.Array(TrimmedNonEmptyString).check(
-      Schema.isMinLength(1),
-      Schema.isMaxLength(20),
+    taskIds: Schema.optional(
+      Schema.Array(TrimmedNonEmptyString).check(Schema.isMinLength(1), Schema.isMaxLength(20)),
     ),
+    // Agents pass one id as `taskId` often enough to accept it.
+    taskId: Schema.optional(TrimmedNonEmptyString),
     waiting: Schema.optional(Schema.Boolean),
   }),
   success: Schema.Struct({

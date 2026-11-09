@@ -72,10 +72,20 @@ const handlers = {
     Effect.gen(function* () {
       const { scope, threads } = yield* readCaller();
       const caller = yield* McpInvocationContext.requireThreadScope(scope, "t3_background_wait");
+      const taskIds = [
+        ...(input.taskIds ?? []),
+        ...(input.taskId === undefined ? [] : [input.taskId]),
+      ];
+      if (taskIds.length === 0) {
+        return yield* new OrchestratorMcpFailure({
+          code: "invalid_request",
+          message: "Pass `taskIds`, the background task ids to wait on.",
+        });
+      }
       return yield* threads
         .awaitBackgroundTasks({
           threadId: caller.thread.threadId,
-          taskIds: input.taskIds,
+          taskIds,
           awaited: input.waiting ?? true,
         })
         .pipe(

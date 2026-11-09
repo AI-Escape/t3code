@@ -3328,6 +3328,9 @@ it.layer(layerTest)("OrchestrationV2LayerLive lifecycle", (it) => {
           genericFailure = reason === "failed" && (pass === 0 || (pass >= 2 && pass <= 8));
           yield* TestClock.adjust("2 minutes");
           yield* sweep;
+          // A refused token never reads it, so the first refusal ends the watch.
+          if (pass === 0 && reason === "forbidden")
+            assert.deepEqual(yield* summaries, ["#8: stopped watching, could not read it"]);
         }
 
         const thread = yield* orchestrator.getThreadShell(threadId);

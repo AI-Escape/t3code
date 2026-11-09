@@ -1774,3 +1774,96 @@ export function decodePullRequestStacksJson(
     })),
   });
 }
+
+const optionalText = Schema.optional(Schema.NullOr(Schema.String));
+
+const decodeActionsRuns = decodeJsonResult(
+  Schema.Struct({
+    workflow_runs: Schema.Array(
+      Schema.Struct({ id: Schema.Int, name: optionalText, event: optionalText }),
+    ),
+  }),
+);
+const decodeActionsJobs = decodeJsonResult(
+  Schema.Struct({
+    jobs: Schema.Array(
+      Schema.Struct({
+        name: Schema.String,
+        status: optionalText,
+        conclusion: optionalText,
+        started_at: optionalText,
+        completed_at: optionalText,
+        html_url: optionalText,
+      }),
+    ),
+  }),
+);
+const decodeCommitStatuses = decodeJsonResult(
+  Schema.Struct({
+    statuses: Schema.Array(
+      Schema.Struct({
+        context: Schema.String,
+        state: Schema.String,
+        target_url: optionalText,
+        description: optionalText,
+        created_at: optionalText,
+      }),
+    ),
+  }),
+);
+
+/** The head's latest run of each workflow and event; GitHub lists runs newest first. */
+export function decodeActionsRunsJson(
+  raw: string,
+): Result.Result<
+  ReadonlyArray<{ readonly id: number; readonly name: string | null }>,
+  DecodeFailure
+> {
+  const decoded = decodeActionsRuns(raw);
+  if (!Result.isSuccess(decoded)) return Result.fail(decoded.failure);
+  const seen = new Set<string>();
+  return Result.succeed(
+    decoded.success.workflow_runs.flatMap((run) => {
+      const key = `${run.name ?? ""}\0${run.event ?? ""}`;
+      if (seen.has(key)) return [];
+      seen.add(key);
+      return [{ id: run.id, name: trimmed(run.name) }];
+    }),
+  );
+}
+
+/** A workflow run's jobs as the check runs GitHub would report for them. */
+export function decodeActionsJobsJson(
+  raw: string,
+  workflowName: string | null,
+): Result.Result<ReadonlyArray<GitHubCheckContext>, DecodeFailure> {
+  const decoded = decodeActionsJobs(raw);
+  if (!Result.isSuccess(decoded)) return Result.fail(decoded.failure);
+  return Result.succeed(
+    decoded.success.jobs.map((job) => ({
+      name: job.name,
+      status: job.status?.toUpperCase() ?? null,
+      conclusion: job.conclusion?.toUpperCase() ?? null,
+      startedAt: job.started_at ?? null,
+      completedAt: job.completed_at ?? null,
+      detailsUrl: job.html_url ?? null,
+      workflowName,
+    })),
+  );
+}
+
+export function decodeCommitStatusesJson(
+  raw: string,
+): Result.Result<ReadonlyArray<GitHubCheckContext>, DecodeFailure> {
+  const decoded = decodeCommitStatuses(raw);
+  if (!Result.isSuccess(decoded)) return Result.fail(decoded.failure);
+  return Result.succeed(
+    decoded.success.statuses.map((status) => ({
+      context: status.context,
+      state: status.state.toUpperCase(),
+      targetUrl: status.target_url ?? null,
+      description: status.description ?? null,
+      startedAt: status.created_at ?? null,
+    })),
+  );
+}

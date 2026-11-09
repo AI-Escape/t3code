@@ -1510,13 +1510,13 @@ function parseClaudeInteger(text: string): number {
   return Number.parseInt(value, 10);
 }
 
-// Claude Code defers MCP tools behind ToolSearch, so the agent only finds
-// t3_background_wait when the system prompt says when to reach for it.
+// Claude Code defers MCP tools behind ToolSearch unless they are always loaded
+// (McpHttpServer's T4_ALWAYS_LOAD); the prompt says when to reach for this one.
 const CLAUDE_BACKGROUND_WAIT_INSTRUCTIONS = `
 
 ### Background work you wait on
 
-To wait for a background command or Monitor you started (tests, a build), call \`t3_background_wait\` with its task ID before you end your turn. Do not mark work you leave running, or PRs. T3 MCP tools are deferred: load one with ToolSearch before you call it.
+To wait for a background command or Monitor you started (tests, a build), call \`t3_background_wait\` with their task IDs before you end your turn. Do not mark work you leave running, or PRs. Load a T3 tool with ToolSearch only if you lack its schema.
 `;
 
 // Native subagents start from their task, not this session's system prompt.

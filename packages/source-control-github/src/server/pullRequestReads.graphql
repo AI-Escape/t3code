@@ -59,6 +59,7 @@ query PullRequestCore(
   $headRef: String!
   $required: Boolean!
   $requestedReviewers: Int!
+  $checks: Boolean!
 ) {
   repository(owner: $owner, name: $name) {
     mergeCommitAllowed
@@ -146,7 +147,8 @@ query PullRequestCore(
           color
         }
       }
-      commits(last: 1) {
+      # Off when a fine-grained token is refused check runs; the Actions jobs stand in.
+      commits(last: 1) @include(if: $checks) {
         nodes {
           commit {
             statusCheckRollup {

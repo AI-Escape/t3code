@@ -3411,6 +3411,94 @@ layer("GitHubPullRequestApi.layer", (it) => {
     }),
   );
 
+  it.effect("reads checks from the head's Actions jobs when a token is refused check runs", () =>
+    Effect.gen(function* () {
+      // A fine-grained token's answer: every check run node FORBIDDEN, the rest readable.
+      const refusedRun = (index: number) => ({
+        type: "FORBIDDEN",
+        message: "Resource not accessible by personal access token",
+        path: [
+          "repository",
+          "pullRequest",
+          "commits",
+          "nodes",
+          0,
+          "commit",
+          "statusCheckRollup",
+          "contexts",
+          "nodes",
+          index,
+        ],
+      });
+      mockedExecute.mockImplementation((call) => {
+        if (call.kind === "graphql") {
+          return Effect.succeed(
+            output(
+              encodeJson(
+                call.variables?.["checks"] === true
+                  ? { ...coreResponse(), errors: [refusedRun(0), refusedRun(1)] }
+                  : coreResponse({ commits: undefined }),
+              ),
+            ),
+          );
+        }
+        if (call.path.includes("/actions/runs?head_sha=abc123")) {
+          return Effect.succeed(
+            output(
+              encodeJson({
+                workflow_runs: [
+                  { id: 2, name: "CI", event: "pull_request" },
+                  { id: 1, name: "CI", event: "pull_request" },
+                ],
+              }),
+            ),
+          );
+        }
+        if (call.path.includes("/actions/runs/2/jobs")) {
+          return Effect.succeed(
+            output(
+              encodeJson({
+                jobs: [
+                  {
+                    name: "test",
+                    status: "completed",
+                    conclusion: "success",
+                    html_url: "https://x/1",
+                  },
+                  {
+                    name: "lint",
+                    status: "in_progress",
+                    conclusion: null,
+                    html_url: "https://x/2",
+                  },
+                ],
+              }),
+            ),
+          );
+        }
+        // Commit statuses need a permission this token lacks.
+        return Effect.fail(
+          new GitHubRequestPolicy.GitHubApiResponseError({
+            host: "github.com",
+            operation: call.operation,
+            status: 403,
+          }),
+        );
+      });
+      const cli = yield* GitHubPullRequestApi.GitHubPullRequestApi;
+      const detail = yield* cli.getPullRequestDetail(pullRequestInput);
+      expect(variablesOf("PullRequestCore").map((v) => v["checks"])).toEqual([true, false]);
+      expect(restCallsTo("/actions/runs/1/jobs")).toEqual([]);
+      expect(detail.checksState).toBe("pending");
+      expect(detail.checks.map(({ name, status }) => ({ name, status }))).toEqual(
+        expect.arrayContaining([
+          { name: "test", status: "success" },
+          { name: "lint", status: "pending" },
+        ]),
+      );
+    }),
+  );
+
   it.effect.each([false, true])(
     "reads every check when the combined response has another page (reviewer refusal: %s)",
     (refused) =>

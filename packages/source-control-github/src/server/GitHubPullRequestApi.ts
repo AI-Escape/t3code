@@ -60,6 +60,9 @@ import {
   buildReviewerRequest,
   decodeCommitFilesJson,
   pullRequestChecksFromContexts,
+  decodeActionsJobsJson,
+  decodeActionsRunsJson,
+  decodeCommitStatusesJson,
   decodeWorkflowRunsJson,
   type GitHubPullRequestCore,
   type GitHubPullRequestFileStat,
@@ -329,6 +332,34 @@ const isRefusedRequestedReviewersOnly = (error: unknown): boolean =>
       path[4] >= 0 &&
       path[5] === "requestedReviewer",
   );
+
+/**
+ * A fine-grained token cannot hold the Checks permission (GitHub grants it to Apps only), so every
+ * check run node of the rollup comes back FORBIDDEN while the rest of the pull request reads.
+ */
+const isRefusedCheckRun = ({
+  path,
+  type,
+}: {
+  readonly path?: ReadonlyArray<unknown> | undefined;
+  readonly type?: unknown;
+}) =>
+  type === "FORBIDDEN" &&
+  path?.length === 10 &&
+  path[0] === "repository" &&
+  path[1] === "pullRequest" &&
+  path[2] === "commits" &&
+  path[6] === "statusCheckRollup" &&
+  path[7] === "contexts" &&
+  path[8] === "nodes" &&
+  Number.isInteger(path[9]);
+
+const isRefusedCheckRunsOnly = (error: unknown): boolean =>
+  isGraphQlClientError(error) &&
+  error.reason._tag === "ResponseError" &&
+  error.reason.status === 200 &&
+  error.reason.errors.length > 0 &&
+  error.reason.errors.every(isRefusedCheckRun);
 
 /** A large pull request can produce a multi-megabyte patch; past this it is truncated. */
 const DIFF_MAX_OUTPUT_BYTES = 8 * 1024 * 1024;
@@ -1422,10 +1453,51 @@ export const make = Effect.gen(function* () {
     };
   });
 
+  /**
+   * The head commit's checks from its Actions jobs and commit statuses, for a token refused check
+   * runs (as t4's `gh pr checks` does). Every check these repositories get is an Actions job.
+   */
+  const readActionsChecks = Effect.fn("GitHubPullRequestApi.readActionsChecks")(function* (
+    input: Parameters<GitHubPullRequestApi["Service"]["getPullRequestDetail"]>[0],
+    headSha: string,
+  ) {
+    const { owner, name } = parseRepositorySelector(input.repository);
+    const root = `repos/${owner}/${name}`;
+    const operation = "getPullRequestDetail";
+    const runs = yield* revalidatedRestRead({
+      cwd: input.cwd,
+      host: input.host,
+      operation,
+      path: `${root}/actions/runs?head_sha=${headSha}&per_page=100`,
+      decode: decodeActionsRunsJson,
+    });
+    const jobs = yield* Effect.forEach(
+      runs,
+      (run) =>
+        revalidatedRestRead({
+          cwd: input.cwd,
+          host: input.host,
+          operation,
+          path: `${root}/actions/runs/${run.id}/jobs?per_page=100`,
+          decode: (raw) => decodeActionsJobsJson(raw, run.name),
+        }),
+      { concurrency: 4 },
+    );
+    // Commit statuses need their own permission; without it the jobs still stand.
+    const statuses = yield* revalidatedRestRead({
+      cwd: input.cwd,
+      host: input.host,
+      operation,
+      path: `${root}/commits/${headSha}/status?per_page=100`,
+      decode: decodeCommitStatusesJson,
+    }).pipe(Effect.orElseSucceed(() => []));
+    return pullRequestChecksFromContexts([...jobs.flat(), ...statuses]);
+  });
+
   const getPullRequestDetail: GitHubPullRequestApi["Service"]["getPullRequestDetail"] = (input) => {
     const { owner, name } = parseRepositorySelector(input.repository);
     const operation = "getPullRequestDetail";
-    const read = (requestedReviewers: number) =>
+    const read = (requestedReviewers: number, checks: boolean) =>
       client.PullRequestCore({
         owner,
         name,
@@ -1433,13 +1505,28 @@ export const make = Effect.gen(function* () {
         headRef: `refs/pull/${input.number}/head`,
         required: asksRequired(input.host),
         requestedReviewers,
+        checks,
       });
+    const readCore = (checks: boolean) =>
+      read(100, checks).pipe(
+        Effect.catchIf(isRefusedRequestedReviewersOnly, () => read(0, checks)),
+      );
     return SourceControlRateLimit.Interactive.pipe(
       Effect.flatMap((allowReserve) =>
-        read(100).pipe(
-          Effect.catchIf(isRefusedRequestedReviewersOnly, () => read(0)),
+        readCore(true).pipe(
+          Effect.map((result) => ({ result, checksRefused: false })),
+          Effect.catchIf(isRefusedCheckRunsOnly, () =>
+            readCore(false).pipe(Effect.map((result) => ({ result, checksRefused: true }))),
+          ),
           graphql({ ...input, operation, allowReserve }),
-          Effect.map(toPullRequestCore),
+          Effect.flatMap(({ result, checksRefused }) => {
+            const core = toPullRequestCore(result);
+            return !checksRefused || core === null || core.headSha == null
+              ? Effect.succeed(core)
+              : readActionsChecks(input, core.headSha).pipe(
+                  Effect.map((checks) => ({ ...core, ...checks, checksTruncated: false })),
+                );
+          }),
           Effect.flatMap(found({ ...input, operation })),
           // Past a hundred checks the first page would let the rest imply success, so the whole
           // rollup is walked instead.
