@@ -24,6 +24,7 @@ import * as Deferred from "effect/Deferred";
 import * as Duration from "effect/Duration";
 import * as Effect from "effect/Effect";
 import * as Fiber from "effect/Fiber";
+import * as FileSystem from "effect/FileSystem";
 import * as HttpServer from "effect/http/HttpServer";
 import * as HttpServerResponse from "effect/http/HttpServerResponse";
 import * as Layer from "effect/Layer";
@@ -32,6 +33,7 @@ import * as Schema from "effect/Schema";
 import * as SqlClient from "effect/sql/SqlClient";
 import { McpSchema, McpServer, Tool, Toolkit } from "effect/ai";
 
+import * as ServerSecretStore from "../auth/ServerSecretStore.ts";
 import * as ServerConfig from "../config.ts";
 import * as McpHttpServer from "../mcp/McpHttpServer.ts";
 import * as McpInvocationContext from "../mcp/McpInvocationContext.ts";
@@ -154,6 +156,12 @@ const makeLaptop = Effect.gen(function* () {
   const layerHere = McpHttpServer.layerOrchestratorToolkit.pipe(
     Layer.provideMerge(McpHttpServer.layerInProcessMcpServer),
     Layer.provideMerge(PeerLinkRequests.layer),
+    // t4 fork: the real secret requests, for the secret card's own flow.
+    Layer.provideMerge(
+      SecretRequests.layer.pipe(
+        Layer.provide(ServerSecretStore.layer.pipe(Layer.provide(NodeCrypto.layer))),
+      ),
+    ),
     Layer.provide(Layer.mock(PeerForwarding.PeerForwarding)({})),
     Layer.provide(Layer.mock(RemoteDelegation.RemoteDelegation)({})),
     Layer.provide(Layer.succeedContext(linking)),
@@ -163,7 +171,6 @@ const makeLaptop = Effect.gen(function* () {
     Layer.provide(Layer.mock(ProviderAdapterRegistry.ProviderAdapterRegistryV2)({})),
     Layer.provide(Layer.mock(ScheduledTaskService.ScheduledTaskService)({})),
     Layer.provide(Layer.mock(ProjectService.ProjectService)({})),
-    Layer.provide(Layer.mock(SecretRequests.SecretRequests)({})),
     Layer.provide(Layer.mock(ThreadLaunch.ThreadLaunchService)({})),
     Layer.provide(Layer.mock(GitVcsDriver.GitVcsDriver)({})),
     Layer.provide(
@@ -180,10 +187,18 @@ const makeLaptop = Effect.gen(function* () {
     links: Context.get(linking, PeerLinks.PeerLinks),
     linksSql: Context.get(linking, SqlClient.SqlClient),
     requests: Context.get(here, PeerLinkRequests.PeerLinkRequests),
+    secrets: Context.get(here, SecretRequests.SecretRequests),
     orchestrator: Context.get(here, Orchestrator.OrchestratorV2),
     sink: Context.get(here, EventSink.EventSinkV2),
     projections: Context.get(here, ProjectionStore.ProjectionStoreV2),
     sql: Context.get(database, SqlClient.SqlClient),
+    callSecret: (args: Record<string, unknown>) =>
+      server
+        .callTool({ name: "request_secret", arguments: args })
+        .pipe(
+          Effect.provideService(McpInvocationContext.McpInvocationContext, scope),
+          Effect.provideService(McpSchema.McpServerClient, mcpClient),
+        ),
     call: (args: Record<string, unknown>, callScope = scope) =>
       server
         .callTool({ name: "t3_environment_link", arguments: args })
@@ -404,7 +419,7 @@ const recordPendingCard = (a: Laptop, key: string) =>
  * Every row of every table in the laptop's database, as text, to scan for
  * anything leaked: events, projections, receipts and outbox alike.
  */
-const storedText = (a: Laptop) =>
+const storedText = (a: Laptop, card = "link_request") =>
   Effect.gen(function* () {
     const tables = yield* a.sql<{ name: string }>`
       SELECT name FROM sqlite_master WHERE type = 'table' AND name NOT LIKE 'sqlite_%'
@@ -417,7 +432,7 @@ const storedText = (a: Laptop) =>
       .map((row) => JSON.stringify(row))
       .join("\n");
     // The scan saw the card itself, so it read what the thread recorded.
-    expect(text).toContain("link_request");
+    expect(text).toContain(card);
     return text;
   });
 
@@ -586,6 +601,116 @@ it.live("the agent asks without waiting, and the user links the box after its tu
       });
       expect((yield* a.orchestrator.getThreadProjection(threadId)).turnItems).toHaveLength(before);
       expect((yield* outcomeMessages(a)).messages).toHaveLength(1);
+    }),
+  ),
+);
+
+// t4 fork: a secret card works like a link card - the agent asks without
+// waiting, the card outlives the turn, and the answer arrives as a message.
+it.live("a secret card stays open after the turn, and its answer reaches the agent", () =>
+  withBoth((a) =>
+    Effect.gen(function* () {
+      yield* seedThread(a);
+      const ask = {
+        label: "E2B API key",
+        reason: "Sign up at e2b.dev and copy the key.",
+        delivery: "file",
+        clientRequestId: "e2b-key",
+      };
+      const asked = yield* a.callSecret(ask);
+      expect(asked.isError).toBe(false);
+      expect(asked.structuredContent).toMatchObject({ status: "pending" });
+      const secretCard = () =>
+        a.orchestrator
+          .getThreadProjection(threadId)
+          .pipe(
+            Effect.map((projection) =>
+              projection.turnItems.filter((item) => item.type === "secret_request"),
+            ),
+          );
+      const [card] = yield* secretCard();
+      expect(card).toMatchObject({ status: "waiting", secretStatus: "pending" });
+
+      // The agent ends its turn; the card stays open, and the thread still
+      // asks for input - in the stored shell the dashboard reads and in memory.
+      yield* endRun(a);
+      expect((yield* secretCard())[0]).toMatchObject({ secretStatus: "pending" });
+      const asks = () =>
+        Effect.gen(function* () {
+          const stored = (yield* a.orchestrator.getThreadShell(threadId))?.pendingRuntimeRequest;
+          const live = ProjectionStore.threadShellFromProjection(
+            yield* a.orchestrator.getThreadProjection(threadId),
+          ).pendingRuntimeRequest;
+          return [stored ?? null, live];
+        });
+      expect(yield* asks()).toMatchObject([{ kind: "user_input" }, { kind: "user_input" }]);
+      expect(yield* a.projections.getSettlementCandidates(threadId)).toEqual([]);
+
+      // The user enters it long after; the agent hears where it is.
+      yield* a.secrets.answer({
+        threadId,
+        turnItemId: card!.id,
+        answer: { type: "save", secret: "e2b_live_value" },
+      });
+      expect((yield* secretCard())[0]).toMatchObject({
+        status: "completed",
+        secretStatus: "saved",
+      });
+      expect(yield* asks()).toEqual([null, null]);
+      const { messages } = yield* outcomeMessages(a);
+      expect(messages).toHaveLength(1);
+      expect(messages[0]).toMatchObject({
+        role: "user",
+        createdBy: "agent",
+        creationSource: "server",
+        notification: { outcome: "completed", summary: "Entered E2B API key" },
+      });
+      const file = /in the file (\S+):/.exec(messages[0]!.text)?.[1];
+      expect(file).toBeDefined();
+      const fs = yield* FileSystem.FileSystem;
+      expect(yield* fs.readFileString(file!)).toBe("e2b_live_value");
+      expect(yield* storedText(a, "secret_request")).not.toContain("e2b_live_value");
+
+      // A retry with the same key says it was sent, and records nothing new.
+      const retried = yield* a.callSecret(ask);
+      expect(retried.structuredContent).toMatchObject({ status: "sent" });
+      expect(yield* secretCard()).toHaveLength(1);
+    }),
+  ).pipe(Effect.provide(NodeServices.layer)),
+);
+
+it.live("asking again for the same secret replaces the card still open", () =>
+  withBoth((a) =>
+    Effect.gen(function* () {
+      yield* seedThread(a);
+      yield* a.callSecret({ label: "E2B API key", reason: "First ask.", clientRequestId: "one" });
+      yield* a.callSecret({ label: "E2B API key", reason: "Second ask.", clientRequestId: "two" });
+      const cards = (yield* a.orchestrator.getThreadProjection(threadId)).turnItems.filter(
+        (item) => item.type === "secret_request",
+      );
+      expect(cards.map((card) => card.type === "secret_request" && card.secretStatus)).toEqual([
+        "cancelled",
+        "pending",
+      ]);
+    }),
+  ),
+);
+
+it.live("stopping the thread closes its open secret card", () =>
+  withBoth((a) =>
+    Effect.gen(function* () {
+      yield* seedThread(a);
+      yield* a.callSecret({ label: "E2B API key", reason: "Ask.", clientRequestId: "stop" });
+      yield* endRun(a);
+      yield* a.orchestrator.dispatch({
+        type: "thread.stop",
+        commandId: CommandId.make("command:stop:secret"),
+        threadId,
+      });
+      const card = (yield* a.orchestrator.getThreadProjection(threadId)).turnItems.find(
+        (item) => item.type === "secret_request",
+      );
+      expect(card).toMatchObject({ status: "cancelled", secretStatus: "cancelled" });
     }),
   ),
 );

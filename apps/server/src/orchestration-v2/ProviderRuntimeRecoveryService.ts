@@ -475,7 +475,9 @@ export const make = Effect.gen(function* () {
             (candidate.nodeId === null || !messageRequestNodeIds.has(candidate.nodeId)) &&
             !isAppOwnedDelegationItem(candidate) &&
             // A link card waits on the user, not the run, and answers by message.
+            // t4 fork: so does a secret card.
             candidate.type !== "link_request" &&
+            candidate.type !== "secret_request" &&
             (candidate.status === "pending" ||
               candidate.status === "running" ||
               candidate.status === "waiting"),

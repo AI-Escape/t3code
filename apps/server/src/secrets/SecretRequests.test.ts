@@ -155,6 +155,10 @@ it.effect("a saved answer becomes a one-use ref, and the thread only learns it w
       assert.notInclude(Object.values(dispatched[0] as object).map(String), "ghp_secret");
 
       const ref = Option.getOrThrow(yield* service.savedRef({ threadId, turnItemId }));
+      // The agent asked without waiting: the record's message brings it the ref.
+      const wake = (dispatched[0] as { wake: { text: string } }).wake;
+      assert.include(wake.text, ref);
+      assert.notInclude(wake.text, "ghp_secret");
       assert.equal(yield* service.consume({ ref, projectId }), "ghp_secret");
       assert.isFalse(valuesOf(stored).some((value) => value.includes("ghp_secret")));
       const again = yield* service.consume({ ref, projectId }).pipe(Effect.flip);
@@ -315,18 +319,36 @@ it.effect("works in threads with long ids, such as a delegated subagent's", () =
   );
 });
 
-it.effect("refuses an answer once the agent that asked has stopped", () =>
+it.effect("an answer after the asking run ended still reaches the agent", () =>
   withService(
     ({ service, stored, dispatched }) =>
       Effect.gen(function* () {
-        const late = yield* service
-          .answer({ threadId, turnItemId, answer: { type: "save", secret: "ghp_secret" } })
-          .pipe(Effect.flip);
-        assert.include(late.message, "has stopped");
-        assert.deepEqual(valuesOf(stored), []);
-        assert.equal(dispatched.length, 0);
+        yield* service.answer({
+          threadId,
+          turnItemId,
+          answer: { type: "save", secret: "ghp_secret" },
+        });
+        assert.include(dispatched[0] as object, { secretStatus: "saved" });
+        assert.include(
+          (dispatched[0] as { wake: { text: string } }).wake.text,
+          'The user entered "GitHub token"',
+        );
+        assert.isTrue(valuesOf(stored).some((value) => value.includes("ghp_secret")));
       }),
     { runStatus: "completed" },
+  ),
+);
+
+it.effect("a decline tells the agent by message", () =>
+  withService(({ service, dispatched }) =>
+    Effect.gen(function* () {
+      yield* service.answer({ threadId, turnItemId, answer: { type: "decline" } });
+      assert.include(dispatched[0] as object, { secretStatus: "declined" });
+      assert.equal(
+        (dispatched[0] as { wake: { text: string } }).wake.text,
+        'The user declined to enter "GitHub token".',
+      );
+    }),
   ),
 );
 
@@ -363,7 +385,11 @@ it.effect("a file request moves its value to an owner-only file, once", () =>
             answer: { type: "save", secret: "cf_token'$(id)" },
           });
           assert.include(dispatched[0] as object, { secretStatus: "saved", delivery: "file" });
+          // The file is written before the message that names it goes out.
+          const wake = (dispatched[0] as { wake: { text: string } }).wake;
           const file = yield* service.saveToFile({ threadId, turnItemId });
+          assert.include(wake.text, file);
+          assert.notInclude(wake.text, "cf_token");
           assert.equal(yield* fs.readFileString(file), "cf_token'$(id)");
           assert.deepEqual(valuesOf(stored), []);
           if ((yield* HostProcess.Platform) !== "win32") {
@@ -390,27 +416,28 @@ it.effect("a file request moves its value to an owner-only file, once", () =>
   }).pipe(Effect.provide(NodeServices.layer)),
 );
 
-it.effect("a failed file write keeps the value, so the request can retry", () =>
+it.effect("a failed file write leaves the card open for another answer", () =>
   Effect.gen(function* () {
     const fs = yield* FileSystem.FileSystem;
     const path = yield* Path.Path;
     const directory = yield* fs.makeTempDirectoryScoped({ prefix: "secret-files-test-" });
     yield* withService(
-      ({ service }) =>
+      ({ service, stored, dispatched }) =>
         Effect.gen(function* () {
+          // A plain file where the files directory goes makes the write fail.
+          yield* fs.writeFileString(path.join(directory, "files"), "");
+          const failed = yield* service
+            .answer({ threadId, turnItemId, answer: { type: "save", secret: "cf_old" } })
+            .pipe(Effect.flip);
+          assert.equal(failed.reason, "store_failed");
+          assert.equal(dispatched.length, 0);
+          assert.deepEqual(valuesOf(stored), []);
+          yield* fs.remove(path.join(directory, "files"));
           yield* service.answer({
             threadId,
             turnItemId,
             answer: { type: "save", secret: "cf_token" },
           });
-          const ref = Option.getOrThrow(yield* service.savedRef({ threadId, turnItemId }));
-          const name = ref.slice("secret-ref:".length);
-          // A non-empty directory where the partial file goes makes the write fail.
-          const partial = path.join(directory, "files", `${name}.partial`);
-          yield* fs.makeDirectory(path.join(partial, "block"), { recursive: true });
-          const failed = yield* service.saveToFile({ threadId, turnItemId }).pipe(Effect.flip);
-          assert.equal(failed.reason, "store_failed");
-          yield* fs.remove(partial, { recursive: true });
           const file = yield* service.saveToFile({ threadId, turnItemId });
           assert.equal(yield* fs.readFileString(file), "cf_token");
         }),
@@ -426,15 +453,14 @@ it.effect("a file is not delivered while its stored copy cannot be removed", () 
     yield* withService(
       ({ service }) =>
         Effect.gen(function* () {
-          yield* service.answer({
-            threadId,
-            turnItemId,
-            answer: { type: "save", secret: "cf_token" },
-          });
-          const first = yield* service.saveToFile({ threadId, turnItemId }).pipe(Effect.flip);
+          const first = yield* service
+            .answer({ threadId, turnItemId, answer: { type: "save", secret: "cf_token" } })
+            .pipe(Effect.flip);
           assert.equal(first.reason, "consume_failed");
           // A retry finds the file but still will not hand it out until the removal works.
-          const retried = yield* service.saveToFile({ threadId, turnItemId }).pipe(Effect.flip);
+          const retried = yield* service
+            .answer({ threadId, turnItemId, answer: { type: "save", secret: "cf_token" } })
+            .pipe(Effect.flip);
           assert.equal(retried.reason, "consume_failed");
         }),
       { delivery: "file", directory, removeFails: true },

@@ -14,6 +14,7 @@ import {
   ProjectId,
   ScheduledTaskId,
   ThreadId,
+  TurnItemId,
 } from "@t3tools/contracts";
 import * as Clock from "effect/Clock";
 import * as SecureRandom from "effect/crypto/SecureRandom";
@@ -34,6 +35,7 @@ import * as AgentSessionImporter from "../project/AgentSessionImporter.ts";
 import * as Project from "../project/ProjectService.ts";
 import * as ThreadManagementService from "../orchestration-v2/ThreadManagementService.ts";
 import * as ScheduledTasks from "../scheduledTasks/ScheduledTaskService.ts";
+import * as SecretRequests from "../secrets/SecretRequests.ts";
 import * as T4Config from "./T4Config.ts";
 import * as T4Delivery from "./T4Delivery.ts";
 import { factsFor } from "./T4Facts.ts";
@@ -111,6 +113,12 @@ const AnswerBody = Schema.Struct({
   answer: Schema.optional(AnswerValue),
   /** t4 fork: every question's answer, by question id (the dashboard's own question window). */
   answers: Schema.optional(Schema.Record(Schema.String, AnswerValue)),
+});
+/** t4 fork: the dashboard's answer to a secret card - the value, or a decline. */
+const SecretBody = Schema.Struct({
+  requestId: Schema.String,
+  secret: Schema.optional(Schema.String),
+  decline: Schema.optional(Schema.Boolean),
 });
 const MessageBody = Schema.Struct({
   text: Schema.String,
@@ -288,7 +296,7 @@ export const layer = Layer.mergeAll(
             !(r.responseCapability.type === "live" && ended.has(r.nativeRequestRef?.nativeId)),
         );
         // t4 fork: a pending secret request (`request_secret`) waits on the user too;
-        // it is entered privately in T3's card, never typed into chat.
+        // it is entered privately - in T3's card or the dashboard's - never typed into chat.
         for (const item of records.turnItems) {
           if (item.type !== "secret_request" || item.secretStatus !== "pending") continue;
           pending.push({
@@ -301,6 +309,10 @@ export const layer = Layer.mergeAll(
             title: `Enter a secret: ${item.label}`,
             detail: item.reason || null,
             options: [],
+            label: item.label,
+            placeholder: item.placeholder ?? null,
+            // `file`: the agent's shell commands can read the value; else no one sees it.
+            delivery: item.delivery ?? null,
           });
         }
         for (const request of live) {
@@ -737,6 +749,37 @@ export const layer = Layer.mergeAll(
         requestId: request.id,
         answers,
       });
+      pendingCache = null;
+      return json({ ok: true });
+    }),
+  ),
+
+  // t4 fork: the dashboard answers a secret card itself. The value goes
+  // straight to SecretRequests, as T3's own card sends it, and never into a log.
+  route("POST", "/api/t4/threads/:threadId/secret", AuthOrchestrationOperateScope, (params) =>
+    Effect.gen(function* () {
+      const input = yield* body(SecretBody);
+      const secret = input.secret?.trim() ?? "";
+      if (input.decline !== true && secret.length === 0)
+        return json({ error: "enter the secret, or decline" }, 400);
+      const secrets = yield* SecretRequests.SecretRequests;
+      const answered = yield* secrets
+        .answer({
+          threadId: ThreadId.make(params.threadId ?? ""),
+          turnItemId: TurnItemId.make(input.requestId),
+          answer: input.decline === true ? { type: "decline" } : { type: "save", secret },
+        })
+        .pipe(
+          Effect.as(undefined),
+          Effect.catchTags({ SecretRequestError: (error) => Effect.succeed(error) }),
+        );
+      if (answered !== undefined) {
+        const gone =
+          answered.reason === "not_found" ||
+          answered.reason === "already_answered" ||
+          answered.reason === "agent_stopped";
+        return json({ error: answered.message }, gone ? 409 : 500);
+      }
       pendingCache = null;
       return json({ ok: true });
     }),

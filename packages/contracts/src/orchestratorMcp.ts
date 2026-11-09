@@ -358,9 +358,7 @@ export const OrchestratorMcpThreadT4Facts = Schema.Struct({
     description: "running, waiting-you, settled, snoozed, idle or archived.",
   }),
   isReleaseManager: Schema.Boolean,
-  role: Schema.optional(
-    Schema.String.annotate({ description: "owner, pm or release-manager." }),
-  ),
+  role: Schema.optional(Schema.String.annotate({ description: "owner, pm or release-manager." })),
   parentThreadId: Schema.optional(
     Schema.NullOr(Schema.String).annotate({ description: "The thread that launched it." }),
   ),
@@ -790,14 +788,22 @@ export const OrchestratorMcpRequestSecretInput = Schema.Struct({
   }),
   timeoutMs: Schema.optional(
     Schema.Int.check(Schema.isBetween({ minimum: 1_000, maximum: 60 * 60 * 1_000 })),
-  ).annotate({ description: "Default 10 min." }),
+  ).annotate({ description: "Ignored: the card stays open until the user answers." }),
   clientRequestId: Schema.optional(OrchestratorMcpClientRequestId).annotate({
-    description: "Retry key for this ask. New key after a timeout or cancel.",
+    description: "Retry key for this ask. New key after a decline or cancel.",
   }),
 });
 export type OrchestratorMcpRequestSecretInput = typeof OrchestratorMcpRequestSecretInput.Type;
 
 export const OrchestratorMcpRequestSecretResult = Schema.Union([
+  // t4 fork: asking does not wait; the card stays open until the user answers.
+  Schema.Struct({
+    status: Schema.Literals(["pending", "sent"]).annotate({
+      description:
+        "pending: the card is open; end your turn, and the file path or secretRef arrives as a message when the user enters it. sent: already answered, in a message to you.",
+    }),
+    note: Schema.String,
+  }),
   Schema.Struct({
     status: Schema.Literal("saved"),
     secretRef: SecretRef.annotate({
@@ -814,7 +820,7 @@ export const OrchestratorMcpRequestSecretResult = Schema.Union([
   Schema.Struct({
     status: Schema.Literals(["declined", "cancelled", "timed_out"]).annotate({
       description:
-        "declined: user chose not to. cancelled: ended with the run. timed_out: no answer in time. Ask again with a new `clientRequestId` if still needed.",
+        "declined: user chose not to. cancelled: the user stopped or archived the thread. timed_out: no answer in time (older cards). Ask again with a new `clientRequestId` if still needed.",
     }),
   }),
 ]);

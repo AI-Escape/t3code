@@ -3534,6 +3534,18 @@ const OrchestrationV2InternalCommand = Schema.Union([
     placeholder: Schema.optional(Schema.String),
     delivery: Schema.optional(OrchestrationV2SecretRequestDelivery),
     secretStatus: OrchestrationV2SecretRequestStatus,
+    /**
+     * t4 fork: tells the agent how the card ended, in the same commit that
+     * closes it. Asking does not wait, so the answer reaches the agent as a
+     * message whenever the user gives it.
+     */
+    wake: Schema.optional(
+      Schema.Struct({
+        messageId: MessageId,
+        text: Schema.String,
+        notification: OrchestrationV2Notification,
+      }),
+    ),
   }),
   /**
    * Records or updates a link an agent asked the user to make. Internal so no

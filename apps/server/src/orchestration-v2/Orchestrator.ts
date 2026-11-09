@@ -8743,6 +8743,7 @@ const makeOrchestrator = Effect.fn("orchestrationV2.Orchestrator.layer")(functio
     function* (
       command: Extract<OrchestrationV2InternalCommand, { readonly type: "secret_request.record" }>,
       events: Ref.Ref<Array<OrchestrationV2DomainEvent>>,
+      effects: Ref.Ref<Array<PendingOrchestrationEffectV2>>,
     ) {
       const projection = yield* projectionStore
         .getThreadRecords(
@@ -8756,14 +8757,17 @@ const makeOrchestrator = Effect.fn("orchestrationV2.Orchestrator.layer")(functio
           ),
         );
       const run = projection.runs.find((candidate) => candidate.id === command.runId);
-      if (run === undefined || run.rootNodeId !== command.nodeId) {
+      const existing = projection.turnItems.find((item) => item.id === command.turnItemId);
+      // t4 fork: only a new card needs its run's current root. The agent asks
+      // without waiting, so an answer may land long after the run ended or a
+      // steer restarted it.
+      if (run === undefined || (existing === undefined && run.rootNodeId !== command.nodeId)) {
         return yield* new OrchestratorDispatchError({
           commandId: command.commandId,
           commandType: command.type,
           cause: `Node ${command.nodeId} is not the root of run ${command.runId}.`,
         });
       }
-      const existing = projection.turnItems.find((item) => item.id === command.turnItemId);
       if (existing !== undefined && existing.type !== "secret_request") {
         return yield* new OrchestratorDispatchError({
           commandId: command.commandId,
@@ -8783,15 +8787,21 @@ const makeOrchestrator = Effect.fn("orchestrationV2.Orchestrator.layer")(functio
         existing !== undefined &&
         (existing.secretStatus !== "pending" || command.secretStatus === "pending");
       const pending = command.secretStatus === "pending";
+      const nodeId = existing?.nodeId ?? command.nodeId;
       const turnItem: OrchestrationV2TurnItem = unchanged
         ? existing
         : {
             id: command.turnItemId,
             threadId: command.threadId,
             runId: command.runId,
-            nodeId: command.nodeId,
-            providerThreadId: run.providerThreadId,
-            providerTurnId: providerTurnForRun(projection, run)?.id ?? null,
+            nodeId,
+            // An update keeps where the card was asked, even after a restart.
+            providerThreadId:
+              existing === undefined ? run.providerThreadId : existing.providerThreadId,
+            providerTurnId:
+              existing === undefined
+                ? (providerTurnForRun(projection, run)?.id ?? null)
+                : existing.providerTurnId,
             nativeItemRef: null,
             parentItemId: null,
             ordinal: existing?.ordinal ?? (yield* nextTurnItemOrdinal(projection)),
@@ -8818,11 +8828,38 @@ const makeOrchestrator = Effect.fn("orchestrationV2.Orchestrator.layer")(functio
         type: "turn-item.updated",
         threadId: command.threadId,
         runId: command.runId,
-        nodeId: command.nodeId,
+        nodeId,
         providerInstanceId: run.providerInstanceId,
         occurredAt: now,
         payload: turnItem,
       });
+      // t4 fork: the answer reaches the agent as a notification, as a link
+      // card's does: it starts a turn, or follows the one running. Only the
+      // answer that closes the card wakes it, and never a closed thread.
+      if (
+        command.wake === undefined ||
+        unchanged ||
+        projection.thread.archivedAt !== null ||
+        projection.thread.deletedAt !== null
+      ) {
+        return;
+      }
+      yield* dispatchMessage(
+        {
+          type: "message.dispatch",
+          commandId: command.commandId,
+          threadId: command.threadId,
+          messageId: command.wake.messageId,
+          text: command.wake.text,
+          notification: command.wake.notification,
+          attachments: [],
+          dispatchMode: { type: "queue_after_active" },
+          createdBy: "agent",
+          creationSource: "server",
+        },
+        events,
+        effects,
+      );
     },
   );
 
@@ -8980,7 +9017,7 @@ const makeOrchestrator = Effect.fn("orchestrationV2.Orchestrator.layer")(functio
   );
 
   /**
-   * Closes the link cards still waiting for the user. Their agent stopped
+   * Closes the link and secret cards still waiting for the user. Their agent stopped
    * waiting long ago, so nobody is woken: stopping or archiving the thread
    * means the user is done with it.
    */
@@ -8993,13 +9030,20 @@ const makeOrchestrator = Effect.fn("orchestrationV2.Orchestrator.layer")(functio
     }) {
       const { turnItems } = yield* projectionStore
         .getThreadRecords(input.threadId, ["turnItems"], {
-          turnItemTypes: ["link_request"],
+          // t4 fork: secret cards also wait on the user after their run.
+          turnItemTypes: ["link_request", "secret_request"],
           turnItemStatuses: ["waiting"],
           messageRoles: [],
         })
         .pipe(mapDispatchError(input.command));
       for (const item of turnItems) {
-        if (item.type !== "link_request" || item.linkStatus !== "pending") continue;
+        const closed =
+          item.type === "link_request" && item.linkStatus === "pending"
+            ? { ...item, linkStatus: "cancelled" as const }
+            : item.type === "secret_request" && item.secretStatus === "pending"
+              ? { ...item, secretStatus: "cancelled" as const }
+              : undefined;
+        if (closed === undefined) continue;
         yield* emit(
           input.events,
           input.command,
@@ -9010,9 +9054,8 @@ const makeOrchestrator = Effect.fn("orchestrationV2.Orchestrator.layer")(functio
           ...(item.nodeId === null ? {} : { nodeId: item.nodeId }),
           occurredAt: input.now,
           payload: {
-            ...item,
+            ...closed,
             status: "cancelled",
-            linkStatus: "cancelled",
             completedAt: input.now,
             updatedAt: input.now,
           },
@@ -13469,7 +13512,7 @@ const makeOrchestrator = Effect.fn("orchestrationV2.Orchestrator.layer")(functio
         yield* dispatchCreatedThreadRecord(command, events);
         break;
       case "secret_request.record":
-        yield* dispatchSecretRequestRecord(command, events);
+        yield* dispatchSecretRequestRecord(command, events, effects);
         break;
       case "link_request.record":
         yield* dispatchLinkRequestRecord(command, events, effects);
