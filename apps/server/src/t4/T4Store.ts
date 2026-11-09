@@ -62,7 +62,7 @@ type StoreError = SqlError.SqlError;
 
 /** A role a thread can be given; a release manager is one by t4_release_managers. */
 export type T4SetRole = "owner" | "pm";
-export const isSetRole = (role: unknown): role is T4SetRole => role === "owner" || role === "pm";
+const isSetRole = (role: unknown): role is T4SetRole => role === "owner" || role === "pm";
 
 export interface T4StoreShape {
   readonly openHandoffs: () => Effect.Effect<ReadonlyArray<T4Handoff>, StoreError>;
