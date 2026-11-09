@@ -121,7 +121,7 @@ export const deliveryNotes = (input: {
   ...(input.claudeRunning ? [CANCELLED_TOOL_NOTE] : []),
 ];
 
-export const make = Effect.gen(function* () {
+const make = Effect.gen(function* () {
   const threadManagement = yield* ThreadManagementService.ThreadManagementService;
   const store = yield* T4Store.T4Store;
   const ledger = yield* T4Ledger.T4Ledger;

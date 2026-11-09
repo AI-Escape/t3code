@@ -62,7 +62,7 @@ export const defaultT4ServerConfig: T4ServerConfigShape = {
   devRetireGlob: null,
 };
 
-export function resolveT4ServerConfig(json: T4ServerConfigJson): T4ServerConfigShape {
+function resolveT4ServerConfig(json: T4ServerConfigJson): T4ServerConfigShape {
   const d = defaultT4ServerConfig;
   return {
     releaseManagerTitlePrefix: json.releaseManager?.titlePrefix ?? d.releaseManagerTitlePrefix,
@@ -107,7 +107,3 @@ export const layer = Layer.effect(
     return resolveT4ServerConfig(json);
   }),
 );
-
-/** A fixed config, for tests. */
-export const layerTest = (config: Partial<T4ServerConfigShape> = {}) =>
-  Layer.succeed(T4ServerConfig, { ...defaultT4ServerConfig, ...config });

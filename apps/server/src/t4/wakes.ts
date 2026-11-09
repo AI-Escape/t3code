@@ -5,9 +5,9 @@
  * least 5 minutes, and each run arrives as "WAKE (scheduled …)" with a
  * reminder on recurring ones to cancel it when the work is done.
  */
-export const MAX_WAKES_PER_THREAD = 8;
-export const MAX_ONE_SHOT_MS = 30 * 86_400_000;
-export const MIN_WAKE_INTERVAL_MS = 5 * 60_000;
+const MAX_WAKES_PER_THREAD = 8;
+const MAX_ONE_SHOT_MS = 30 * 86_400_000;
+const MIN_WAKE_INTERVAL_MS = 5 * 60_000;
 
 export type WakeSchedule =
   | { readonly type: "once"; readonly runAt: string }
@@ -17,7 +17,7 @@ export type WakeSchedule =
   | { readonly type: "fixed_time"; readonly timeOfDay: string }
   | { readonly type: "webhook" };
 
-export const MAX_WAKE_NOTE_CHARS = 2000;
+const MAX_WAKE_NOTE_CHARS = 2000;
 
 /**
  * A wake's note is read by the user too, and it was being used as storage:

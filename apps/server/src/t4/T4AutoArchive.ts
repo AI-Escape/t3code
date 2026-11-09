@@ -28,7 +28,7 @@ type Shell = OrchestrationV2ThreadShell;
 
 const PER_PASS = 100;
 const hoursSetting = Number(process.env.T4_ARCHIVE_SETTLED_HOURS ?? "48");
-export const ARCHIVE_SETTLED_MS =
+const ARCHIVE_SETTLED_MS =
   Number.isFinite(hoursSetting) && hoursSetting > 0 ? hoursSetting * 3600_000 : null;
 
 const busy = (thread: Shell) =>

@@ -35,7 +35,7 @@ import * as FS from "node:fs";
 // @effect-diagnostics-next-line nodeBuiltinImport:off -- token files and a small state file, read synchronously at process start.
 import * as Path from "node:path";
 
-export const MAIN_CLAUDE_ACCOUNT = "main";
+const MAIN_CLAUDE_ACCOUNT = "main";
 /** The Claude provider instance t4 clients run (settings.json `providerInstances.claudeAgent`). */
 export const CLAUDE_INSTANCE_ID = "claudeAgent";
 const UNKNOWN_RESET_MS = 60 * 60 * 1000;
@@ -170,9 +170,6 @@ const readToken = (file: string): string | undefined => {
     return undefined;
   }
 };
-
-export const t4ClaudeAccountsEnabled = (env: NodeJS.ProcessEnv = process.env): boolean =>
-  accountFiles(env).length > 0;
 
 export const isClaudeAccountExhausted = (
   key: string,

@@ -48,7 +48,7 @@ const writeDefaultIds = (store: T4Store.T4StoreShape, ids: ReadonlyArray<string>
   );
 
 /** A session schedule: launches a new thread each run (not a wake, not a webhook). */
-export const isSessionSchedule = (task: ScheduledTask) =>
+const isSessionSchedule = (task: ScheduledTask) =>
   task.threadId === null && task.schedule.type !== "webhook";
 
 export const listSchedules = Effect.fn("t4.T4Schedules.list")(function* () {

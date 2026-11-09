@@ -19,7 +19,7 @@ import * as T4Delivery from "./T4Delivery.ts";
 import * as T4Store from "./T4Store.ts";
 import { shortId } from "./T4Threads.ts";
 
-export const FYI_WINDOW_MS = 10 * 60_000;
+const FYI_WINDOW_MS = 10 * 60_000;
 const INDEX_KEY = "fyi-digest-pairs";
 const lastKey = (from: string, to: string) => `fyi-last:${from}:${to}`;
 const queueKey = (from: string, to: string) => `fyi-queue:${from}:${to}`;
@@ -91,16 +91,16 @@ export const queueIfRecent = Effect.fn("t4.fyiDigest.queueIfRecent")(
   Effect.orElseSucceed(() => false),
 );
 
-export const noteDelivered = Effect.fn("t4.fyiDigest.noteDelivered")(function* (
-  from: string,
-  to: string,
-) {
-  const store = yield* T4Store.T4Store;
-  yield* store.setMeta(lastKey(from, to), String(yield* Clock.currentTimeMillis));
-}, (effect) => Effect.ignore(effect));
+export const noteDelivered = Effect.fn("t4.fyiDigest.noteDelivered")(
+  function* (from: string, to: string) {
+    const store = yield* T4Store.T4Store;
+    yield* store.setMeta(lastKey(from, to), String(yield* Clock.currentTimeMillis));
+  },
+  (effect) => Effect.ignore(effect),
+);
 
 /** The bundled message: the same HANDOFF header, every queued update in order. */
-export const digestText = (
+const digestText = (
   fromTitle: string,
   from: string,
   items: ReadonlyArray<{ readonly body: string }>,

@@ -25,7 +25,7 @@ const layerSetup = Layer.effectDiscard(
   }),
 );
 
-export const layerFromPath = (dbPath: string) =>
+const layerFromPath = (dbPath: string) =>
   Layer.provideMerge(layerSetup, NodeSqliteClient.layer({ filename: dbPath }));
 
 export const layer = Layer.unwrap(

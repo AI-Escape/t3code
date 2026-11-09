@@ -37,7 +37,7 @@ import * as Stream from "effect/Stream";
 import type * as ChildProcess from "effect/process/ChildProcess";
 import * as ChildProcessSpawner from "effect/process/ChildProcessSpawner";
 
-export const enabled = () => process.env.T4_SPAWN_BROKER === "1";
+const enabled = () => process.env.T4_SPAWN_BROKER === "1";
 
 // The helper: CommonJS, run with `node -e`. It spawns, streams output back,
 // and kills every process group it started when T3 goes away.

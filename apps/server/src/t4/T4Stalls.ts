@@ -32,16 +32,13 @@ const TOOL_ITEM_TYPES = new Set([
   "subagent",
 ]);
 
-export const stallNote = (minutes: number) =>
+const stallNote = (minutes: number) =>
   `(Thread tools: your turn stalled - no output for ${minutes} minutes - and was restarted. Any ` +
   "messages that arrived meanwhile are above in the conversation. Pick up where you were; if you " +
   "were waiting on the user's answer to a question, ask it again with your ask-user tool.)";
 
 /** A phone push (Pushover; keys from the environment) linking the t4 dashboard. */
-export const pushUser = Effect.fn("t4.T4Stalls.pushUser")(function* (
-  title: string,
-  message: string,
-) {
+const pushUser = Effect.fn("t4.T4Stalls.pushUser")(function* (title: string, message: string) {
   const token = process.env.PUSHOVER_APP_TOKEN;
   const user = process.env.PUSHOVER_USER_KEY;
   if (!token || !user) return;
@@ -67,7 +64,7 @@ export const pushUser = Effect.fn("t4.T4Stalls.pushUser")(function* (
 });
 
 /** Minutes the thread's running turn has been silent, or undefined if it isn't stalled. */
-export const silentMinutes = Effect.fn("t4.silentMinutes")(function* (
+const silentMinutes = Effect.fn("t4.silentMinutes")(function* (
   thread: OrchestrationV2ThreadShell,
   silenceMinutes: number,
 ) {

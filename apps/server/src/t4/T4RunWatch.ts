@@ -124,7 +124,7 @@ const FAILED = new Set(["failure", "timed_out", "startup_failure", "action_requi
 const QUIET = new Set(["skipped", "cancelled", "neutral", "stale"]);
 
 /** The message a finished run posts into its thread. */
-export const finishedMessage = (watch: Watch, run: WorkflowRun) =>
+const finishedMessage = (watch: Watch, run: WorkflowRun) =>
   [
     `WORKFLOW RUN finished: ${run.name || "run"} #${watch.runId}${run.branch ? ` on ${run.branch}` : ""} - ${run.conclusion || run.status}.`,
     run.title ? `"${run.title}"` : null,
@@ -179,7 +179,7 @@ export class T4RunWatch extends Context.Service<T4RunWatch, T4RunWatchShape>()(
   "t3/t4/T4RunWatch",
 ) {}
 
-export const make = Effect.gen(function* () {
+const make = Effect.gen(function* () {
   const store = yield* T4Store.T4Store;
   const delivery = yield* T4Delivery.T4Delivery;
   const threads = yield* ThreadManagementService.ThreadManagementService;

@@ -32,7 +32,7 @@ import { isRunning, isSettled, shortId } from "./T4Threads.ts";
 
 type Shell = OrchestrationV2ThreadShell;
 
-export const SETTLE_CANCELLED_NOTE =
+const SETTLE_CANCELLED_NOTE =
   "Note from the thread tools: your settle was cancelled because a message arrived after it. " +
   "Handle that message; if your work is still fully closed afterwards (nothing owed, nothing " +
   "awaiting the user), settle again as the last act of this turn.";
@@ -50,7 +50,7 @@ export interface T4SettleShape {
 
 export class T4Settle extends Context.Service<T4Settle, T4SettleShape>()("t3/t4/T4Settle") {}
 
-export const make = Effect.gen(function* () {
+const make = Effect.gen(function* () {
   const ledger = yield* T4Ledger.T4Ledger;
   const store = yield* T4Store.T4Store;
   const delivery = yield* T4Delivery.T4Delivery;

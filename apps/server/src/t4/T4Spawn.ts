@@ -35,9 +35,9 @@ type Shell = OrchestrationV2ThreadShell;
 
 const LIVE_WINDOW_MS = 3 * 3600_000;
 
-export const normalizeIssue = (identifier: string) => identifier.trim().toUpperCase();
+const normalizeIssue = (identifier: string) => identifier.trim().toUpperCase();
 
-export function spawnFooter(parent: Shell, parentIsReleaseManager: boolean): string {
+function spawnFooter(parent: Shell, parentIsReleaseManager: boolean): string {
   const ref = shortId(parent.id);
   return parentIsReleaseManager
     ? `\n\n---\nSpawned by the release manager (${ref}). When your PR is green and has the merge word, \`t3_handoff\` with done (no \`to\`) hands it the release and answers this spawn in one step. Blocked and need it to decide something: \`t3_handoff\` to "${ref}" with ask.`

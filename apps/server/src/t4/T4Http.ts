@@ -162,7 +162,7 @@ const limitedThreads = (world: T4Ledger.T4World, ledger: T4Ledger.T4LedgerShape)
       return at(left) - at(right);
     });
 
-export const RESUME_NOTE =
+const RESUME_NOTE =
   "(Thread tools: your last turn stopped on the provider's usage limit, and it has reset. Re-read " +
   "real state (git, PRs, `t3_owed`, Linear) and carry on from where you were. Your local stack may " +
   "have been stopped while you were idle - bring it back only if you need it.)";
@@ -875,6 +875,3 @@ export const layer = Layer.mergeAll(
     }),
   ),
 );
-
-/** Threads whose standing the dashboard reads (exported for tests). */
-export const _internal = { limitedThreads, isRetired };

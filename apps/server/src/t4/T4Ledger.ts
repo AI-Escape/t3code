@@ -23,7 +23,7 @@ type Shell = OrchestrationV2ThreadShell;
  * archived or gone - nothing can act on the answer, and it must not block the
  * owner's settle.
  */
-export function requesterClosed(
+function requesterClosed(
   entry: Pick<T4Store.T4Handoff, "fromThreadId">,
   byId: ReadonlyMap<string, Shell>,
 ): boolean {
@@ -34,7 +34,7 @@ export function requesterClosed(
 }
 
 /** Open entries that still bind someone. */
-export function liveEntries(
+function liveEntries(
   entries: ReadonlyArray<T4Store.T4Handoff>,
   byId: ReadonlyMap<string, Shell>,
 ): ReadonlyArray<T4Store.T4Handoff> {
@@ -80,7 +80,7 @@ export class T4LedgerError extends Schema.TaggedError<T4LedgerError>()("T4Ledger
 
 export class T4Ledger extends Context.Service<T4Ledger, T4LedgerShape>()("t3/t4/T4Ledger") {}
 
-export const make = Effect.gen(function* () {
+const make = Effect.gen(function* () {
   const store = yield* T4Store.T4Store;
   const config = yield* T4Config.T4ServerConfig;
   const threadManagement = yield* ThreadManagementService.ThreadManagementService;

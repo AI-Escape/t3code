@@ -344,9 +344,9 @@ const releaseOf = (row: ReleaseDbRow): T4ReleaseRow => ({
   updatedAt: row.updated_at,
 });
 
-export const nowIso = DateTime.now.pipe(Effect.map(DateTime.formatIso));
+const nowIso = DateTime.now.pipe(Effect.map(DateTime.formatIso));
 
-export const make = Effect.gen(function* () {
+const make = Effect.gen(function* () {
   const sql = yield* SqlClient.SqlClient;
   const crypto = yield* SecureRandom.SecureRandom;
   const newId = crypto.uuidV4().pipe(
