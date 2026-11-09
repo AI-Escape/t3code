@@ -1041,6 +1041,7 @@ const T4_ALWAYS_LOAD = new Set([
   "t3_thread_update",
   "schedule_task",
   "watch_workflow_run",
+  "release_queue",
   "request_secret",
 ]);
 

@@ -20,6 +20,7 @@ const harness = (input: {
   wakeInMs?: number;
   running?: boolean;
   awaiting?: boolean;
+  queue?: ReadonlyArray<{ ownerThreadId: string; state: T4Store.T4ReleaseState }>;
 }) => {
   const rm = {
     id: "t4-rm",
@@ -58,6 +59,7 @@ const harness = (input: {
       facts: () => ({ isReleaseManager: true, owes: 1, owedBy: 0 }),
     }),
     Layer.mock(T4Store.T4Store)({
+      releaseQueue: () => Effect.succeed((input.queue ?? []) as never),
       meta: (key: string) => Effect.succeed(meta.get(key)),
       setMeta: (key: string, value: string) => Effect.sync(() => void meta.set(key, value)),
     }),
@@ -100,6 +102,29 @@ const harness = (input: {
 };
 
 describe("t4 release guard", () => {
+  it("counts an owner unless every PR of theirs in the queue is held for the user", () => {
+    expect(T4ReleaseGuard.onlyHeld([], "o")).toBe(false);
+    expect(T4ReleaseGuard.onlyHeld([{ ownerThreadId: "o", state: "held" }], "o")).toBe(true);
+    expect(
+      T4ReleaseGuard.onlyHeld(
+        [
+          { ownerThreadId: "o", state: "held" },
+          { ownerThreadId: "o", state: "merged" },
+        ],
+        "o",
+      ),
+    ).toBe(false);
+    expect(
+      T4ReleaseGuard.onlyHeld(
+        [
+          { ownerThreadId: "o", state: "held" },
+          { ownerThreadId: "o", state: "shipped" },
+        ],
+        "o",
+      ),
+    ).toBe(true);
+  });
+
   it("nudges an idle release manager that owes and has nothing to wake it, once an hour", async () => {
     const h = harness({});
     await h.run(
@@ -123,6 +148,7 @@ describe("t4 release guard", () => {
       { wakeInMs: 3 * 24 * HOUR },
       { awaiting: true },
       { running: true },
+      { queue: [{ ownerThreadId: "t4-owner", state: "held" as const }] },
     ]) {
       const h = harness(input);
       await h.run(
