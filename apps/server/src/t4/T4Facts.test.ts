@@ -1,4 +1,4 @@
-import { assert, describe, it } from "vitest";
+import { assert, describe, it } from "@effect/vitest";
 
 import { roleOf } from "./T4Facts.ts";
 
