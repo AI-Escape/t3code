@@ -202,6 +202,17 @@ const ListThreadIssuesTool = Tool.make("list_thread_issues", {
   .annotate(Tool.Readonly, true)
   .annotate(Tool.Destructive, false);
 
+const SetThreadRoleTool = Tool.make("set_thread_role", {
+  ...common,
+  description:
+    "Give a thread its role: `pm` for a thread that coordinates threads it launched (the dashboard groups them under it, and it gets no reminder cards), `owner` for one that does its own work. Omit `thread` for yours. A release manager is one by being the project's release manager.",
+  parameters: Schema.Struct({
+    role: Schema.Literals(["pm", "owner"]),
+    thread: Schema.optional(ThreadRef),
+  }),
+  success: Schema.Struct({ threadId: Schema.String, role: Schema.String }),
+}).annotate(Tool.Destructive, false);
+
 const WatchWorkflowRunTool = Tool.make("watch_workflow_run", {
   ...common,
   dependencies: [...common.dependencies, T4RunWatch.T4RunWatch],
@@ -253,5 +264,6 @@ export const T4Toolkit = Toolkit.make(
   LinkIssueTool,
   UnlinkIssueTool,
   ListThreadIssuesTool,
+  SetThreadRoleTool,
   WatchWorkflowRunTool,
 );

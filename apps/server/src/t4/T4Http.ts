@@ -116,6 +116,7 @@ const MessageBody = Schema.Struct({
   text: Schema.String,
   interrupt: Schema.optional(Schema.Boolean),
 });
+const RoleBody = Schema.Struct({ role: Schema.Literals(["owner", "pm"]) });
 const ResumeBody = Schema.Struct({
   dryRun: Schema.optional(Schema.Boolean),
   batch: Schema.optional(Schema.Number),
@@ -196,6 +197,10 @@ export const layer = Layer.mergeAll(
           })),
         handoffs: open,
         releaseManagers: Object.fromEntries([...(yield* store.releaseManagers()).entries()]),
+        // Roles threads were given (AI-58) and who launched whom, for the
+        // dashboard's roles and By PM view.
+        roles: Object.fromEntries([...(yield* store.threadRoles()).entries()]),
+        parents: Object.fromEntries([...(yield* store.spawnParents()).entries()]),
         issueLinks: yield* store.issueLinks(),
         settleRequests: Object.fromEntries([...(yield* store.settleRequests()).entries()]),
         threads: Object.fromEntries(facts.entries()),
@@ -539,6 +544,19 @@ export const layer = Layer.mergeAll(
         threadId,
       });
       return json({ threadId, deleted: true });
+    }),
+  ),
+
+  // The user gives a thread its role from the dashboard (AI-58).
+  route("POST", "/api/t4/threads/:threadId/role", AuthOrchestrationOperateScope, (params) =>
+    Effect.gen(function* () {
+      const input = yield* body(RoleBody);
+      const threads = yield* ThreadManagementService.ThreadManagementService;
+      const store = yield* T4Store.T4Store;
+      const thread = yield* threads.getThreadShell(ThreadId.make(params.threadId ?? ""));
+      if (thread === null) return json({ error: "thread not found" }, 404);
+      yield* store.setThreadRole(thread.id, input.role);
+      return json({ threadId: thread.id, role: input.role });
     }),
   ),
 

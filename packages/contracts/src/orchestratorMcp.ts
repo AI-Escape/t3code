@@ -358,6 +358,12 @@ export const OrchestratorMcpThreadT4Facts = Schema.Struct({
     description: "running, waiting-you, settled, snoozed, idle or archived.",
   }),
   isReleaseManager: Schema.Boolean,
+  role: Schema.optional(
+    Schema.String.annotate({ description: "owner, pm or release-manager." }),
+  ),
+  parentThreadId: Schema.optional(
+    Schema.NullOr(Schema.String).annotate({ description: "The thread that launched it." }),
+  ),
   owes: Schema.Number.annotate({ description: "Open handoffs this thread still has to answer." }),
   owedBy: Schema.Number.annotate({
     description: "Open handoffs others owe this thread an answer.",

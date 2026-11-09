@@ -627,6 +627,23 @@ export const layer = McpToolAccess.toLayer(T4Toolkit, {
     }),
   ),
 
+  set_thread_role: McpToolAccess.writes((input) =>
+    Effect.gen(function* () {
+      const ledger = yield* T4Ledger.T4Ledger;
+      const store = yield* T4Store.T4Store;
+      const world = yield* ledger.world().pipe(Effect.mapError(ledgerUnavailable));
+      const thread =
+        input.thread === undefined ? yield* callerThread : yield* resolveRef(input.thread, world);
+      if (ledger.isReleaseManager(world, thread)) {
+        return yield* invalid(
+          `"${thread.title}" is this project's release manager; that is its role`,
+        );
+      }
+      yield* store.setThreadRole(thread.id, input.role).pipe(Effect.mapError(ledgerUnavailable));
+      return { threadId: thread.id, role: input.role };
+    }),
+  ),
+
   unlink_issue: McpToolAccess.writes((input) =>
     Effect.gen(function* () {
       const ledger = yield* T4Ledger.T4Ledger;

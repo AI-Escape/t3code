@@ -44,6 +44,30 @@ describe("T4Store", () => {
     }).pipe(Effect.provide(layer)),
   );
 
+  it.effect("keeps thread roles and who launched whom", () =>
+    Effect.gen(function* () {
+      const store = yield* T4Store.T4Store;
+      yield* store.setThreadRole("pm-1", "pm");
+      yield* store.setThreadRole("t2", "pm");
+      yield* store.setThreadRole("t2", "owner");
+      assert.deepEqual([...(yield* store.threadRoles()).entries()].sort(), [
+        ["pm-1", "pm"],
+        ["t2", "owner"],
+      ]);
+      yield* store.recordHandoff({
+        kind: "spawn",
+        fromThreadId: "pm-1",
+        fromTitle: "AI-1 PM",
+        toThreadId: "child",
+        projectId: "p",
+        summary: "build it",
+      });
+      const parents = yield* store.spawnParents();
+      assert.equal(parents.get("child"), "pm-1");
+      assert.isUndefined(parents.get("pm-1"));
+    }).pipe(Effect.provide(layer)),
+  );
+
   it.effect("remembers notices, release managers, issue links, settle requests and wakes", () =>
     Effect.gen(function* () {
       const store = yield* T4Store.T4Store;
