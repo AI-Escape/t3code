@@ -56,6 +56,100 @@ export interface T4Wake {
   readonly fired: number;
 }
 
+/**
+ * A PR in a release manager's queue (AI-71). held: waiting on the user (a
+ * production promotion they gate); failed: the owner owes a fix.
+ */
+export const RELEASE_STATES = ["queued", "merged", "staging", "held", "shipped", "failed"] as const;
+export type T4ReleaseState = (typeof RELEASE_STATES)[number];
+export const isReleaseState = (state: unknown): state is T4ReleaseState =>
+  RELEASE_STATES.includes(state as T4ReleaseState);
+
+export interface T4ReleaseRow {
+  readonly projectId: string;
+  readonly pr: number;
+  readonly title: string | null;
+  readonly ownerThreadId: string | null;
+  readonly ownerTitle: string | null;
+  readonly issue: string | null;
+  readonly state: T4ReleaseState;
+  readonly commitSha: string | null;
+  readonly note: string | null;
+  readonly queuedAt: string;
+  readonly mergedAt: string | null;
+  readonly stagedAt: string | null;
+  readonly shippedAt: string | null;
+  readonly updatedAt: string;
+}
+
+export interface T4ReleaseUpdate {
+  readonly projectId: string;
+  readonly pr: number;
+  readonly state?: T4ReleaseState | undefined;
+  readonly title?: string | undefined;
+  readonly ownerThreadId?: string | undefined;
+  readonly ownerTitle?: string | undefined;
+  readonly issue?: string | undefined;
+  readonly commitSha?: string | undefined;
+  readonly note?: string | undefined;
+  readonly at?: string | undefined;
+}
+
+/**
+ * The row after an update. A state change stamps its time (merged, staging,
+ * shipped) once; a PR queued again after it shipped or failed starts over.
+ */
+export const applyReleaseUpdate = (
+  existing: T4ReleaseRow | undefined,
+  update: T4ReleaseUpdate,
+  at: string,
+): T4ReleaseRow => {
+  const state = update.state ?? existing?.state ?? "queued";
+  const restart =
+    existing !== undefined &&
+    state === "queued" &&
+    (existing.state === "shipped" || existing.state === "failed");
+  const base: T4ReleaseRow =
+    existing === undefined || restart
+      ? {
+          projectId: update.projectId,
+          pr: update.pr,
+          title: existing?.title ?? null,
+          ownerThreadId: existing?.ownerThreadId ?? null,
+          ownerTitle: existing?.ownerTitle ?? null,
+          issue: existing?.issue ?? null,
+          state,
+          commitSha: null,
+          note: null,
+          queuedAt: at,
+          mergedAt: null,
+          stagedAt: null,
+          shippedAt: null,
+          updatedAt: at,
+        }
+      : existing;
+  // held and failed stamp nothing: a hold can come before or after the merge.
+  const reached = (target: "merged" | "staging") =>
+    target === "merged"
+      ? state === "merged" || state === "staging" || state === "shipped"
+      : state === "staging" || state === "shipped";
+  return {
+    ...base,
+    state,
+    title: update.title ?? base.title,
+    ownerThreadId: update.ownerThreadId ?? base.ownerThreadId,
+    ownerTitle: update.ownerTitle ?? base.ownerTitle,
+    issue: update.issue ?? base.issue,
+    commitSha: update.commitSha ?? base.commitSha,
+    note:
+      update.note ?? (update.state !== undefined && update.state !== base.state ? null : base.note),
+    mergedAt: base.mergedAt ?? (reached("merged") ? at : null),
+    stagedAt: base.stagedAt ?? (reached("staging") ? at : null),
+    shippedAt: base.shippedAt ?? (state === "shipped" ? at : null),
+    updatedAt: at,
+  };
+};
+
 const MAX_NOTICES = 500;
 
 type StoreError = SqlError.SqlError;
@@ -130,6 +224,18 @@ export interface T4StoreShape {
   ) => Effect.Effect<ReadonlyArray<string>, StoreError>;
   readonly addStall: (threadId: string, at: string) => Effect.Effect<void, StoreError>;
 
+  /** A release manager's queue: rows not shipped, plus those shipped since `shippedSince`. */
+  readonly releaseQueue: (input?: {
+    readonly projectId?: string | undefined;
+    readonly shippedSince?: string | undefined;
+  }) => Effect.Effect<ReadonlyArray<T4ReleaseRow>, StoreError>;
+  readonly updateRelease: (update: T4ReleaseUpdate) => Effect.Effect<T4ReleaseRow, StoreError>;
+  /**
+   * An owner's handoff names its PR: queue it, unless the release manager
+   * already has it in flight (then only a missing owner is filled in).
+   */
+  readonly queueRelease: (update: T4ReleaseUpdate) => Effect.Effect<T4ReleaseRow, StoreError>;
+
   readonly meta: (key: string) => Effect.Effect<string | undefined, StoreError>;
   readonly setMeta: (key: string, value: string) => Effect.Effect<void, StoreError>;
 }
@@ -202,6 +308,40 @@ const wakeOf = (row: WakeRow): T4Wake => ({
   due: row.due,
   createdAt: row.created_at,
   fired: row.fired,
+});
+
+interface ReleaseDbRow {
+  readonly project_id: string;
+  readonly pr: number;
+  readonly title: string | null;
+  readonly owner_thread_id: string | null;
+  readonly owner_title: string | null;
+  readonly issue: string | null;
+  readonly state: string;
+  readonly commit_sha: string | null;
+  readonly note: string | null;
+  readonly queued_at: string;
+  readonly merged_at: string | null;
+  readonly staged_at: string | null;
+  readonly shipped_at: string | null;
+  readonly updated_at: string;
+}
+
+const releaseOf = (row: ReleaseDbRow): T4ReleaseRow => ({
+  projectId: row.project_id,
+  pr: Number(row.pr),
+  title: row.title,
+  ownerThreadId: row.owner_thread_id,
+  ownerTitle: row.owner_title,
+  issue: row.issue,
+  state: isReleaseState(row.state) ? row.state : "queued",
+  commitSha: row.commit_sha,
+  note: row.note,
+  queuedAt: row.queued_at,
+  mergedAt: row.merged_at,
+  stagedAt: row.staged_at,
+  shippedAt: row.shipped_at,
+  updatedAt: row.updated_at,
 });
 
 export const nowIso = DateTime.now.pipe(Effect.map(DateTime.formatIso));
@@ -306,7 +446,9 @@ export const make = Effect.gen(function* () {
       Effect.map(
         (rows) =>
           new Map(
-            rows.flatMap((row) => (isSetRole(row.role) ? [[row.thread_id, row.role] as const] : [])),
+            rows.flatMap((row) =>
+              isSetRole(row.role) ? [[row.thread_id, row.role] as const] : [],
+            ),
           ),
       ),
     );
@@ -326,7 +468,9 @@ export const make = Effect.gen(function* () {
     sql<{ readonly from_thread_id: string; readonly to_thread_id: string }>`
       SELECT from_thread_id, to_thread_id FROM t4_handoffs
       WHERE kind = 'spawn' ORDER BY created_at DESC
-    `.pipe(Effect.map((rows) => new Map(rows.map((row) => [row.to_thread_id, row.from_thread_id]))));
+    `.pipe(
+      Effect.map((rows) => new Map(rows.map((row) => [row.to_thread_id, row.from_thread_id]))),
+    );
 
   const setReleaseManager: T4StoreShape["setReleaseManager"] = (projectId, threadId) =>
     sql`
@@ -435,6 +579,73 @@ export const make = Effect.gen(function* () {
       Effect.map((rows) => rows[0]?.value),
     );
 
+  const releaseQueue: T4StoreShape["releaseQueue"] = (input) => {
+    const since = input?.shippedSince ?? "9999";
+    return (
+      input?.projectId === undefined
+        ? sql<ReleaseDbRow>`
+            SELECT * FROM t4_release_queue
+            WHERE state != 'shipped' OR shipped_at >= ${since}
+            ORDER BY queued_at
+          `
+        : sql<ReleaseDbRow>`
+            SELECT * FROM t4_release_queue
+            WHERE project_id = ${input.projectId} AND (state != 'shipped' OR shipped_at >= ${since})
+            ORDER BY queued_at
+          `
+    ).pipe(Effect.map((rows) => rows.map(releaseOf)));
+  };
+
+  const writeRelease = (
+    update: T4ReleaseUpdate,
+    decide: (existing: T4ReleaseRow | undefined, at: string) => T4ReleaseRow,
+  ) =>
+    sql.withTransaction(
+      Effect.gen(function* () {
+        const at = update.at ?? (yield* nowIso);
+        const found = yield* sql<ReleaseDbRow>`
+          SELECT * FROM t4_release_queue WHERE project_id = ${update.projectId} AND pr = ${update.pr}
+        `;
+        const row = decide(found[0] === undefined ? undefined : releaseOf(found[0]), at);
+        yield* sql`
+          INSERT OR REPLACE INTO t4_release_queue
+            (project_id, pr, title, owner_thread_id, owner_title, issue, state, commit_sha, note,
+             queued_at, merged_at, staged_at, shipped_at, updated_at)
+          VALUES (${row.projectId}, ${row.pr}, ${row.title}, ${row.ownerThreadId}, ${row.ownerTitle},
+                  ${row.issue}, ${row.state}, ${row.commitSha}, ${row.note}, ${row.queuedAt},
+                  ${row.mergedAt}, ${row.stagedAt}, ${row.shippedAt}, ${row.updatedAt})
+        `;
+        // Shipped rows only matter for a while (the dashboard's recent list).
+        yield* sql`
+          DELETE FROM t4_release_queue
+          WHERE state = 'shipped' AND shipped_at < datetime(${at}, '-30 days')
+        `;
+        return row;
+      }),
+    );
+
+  const updateRelease: T4StoreShape["updateRelease"] = (update) =>
+    writeRelease(update, (existing, at) => applyReleaseUpdate(existing, update, at));
+
+  const queueRelease: T4StoreShape["queueRelease"] = (update) =>
+    writeRelease(update, (existing, at) =>
+      existing === undefined || existing.state === "shipped" || existing.state === "failed"
+        ? applyReleaseUpdate(existing, { ...update, state: "queued" }, at)
+        : applyReleaseUpdate(
+            existing,
+            {
+              projectId: update.projectId,
+              pr: update.pr,
+              ...(existing.ownerThreadId === null
+                ? { ownerThreadId: update.ownerThreadId, ownerTitle: update.ownerTitle }
+                : {}),
+              ...(existing.issue === null ? { issue: update.issue } : {}),
+              ...(existing.title === null ? { title: update.title } : {}),
+            },
+            at,
+          ),
+    );
+
   const setMeta: T4StoreShape["setMeta"] = (key, value) =>
     sql`
       INSERT INTO t4_meta (key, value) VALUES (${key}, ${value})
@@ -468,6 +679,9 @@ export const make = Effect.gen(function* () {
     deleteWake,
     recentStalls,
     addStall,
+    releaseQueue,
+    updateRelease,
+    queueRelease,
     meta,
     setMeta,
   });

@@ -118,9 +118,36 @@ const Migration0002 = Effect.gen(function* () {
   `;
 });
 
+// The release manager's queue (AI-71): one row per PR it releases, so it reads
+// its queue from t4 instead of a file it re-read 2,130 times in a week
+// (usa-rs, 2026-11-09), and the dashboard lists what is on staging.
+const Migration0003 = Effect.gen(function* () {
+  const sql = yield* SqlClient.SqlClient;
+  yield* sql`
+    CREATE TABLE IF NOT EXISTS t4_release_queue (
+      project_id TEXT NOT NULL,
+      pr INTEGER NOT NULL,
+      title TEXT,
+      owner_thread_id TEXT,
+      owner_title TEXT,
+      issue TEXT,
+      state TEXT NOT NULL,
+      commit_sha TEXT,
+      note TEXT,
+      queued_at TEXT NOT NULL,
+      merged_at TEXT,
+      staged_at TEXT,
+      shipped_at TEXT,
+      updated_at TEXT NOT NULL,
+      PRIMARY KEY (project_id, pr)
+    ) WITHOUT ROWID
+  `;
+});
+
 const t4MigrationEntries = [
   [1, "T4SessionTooling", Migration0001],
   [2, "T4ThreadRoles", Migration0002],
+  [3, "T4ReleaseQueue", Migration0003],
 ] as const;
 
 const run = Migrator.make({});

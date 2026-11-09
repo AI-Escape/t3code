@@ -257,6 +257,63 @@ const WatchWorkflowRunTool = Tool.make("watch_workflow_run", {
   }),
 }).annotate(Tool.Destructive, false);
 
+const ReleaseState = Schema.Literals(T4Store.RELEASE_STATES);
+
+const ReleaseEntry = Schema.Struct({
+  pr: Schema.Number,
+  state: ReleaseState,
+  title: Schema.NullOr(Schema.String),
+  issue: Schema.NullOr(Schema.String),
+  owner: Schema.NullOr(ThreadSummary),
+  commit: Schema.NullOr(Schema.String),
+  note: Schema.NullOr(Schema.String),
+  queuedAt: Schema.String,
+  mergedAt: Schema.NullOr(Schema.String),
+  stagedAt: Schema.NullOr(Schema.String),
+  shippedAt: Schema.NullOr(Schema.String),
+});
+
+const ReleaseQueueTool = Tool.make("release_queue", {
+  ...common,
+  description: [
+    "The release manager's queue, kept by t4 (the dashboard shows it as what is on staging). Without `prs`: this project's PRs not yet shipped, oldest first - read it instead of keeping a queue file.",
+    "With `prs` (release manager only): record each PR's state - queued (handed off, not merged), merged (on the release branch, not deployed), staging (deployed to staging), held (waiting on the user, e.g. a production promotion they gate), shipped (live in production), failed (its release failed). An owner's handoff that names its PR queues it for you.",
+    "Moving a PR to staging, shipped or failed also sends its owner the notice (staging: fyi; shipped: done + fyi; failed: done + ask, with `note` as the cause) - one message per owner per call; `notify: false` records only.",
+  ].join(" "),
+  parameters: Schema.Struct({
+    prs: Schema.optional(
+      Schema.Array(
+        Schema.Struct({
+          pr: Schema.Number,
+          state: ReleaseState,
+          owner: Schema.optional(
+            ThreadRef.annotate({ description: "The owning thread, when t4 doesn't know it yet." }),
+          ),
+          title: Schema.optional(Schema.String),
+          issue: Schema.optional(Schema.String),
+          commit: Schema.optional(
+            Schema.String.annotate({ description: "The merge commit (or the train's head)." }),
+          ),
+          note: Schema.optional(
+            Schema.String.annotate({
+              description: "One line: why it is held, or why the release failed.",
+            }),
+          ),
+        }),
+      ),
+    ),
+    notify: Schema.optional(Schema.Boolean),
+    all: Schema.optional(
+      Schema.Boolean.annotate({ description: "Also list PRs shipped in the last 7 days." }),
+    ),
+  }),
+  success: Schema.Struct({
+    entries: Schema.Array(ReleaseEntry),
+    notified: Schema.Array(Schema.String),
+    notes: Schema.Array(Schema.String),
+  }),
+}).annotate(Tool.Destructive, false);
+
 export const T4Toolkit = Toolkit.make(
   HandoffTool,
   OwedTool,
@@ -266,4 +323,5 @@ export const T4Toolkit = Toolkit.make(
   ListThreadIssuesTool,
   SetThreadRoleTool,
   WatchWorkflowRunTool,
+  ReleaseQueueTool,
 );

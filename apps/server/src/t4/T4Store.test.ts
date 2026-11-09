@@ -115,4 +115,61 @@ describe("T4Store", () => {
       assert.isUndefined(yield* store.wake(id));
     }).pipe(Effect.provide(layer)),
   );
+  it.effect("keeps a release queue: owners queue PRs, the release manager moves them", () =>
+    Effect.gen(function* () {
+      const store = yield* T4Store.T4Store;
+      const owner = { ownerThreadId: "owner", ownerTitle: "USA-9 Fix", title: "USA-9 Fix" };
+      yield* store.queueRelease({ projectId: "p", pr: 12, ...owner, at: "2026-11-09T10:00:00Z" });
+      const merged = yield* store.updateRelease({
+        projectId: "p",
+        pr: 12,
+        state: "merged",
+        commitSha: "abc1234",
+        at: "2026-11-09T10:05:00Z",
+      });
+      assert.equal(merged.mergedAt, "2026-11-09T10:05:00Z");
+      assert.equal(merged.ownerThreadId, "owner");
+      // A second handoff while it is in flight does not reset it.
+      const again = yield* store.queueRelease({ projectId: "p", pr: 12, ...owner });
+      assert.equal(again.state, "merged");
+      const staged = yield* store.updateRelease({
+        projectId: "p",
+        pr: 12,
+        state: "staging",
+        at: "2026-11-09T10:40:00Z",
+      });
+      assert.equal(staged.stagedAt, "2026-11-09T10:40:00Z");
+      assert.equal(staged.mergedAt, "2026-11-09T10:05:00Z");
+      yield* store.updateRelease({
+        projectId: "p",
+        pr: 12,
+        state: "shipped",
+        at: "2026-11-09T11:30:00Z",
+      });
+      assert.equal((yield* store.releaseQueue({ projectId: "p" })).length, 0);
+      const recent = yield* store.releaseQueue({ shippedSince: "2026-11-09T00:00:00Z" });
+      assert.equal(recent[0]?.shippedAt, "2026-11-09T11:30:00Z");
+      // Handed off again after it shipped: a fresh entry.
+      const requeued = yield* store.queueRelease({
+        projectId: "p",
+        pr: 12,
+        ...owner,
+        at: "2026-11-10T09:00:00Z",
+      });
+      assert.equal(requeued.state, "queued");
+      assert.isNull(requeued.mergedAt);
+      assert.isNull(requeued.shippedAt);
+    }).pipe(Effect.provide(layer)),
+  );
+
+  it("stamps no staging time on a hold", () => {
+    const held = T4Store.applyReleaseUpdate(
+      undefined,
+      { projectId: "p", pr: 1, state: "held", note: "waits on the user's promotion" },
+      "2026-11-09T10:00:00Z",
+    );
+    assert.isNull(held.stagedAt);
+    assert.isNull(held.mergedAt);
+    assert.equal(held.note, "waits on the user's promotion");
+  });
 });

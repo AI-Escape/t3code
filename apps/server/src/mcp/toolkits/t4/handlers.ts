@@ -15,6 +15,7 @@ import * as SecureRandom from "effect/crypto/SecureRandom";
 import * as DateTime from "effect/DateTime";
 import * as Effect from "effect/Effect";
 import * as Option from "effect/Option";
+import * as Result from "effect/Result";
 
 import * as ThreadLaunch from "../../../orchestration-v2/ThreadLaunchService.ts";
 import * as Project from "../../../project/ProjectService.ts";
@@ -157,6 +158,94 @@ const latestUserWord = Effect.fn("t4.latestUserWord")(function* (me: Shell, now:
     : `The user's latest word in this thread (from T3, not the sender):\n${lines.join("\n")}\n\n`;
 });
 
+/**
+ * t4 fork: owners schedule a check for `shipped:`; 31 of 59 such wakes fired
+ * after it had arrived (usa-rs, 2026-10-30). Name them so the owner deletes
+ * the ones that were only for this release.
+ */
+const pendingWakesNote = Effect.fn("t4.pendingWakesNote")(function* (
+  threadId: string,
+  now: number,
+) {
+  const scheduled = yield* Effect.serviceOption(ScheduledTasks.ScheduledTaskService);
+  if (Option.isNone(scheduled)) return "";
+  const { tasks } = yield* scheduled.value
+    .list()
+    .pipe(Effect.orElseSucceed(() => ({ tasks: [] as ReadonlyArray<never> })));
+  const pending = tasks.filter(
+    (task) =>
+      task.threadId === threadId &&
+      task.enabled &&
+      task.schedule.type === "once" &&
+      task.nextRunAt !== null &&
+      Date.parse(String(task.nextRunAt)) > now,
+  );
+  if (pending.length === 0) return "";
+  return (
+    `\n\n---\nYour pending wake${pending.length === 1 ? "" : "s"}: ` +
+    pending
+      .slice(0, 5)
+      .map((task) => `"${task.title}" (${task.id}, ${String(task.nextRunAt)})`)
+      .join("; ") +
+    ". Delete any that was only to check for this release (`delete_scheduled_task`)."
+  );
+});
+
+const handoffHeader = (me: Shell, labels: ReadonlyArray<string>) =>
+  `HANDOFF from "${me.title}" (${shortId(me.id)}, ${whereOf(me)}) — ${labels.join(" · ")}:\n\n`;
+
+/** The PR an owner's handoff names: a pull-request URL, else the first `#123`. */
+export const prOfHandoff = (body: string): number | undefined => {
+  const match = /\/pull\/(\d+)/.exec(body) ?? /(?:^|[^\w&])#(\d{1,6})\b/.exec(body);
+  const pr = match === null ? Number.NaN : Number(match[1]);
+  return Number.isInteger(pr) && pr > 0 ? pr : undefined;
+};
+
+/** One release notice per owner and state (release_queue). */
+export const releaseNotice = (
+  state: "staging" | "shipped" | "failed",
+  prs: ReadonlyArray<number>,
+  note: string | null,
+) => {
+  const list = prs.map((pr) => `#${pr}`).join(", ");
+  const plural = prs.length === 1 ? "PR" : "PRs";
+  switch (state) {
+    case "staging":
+      return `staging: ${plural} ${list} ${prs.length === 1 ? "is" : "are"} on staging. Verify there.${note ? ` ${note}` : ""}`;
+    case "shipped":
+      return `shipped: ${plural} ${list} live in production. Verify, close your Linear.${note ? ` ${note}` : ""}`;
+    case "failed":
+      return `release failed on your ${plural} ${list}: ${note ?? "see the release manager's thread"}`;
+  }
+};
+
+const releaseEntryOf = (row: T4Store.T4ReleaseRow, world: T4Ledger.T4World, now: number) => {
+  const owner = row.ownerThreadId === null ? undefined : world.byId.get(row.ownerThreadId);
+  return {
+    pr: row.pr,
+    state: row.state,
+    title: row.title,
+    issue: row.issue,
+    owner:
+      owner !== undefined
+        ? summaryOf(owner, now)
+        : row.ownerThreadId === null
+          ? null
+          : {
+              threadId: ThreadId.make(row.ownerThreadId),
+              shortId: shortId(row.ownerThreadId),
+              title: row.ownerTitle ?? row.ownerThreadId,
+              state: "deleted",
+            },
+    commit: row.commitSha,
+    note: row.note,
+    queuedAt: row.queuedAt,
+    mergedAt: row.mergedAt,
+    stagedAt: row.stagedAt,
+    shippedAt: row.shippedAt,
+  };
+};
+
 const parseIssue = (input: {
   readonly identifier?: string | undefined;
   readonly url?: string | undefined;
@@ -168,6 +257,24 @@ const parseIssue = (input: {
   }
   return Effect.succeed({ provider: "linear", identifier, url: input.url ?? null });
 };
+
+/** An owner's handoff to the release manager queues the PR it names (AI-71). */
+const queueHandedOffPr = Effect.fn("t4.queueHandedOffPr")(function* (me: Shell, body: string) {
+  const pr = prOfHandoff(body);
+  if (pr === undefined) return undefined;
+  const store = yield* T4Store.T4Store;
+  yield* store
+    .queueRelease({
+      projectId: me.projectId,
+      pr,
+      ownerThreadId: me.id,
+      ownerTitle: me.title,
+      title: me.title,
+      issue: issueIdIn(me.title) ?? undefined,
+    })
+    .pipe(Effect.ignoreCause({ log: true }));
+  return pr;
+});
 
 export const layer = McpToolAccess.toLayer(T4Toolkit, {
   t3_handoff: McpToolAccess.actsAsCaller((input) =>
@@ -261,7 +368,7 @@ export const layer = McpToolAccess.toLayer(T4Toolkit, {
       const toReleaseManager =
         !meIsRm && (target === undefined || ledger.isReleaseManager(world, target));
       const userWord = toReleaseManager ? yield* latestUserWord(me, now) : "";
-      const header = `HANDOFF from "${me.title}" (${shortId(me.id)}, ${whereOf(me)}) — ${labels.join(" · ")}:\n\n${userWord}`;
+      const header = handoffHeader(me, labels) + userWord;
       const footer = ask
         ? `\n\n---\nAnswer with \`t3_handoff\` (to: "${shortId(me.id)}", done: true; add fyi: true if you ask nothing back). \`t3_owed\` lists what you still owe.`
         : "";
@@ -320,6 +427,7 @@ export const layer = McpToolAccess.toLayer(T4Toolkit, {
             summary,
           })
           .pipe(Effect.mapError(ledgerUnavailable));
+        yield* queueHandedOffPr(me, body);
         notes.push(
           `no release manager for ${project.title} - started "${title}", pinned, and handed it this`,
         );
@@ -371,32 +479,10 @@ export const layer = McpToolAccess.toLayer(T4Toolkit, {
       // t4 fork: owners schedule a check for `shipped:`; 31 of 59 such wakes
       // fired after it had arrived (usa-rs, 2026-10-30). Name them so the owner
       // deletes the ones that were only for this release.
-      let wakesNote = "";
-      if (meIsRm && done && !ledger.isReleaseManager(world, target)) {
-        const scheduled = yield* Effect.serviceOption(ScheduledTasks.ScheduledTaskService);
-        if (Option.isSome(scheduled)) {
-          const { tasks } = yield* scheduled.value
-            .list()
-            .pipe(Effect.orElseSucceed(() => ({ tasks: [] as ReadonlyArray<never> })));
-          const pending = tasks.filter(
-            (task) =>
-              task.threadId === target.id &&
-              task.enabled &&
-              task.schedule.type === "once" &&
-              task.nextRunAt !== null &&
-              Date.parse(String(task.nextRunAt)) > now,
-          );
-          if (pending.length > 0) {
-            wakesNote =
-              `\n\n---\nYour pending wake${pending.length === 1 ? "" : "s"}: ` +
-              pending
-                .slice(0, 5)
-                .map((task) => `"${task.title}" (${task.id}, ${String(task.nextRunAt)})`)
-                .join("; ") +
-              ". Delete any that was only to check for this release (`delete_scheduled_task`).";
-          }
-        }
-      }
+      const wakesNote =
+        meIsRm && done && !ledger.isReleaseManager(world, target)
+          ? yield* pendingWakesNote(target.id, now)
+          : "";
       const delivered = yield* delivery
         .deliver({
           target,
@@ -420,6 +506,10 @@ export const layer = McpToolAccess.toLayer(T4Toolkit, {
           .pipe(Effect.mapError(ledgerUnavailable));
       }
       const targetIsRm = ledger.isReleaseManager(world, target);
+      if (targetIsRm && !meIsRm) {
+        const pr = yield* queueHandedOffPr(me, body);
+        if (pr !== undefined) notes.push(`PR #${pr} is in the release manager's queue`);
+      }
       if (done) {
         notes.push(
           settled > 0
@@ -744,6 +834,151 @@ export const layer = McpToolAccess.toLayer(T4Toolkit, {
         next: watching
           ? "End your turn now. A message arrives here when the run finishes (checked every 30 s); handoffs reach you meanwhile."
           : "The run already finished; act on its conclusion now.",
+      };
+    }),
+  ),
+
+  release_queue: McpToolAccess.actsAsCaller((input) =>
+    Effect.gen(function* () {
+      const ledger = yield* T4Ledger.T4Ledger;
+      const store = yield* T4Store.T4Store;
+      const delivery = yield* T4Delivery.T4Delivery;
+      const now = yield* nowMs;
+      const me = yield* callerThread;
+      const world = yield* ledger.world().pipe(Effect.mapError(ledgerUnavailable));
+      const notes: Array<string> = [];
+      const notified: Array<string> = [];
+      const updates = input.prs ?? [];
+      if (updates.length > 0) {
+        if (!ledger.isReleaseManager(world, me)) {
+          return yield* invalid(
+            "only this project's release manager records releases - hand your PR over with `t3_handoff` (no `to`)",
+          );
+        }
+        const before = new Map(
+          (yield* store
+            .releaseQueue({ projectId: me.projectId, shippedSince: "0000" })
+            .pipe(Effect.mapError(ledgerUnavailable))).map((row) => [row.pr, row]),
+        );
+        const changed: Array<T4Store.T4ReleaseRow> = [];
+        for (const update of updates) {
+          if (!Number.isInteger(update.pr) || update.pr <= 0) {
+            return yield* invalid(`'${update.pr}' is not a PR number`);
+          }
+          if (update.state === "failed" && !update.note?.trim()) {
+            return yield* invalid(
+              `PR #${update.pr}: a failed release needs \`note\` - the failing job and a one-line cause`,
+            );
+          }
+          const owner =
+            update.owner === undefined ? undefined : yield* resolveRef(update.owner, world);
+          const row = yield* store
+            .updateRelease({
+              projectId: me.projectId,
+              pr: update.pr,
+              state: update.state,
+              ownerThreadId: owner?.id,
+              ownerTitle: owner?.title,
+              title: update.title ?? owner?.title,
+              issue:
+                update.issue ??
+                (owner === undefined ? undefined : (issueIdIn(owner.title) ?? undefined)),
+              commitSha: update.commit?.trim() || undefined,
+              note: update.note?.trim() || undefined,
+            })
+            .pipe(Effect.mapError(ledgerUnavailable));
+          if (before.get(row.pr)?.state !== row.state) changed.push(row);
+        }
+        if (input.notify !== false) {
+          const groups = new Map<string, Array<T4Store.T4ReleaseRow>>();
+          for (const row of changed) {
+            if (row.state !== "staging" && row.state !== "shipped" && row.state !== "failed")
+              continue;
+            if (row.ownerThreadId === null) {
+              notes.push(
+                `PR #${row.pr} has no owner recorded - pass \`owner\` so it hears \`${row.state}\``,
+              );
+              continue;
+            }
+            const key = `${row.ownerThreadId}\u0000${row.state}`;
+            groups.set(key, [...(groups.get(key) ?? []), row]);
+          }
+          for (const rows of groups.values()) {
+            const first = rows[0]!;
+            const state = first.state as "staging" | "shipped" | "failed";
+            const target = world.byId.get(first.ownerThreadId!);
+            const prs = rows.map((row) => row.pr);
+            if (target === undefined || isRetired(target)) {
+              notes.push(
+                `"${first.ownerTitle ?? first.ownerThreadId}" is archived or gone - no ${state} notice for ${prs.map((pr) => `#${pr}`).join(", ")}`,
+              );
+              continue;
+            }
+            const done = state !== "staging";
+            const ask = state === "failed";
+            const labels = [
+              ...(done ? ["answers your handoff"] : []),
+              ask ? "reply expected" : "no reply needed",
+            ];
+            const header = handoffHeader(me, labels);
+            const footer = ask
+              ? `\n\n---\nAnswer with \`t3_handoff\` (to: "${shortId(me.id)}", done: true) once it is fixed. \`t3_owed\` lists what you still owe.`
+              : "";
+            const body = releaseNotice(
+              state,
+              prs,
+              rows
+                .map((row) => row.note)
+                .filter((note): note is string => note !== null)
+                .join(" ") || null,
+            );
+            if (done) {
+              yield* store
+                .settleHandoffs({ fromThreadId: target.id, toThreadId: me.id })
+                .pipe(Effect.mapError(ledgerUnavailable));
+            }
+            const wakesNote = state === "shipped" ? yield* pendingWakesNote(target.id, now) : "";
+            const delivered = yield* delivery
+              .deliver({
+                target,
+                text: header + body + footer + wakesNote,
+                senderThreadId: me.id,
+                notice: !ask,
+              })
+              .pipe(Effect.result);
+            if (Result.isFailure(delivered)) {
+              notes.push(`couldn't reach "${target.title}": ${delivered.failure.message}`);
+              continue;
+            }
+            if (ask) {
+              yield* store
+                .recordHandoff({
+                  kind: "handoff",
+                  fromThreadId: me.id,
+                  fromTitle: me.title,
+                  toThreadId: target.id,
+                  projectId: target.projectId,
+                  summary: body.slice(0, 160),
+                })
+                .pipe(Effect.mapError(ledgerUnavailable));
+            }
+            notified.push(`${state}: "${target.title}" (${prs.map((pr) => `#${pr}`).join(", ")})`);
+          }
+        }
+      }
+      const rows = yield* store
+        .releaseQueue({
+          projectId: me.projectId,
+          shippedSince:
+            input.all === true
+              ? DateTime.formatIso(DateTime.makeUnsafe(now - 7 * 86_400_000))
+              : undefined,
+        })
+        .pipe(Effect.mapError(ledgerUnavailable));
+      return {
+        entries: rows.map((row) => releaseEntryOf(row, world, now)),
+        notified,
+        notes,
       };
     }),
   ),

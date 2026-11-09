@@ -28,7 +28,21 @@ const REPEAT_MS = 60 * 60_000;
 const nudgedKey = (threadId: string) => `release-guard:${threadId}`;
 
 export const guardNote = (owes: ReadonlyArray<string>) =>
-  `t4: you still owe ${owes.length} release${owes.length === 1 ? "" : "s"} (${owes.join("; ")}) and nothing is set to wake you - no workflow-run watch, no wake, no thread owing you an answer. Read your queue file and the real state (\`ci runs\`, \`gh pr list\`): for every release still running, \`watch_workflow_run\` with its merge \`commit\`; for every finished one, verify it and send the owner's \`shipped:\` or \`release failed\` notice now. Then end your turn.`;
+  `t4: you still owe ${owes.length} release${owes.length === 1 ? "" : "s"} (${owes.join("; ")}) and nothing is set to wake you - no workflow-run watch, no wake, no thread owing you an answer. Read \`release_queue\` and the real state (\`ci runs\`, \`gh pr list\`): for every release still running, \`watch_workflow_run\` with its merge \`commit\`; for every finished one, verify it and send the owner's \`shipped:\` or \`release failed\` notice now. Then end your turn.`;
+
+/**
+ * Every PR of this owner still in the queue is held for the user: the theme's
+ * release manager was nudged hourly over a promotion the user held (2026-11-09).
+ */
+export const onlyHeld = (
+  queue: ReadonlyArray<Pick<T4Store.T4ReleaseRow, "ownerThreadId" | "state">>,
+  ownerThreadId: string,
+) => {
+  const mine = queue.filter(
+    (row) => row.ownerThreadId === ownerThreadId && row.state !== "shipped",
+  );
+  return mine.length > 0 && mine.every((row) => row.state === "held");
+};
 
 export const sweep = Effect.gen(function* () {
   const ledger = yield* T4Ledger.T4Ledger;
@@ -51,7 +65,12 @@ export const sweep = Effect.gen(function* () {
   const watching = yield* runWatch.watchingThreads;
   const { tasks } = yield* scheduled.list().pipe(Effect.orElseSucceed(() => ({ tasks: [] })));
   for (const rm of managers) {
-    const owed = world.live.filter((entry) => entry.toThreadId === rm.id);
+    const queue = yield* store
+      .releaseQueue({ projectId: rm.projectId })
+      .pipe(Effect.orElseSucceed(() => []));
+    const owed = world.live.filter(
+      (entry) => entry.toThreadId === rm.id && !onlyHeld(queue, entry.fromThreadId),
+    );
     if (owed.length === 0 || watching.has(rm.id)) continue;
     // Waiting on another thread's answer (a diagnosis it asked for) is not quiet.
     if (world.live.some((entry) => entry.fromThreadId === rm.id)) continue;

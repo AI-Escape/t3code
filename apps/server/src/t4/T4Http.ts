@@ -211,6 +211,13 @@ export const layer = Layer.mergeAll(
         parents: Object.fromEntries([...(yield* store.spawnParents()).entries()]),
         issueLinks: yield* store.issueLinks(),
         settleRequests: Object.fromEntries([...(yield* store.settleRequests()).entries()]),
+        // Release managers' queues (AI-71): the dashboard's "on staging" list,
+        // with what shipped in the last three days.
+        releaseQueue: yield* store.releaseQueue({
+          shippedSince: DateTime.formatIso(
+            DateTime.makeUnsafe((yield* Clock.currentTimeMillis) - 3 * 86_400_000),
+          ),
+        }),
         threads: Object.fromEntries(facts.entries()),
         // Runs a thread waits on (watch_workflow_run): it is working, not idle.
         runWatches: yield* Effect.serviceOption(T4RunWatch.T4RunWatch).pipe(
