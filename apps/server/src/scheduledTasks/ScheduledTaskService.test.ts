@@ -1,4 +1,8 @@
+// @effect-diagnostics nodeBuiltinImport:off - the test writes Claude account files in a temp folder.
 import * as Scheduler from "../scheduling/Scheduler.ts";
+import * as NodeFS from "node:fs";
+import * as NodeOS from "node:os";
+import * as NodePath from "node:path";
 import * as NodeUtil from "node:util";
 
 import * as NodeCrypto from "@effect/platform-node/NodeCrypto";
@@ -31,6 +35,7 @@ import * as ManagedProjectFolders from "../project/ManagedProjectFolders.ts";
 import * as SqlitePersistence from "../persistence/Sqlite.ts";
 import * as ScheduledTaskService from "./ScheduledTaskService.ts";
 import * as ManagedPolicy from "../policy/ManagedPolicy.ts";
+import { resetClaudeAccountState } from "../t4/claudeAccounts.ts";
 
 const isScheduledTaskError = Schema.is(ScheduledTaskError);
 
@@ -43,6 +48,7 @@ const insertRow = (
     status: string;
     scheduleJson?: string;
     prompt?: string;
+    modelJson?: string;
   },
   now: string,
 ) =>
@@ -55,7 +61,7 @@ const insertRow = (
     project_id: "project:test",
     thread_id: null,
     workspace_strategy_json: '{"type":"root"}',
-    model_selection_json: '{"instanceId":"codex","model":"gpt-5"}',
+    model_selection_json: row.modelJson ?? '{"instanceId":"codex","model":"gpt-5"}',
     runtime_mode: "full-access",
     interaction_mode: "default",
     created_by: "user",
@@ -617,4 +623,93 @@ it.effect("a run interrupted right after it reserves the task does not block the
       assert.equal(yield* Ref.get(launches), 1);
     }).pipe(Effect.provide(layer));
   }).pipe(Effect.provide(SqlitePersistence.layerMemory)),
+);
+
+it.effect(
+  "holds a Claude run while every Claude account is used up, then runs it once one frees",
+  () =>
+    Effect.gen(function* () {
+      const sql = yield* SqlClient.SqlClient;
+      const now = "2026-11-09T12:00:00.000Z";
+      const nowMs = Date.parse(now);
+      const dir = NodeFS.mkdtempSync(NodePath.join(NodeOS.tmpdir(), "t4-held-"));
+      NodeFS.writeFileSync(NodePath.join(dir, "1.token"), "token-one");
+      const state = NodePath.join(dir, "state.json");
+      const markUsedUp = (until: number, mtimeSec: number) => {
+        NodeFS.writeFileSync(state, JSON.stringify({ exhaustedUntil: { "1": until } }));
+        NodeFS.utimesSync(state, mtimeSec, mtimeSec);
+      };
+      markUsedUp(nowMs + 3_600_000, 1_000);
+      yield* Effect.acquireRelease(
+        Effect.sync(() => {
+          process.env.T4_CLAUDE_ACCOUNTS = NodePath.join(dir, "1.token");
+          process.env.CLAUDE_CONFIG_DIR = dir; // no main login here
+          resetClaudeAccountState();
+        }),
+        () =>
+          Effect.sync(() => {
+            delete process.env.T4_CLAUDE_ACCOUNTS;
+            delete process.env.CLAUDE_CONFIG_DIR;
+            resetClaudeAccountState();
+          }),
+      );
+      yield* insertRow(
+        sql,
+        {
+          id: "claude-wake",
+          next: "2026-11-09T11:59:00.000Z",
+          enabled: 1,
+          status: "never",
+          modelJson: '{"instanceId":"claudeAgent","model":"claude-opus-5-5"}',
+        },
+        now,
+      );
+      yield* insertRow(sql, { id: "codex-wake", next: now, enabled: 1, status: "never" }, now);
+
+      yield* TestClock.setTime(nowMs + 1_000);
+      const launched = yield* Ref.make<Array<string>>([]);
+      const codexLaunched = yield* Deferred.make<void>();
+      const claudeLaunched = yield* Deferred.make<void>();
+      yield* Effect.scoped(
+        Effect.gen(function* () {
+          yield* Layer.build(
+            Layer.provideMerge(
+              ScheduledTaskService.layer,
+              Layer.mergeAll(
+                Layer.mock(ThreadLaunchService.ThreadLaunchService)({
+                  launch: (input) =>
+                    Effect.gen(function* () {
+                      const instance = input.modelSelection.instanceId;
+                      yield* Ref.update(launched, (all) => [...all, instance]);
+                      yield* Deferred.succeed(
+                        instance === "codex" ? codexLaunched : claudeLaunched,
+                        undefined,
+                      );
+                      return { threadId: ThreadId.make(`thread:${instance}`) } as never;
+                    }),
+                }),
+                Layer.mock(ManagedProjectFolders.ManagedProjectFolders)({
+                  namedProjectsRoot: "/projects",
+                  isScratchProject: () => Effect.succeed(false),
+                }),
+                Layer.mock(ThreadManagementService.ThreadManagementService)({}),
+                Layer.mock(SecretRequests.SecretRequests)({}),
+                ManagedPolicy.layerTest(),
+                NodeCrypto.layer,
+                Scheduler.layer,
+              ),
+            ),
+          );
+          yield* TestClock.adjust("6 seconds");
+          // The Claude run is due first; the Codex run after it went out, so it was held.
+          yield* Deferred.await(codexLaunched);
+          assert.deepEqual(yield* Ref.get(launched), ["codex"]);
+
+          markUsedUp(0, 2_000); // the dashboard cleared the mark
+          yield* TestClock.adjust("5 seconds");
+          yield* Deferred.await(claudeLaunched);
+          assert.deepEqual(yield* Ref.get(launched), ["codex", "claudeAgent"]);
+        }),
+      );
+    }).pipe(Effect.scoped, Effect.provide(SqlitePersistence.layerMemory)),
 );

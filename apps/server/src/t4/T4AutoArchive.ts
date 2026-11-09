@@ -1,18 +1,8 @@
 /**
- * t4 fork: settled threads are archived two days after they settle.
- *
- * T3's shell - the thread list every page load, reconnect, phone and
- * dashboard poll reads - carries every thread that isn't archived. usa-rs
- * reached 970 (680 settled, 214 subagent helpers); loading the list took 4-7 s
- * and answering a question stalled behind it under load (2026-10-31; the user
- * chose two days). Archived threads stay searchable and restorable from the
- * dashboard's Archived tab (Restore unarchives and unsettles).
- *
- * Archived here: settled threads `T4_ARCHIVE_SETTLED_HOURS` (default 48; 0
- * turns it off) after they settled, and subagent threads whose parent is
- * archived, gone, or archived by this pass. Never: release managers, and any
- * thread that is running, waiting on a request or has background work.
- * At most `PER_PASS` a pass, so a backlog drains over a few passes.
+ * t4 fork: T3's thread list carries every unarchived thread, so settled threads are archived
+ * `T4_ARCHIVE_SETTLED_HOURS` (default 48; 0 turns it off) after settling, with subagent threads
+ * whose parent is archived or gone. Never archived: release managers, or a thread that is running,
+ * waiting on a request or has background work. At most `PER_PASS` a pass.
  */
 import { CommandId, type OrchestrationV2ThreadShell, ThreadId } from "@t3tools/contracts";
 import * as Clock from "effect/Clock";
@@ -28,7 +18,7 @@ type Shell = OrchestrationV2ThreadShell;
 
 const PER_PASS = 100;
 const hoursSetting = Number(process.env.T4_ARCHIVE_SETTLED_HOURS ?? "48");
-export const ARCHIVE_SETTLED_MS =
+const ARCHIVE_SETTLED_MS =
   Number.isFinite(hoursSetting) && hoursSetting > 0 ? hoursSetting * 3600_000 : null;
 
 const busy = (thread: Shell) =>

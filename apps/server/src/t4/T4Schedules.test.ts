@@ -1,7 +1,7 @@
+import { describe, expect, it } from "@effect/vitest";
 import { ProviderInstanceId } from "@t3tools/contracts";
 import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
-import { describe, expect, it } from "vite-plus/test";
 
 import * as ScheduledTasks from "../scheduledTasks/ScheduledTaskService.ts";
 import * as ServerSettings from "../serverSettings.ts";
@@ -39,7 +39,7 @@ const harness = () => {
       T4Store.T4Store | ScheduledTasks.ScheduledTaskService | ServerSettings.ServerSettingsService
     >,
     defaultModel = sol,
-  ) => Effect.runPromise(effect.pipe(Effect.provide(services(defaultModel))));
+  ) => effect.pipe(Effect.provide(services(defaultModel)));
   return { tasks, run };
 };
 
@@ -52,31 +52,37 @@ const daily = {
 };
 
 describe("t4 scheduled sessions", () => {
-  it("saves a session on the client's default model and follows the default when it changes", async () => {
-    const h = harness();
-    const saved = await h.run(T4Schedules.saveSchedule(daily));
-    expect("task" in saved).toBe(true);
-    const listed = await h.run(T4Schedules.listSchedules());
-    expect(listed[0]).toMatchObject({
-      cron: "0 7 * * *",
-      defaultModel: true,
-      modelSelection: sol,
-    });
-    expect([...h.tasks.values()][0]).toMatchObject({
-      threadId: null,
-      workspaceStrategy: { type: "root" },
-      schedule: { type: "cron", expression: "0 7 * * *" },
-    });
+  it.effect(
+    "saves a session on the client's default model and follows the default when it changes",
+    () =>
+      Effect.gen(function* () {
+        const h = harness();
+        const saved = yield* h.run(T4Schedules.saveSchedule(daily));
+        expect("task" in saved).toBe(true);
+        const listed = yield* h.run(T4Schedules.listSchedules());
+        expect(listed[0]).toMatchObject({
+          cron: "0 7 * * *",
+          defaultModel: true,
+          modelSelection: sol,
+        });
+        expect([...h.tasks.values()][0]).toMatchObject({
+          threadId: null,
+          workspaceStrategy: { type: "root" },
+          schedule: { type: "cron", expression: "0 7 * * *" },
+        });
 
-    await h.run(T4Schedules.syncDefaultModels, opus);
-    expect((await h.run(T4Schedules.listSchedules()))[0]!.modelSelection).toMatchObject(opus);
-  });
+        yield* h.run(T4Schedules.syncDefaultModels, opus);
+        expect((yield* h.run(T4Schedules.listSchedules()))[0]!.modelSelection).toMatchObject(opus);
+      }),
+  );
 
-  it("keeps a chosen model, and forgets a deleted schedule", async () => {
-    const h = harness();
-    await h.run(T4Schedules.saveSchedule({ ...daily, modelSelection: opus }));
-    await h.run(T4Schedules.syncDefaultModels, sol);
-    const [task] = await h.run(T4Schedules.listSchedules());
-    expect(task).toMatchObject({ defaultModel: false, modelSelection: opus });
-  });
+  it.effect("keeps a chosen model, and forgets a deleted schedule", () =>
+    Effect.gen(function* () {
+      const h = harness();
+      yield* h.run(T4Schedules.saveSchedule({ ...daily, modelSelection: opus }));
+      yield* h.run(T4Schedules.syncDefaultModels, sol);
+      const [task] = yield* h.run(T4Schedules.listSchedules());
+      expect(task).toMatchObject({ defaultModel: false, modelSelection: opus });
+    }),
+  );
 });

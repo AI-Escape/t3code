@@ -1,16 +1,8 @@
 /**
- * t4 fork: one-time import of the old thread tools' state
- * (`~/.config/t3-agents/state/*.json`) into the fork, on the first start
- * after migration. The JSON files are left in place as a backup.
- *
- *   handoffs.json          -> t4_handoffs (open and settled)
- *   notices.json           -> t4_notices
- *   release-managers.json  -> t4_release_managers
- *   settle-requests.json   -> t4_settle_requests
- *   wakes.json             -> scheduled tasks posted into each thread
- *                             (at/in -> once, every -> interval, cron -> cron)
- * and each thread whose title or branch names an issue (t4's rule until
- * now) gets that issue linked, so ownership carries over.
+ * t4 fork: one-time import of the old thread tools' state (`~/.config/t3-agents/state/*.json`, left
+ * in place as a backup) on the first start after migration: handoffs, notices, release managers,
+ * settle requests, and wakes as scheduled tasks. Each thread whose title or branch names an issue
+ * gets that issue linked, so ownership carries over.
  */
 import { type ModelSelection, type ProjectId, type ThreadId } from "@t3tools/contracts";
 import * as Clock from "effect/Clock";

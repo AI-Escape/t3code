@@ -1,31 +1,19 @@
 /**
- * t4 fork: T3's short-lived commands (everything `processRunner` runs: git,
- * gh, ps) start in a small helper process instead of in T3 itself.
- *
- * Node starts a child by copying the parent, and T3 is ~1.3 GB: each start
- * froze T3's main thread ~55 ms (median, up to 245 ms), and at 50-130 starts a
- * minute on usa-rs every request and database read queued behind them
- * (2026-11-02). The helper is a bare Node process, so a start costs it ~1 ms
- * and costs T3 one message. Output comes back over the IPC channel; signals go
- * straight to the child's process group, and release and kill follow Effect's
- * Node spawner (`@effect/platform-node-shared/NodeChildProcessSpawner`).
- *
- * On with `T4_SPAWN_BROKER=1`, for git, gh, ps and lsof only: short commands,
- * nearly all of T3's starts. Long-lived ones (Codex's app server, browsers,
- * terminals) keep starting directly, so a helper failure can't cut their
- * I/O. Anything else the helper does not take (pipelines, extra fds, stdio
- * other than pipes) and every start while it is down use the normal spawner.
+ * t4 fork: with `T4_SPAWN_BROKER=1`, git, gh, ps and lsof start in a small Node helper over IPC,
+ * since forking the ~1.3 GB T3 process stalls its main thread. Long-lived processes, anything the
+ * helper can't take (pipelines, extra fds, non-pipe stdio) and starts while it is down use the
+ * normal spawner. Release and kill follow `@effect/platform-node-shared/NodeChildProcessSpawner`.
  */
 // @effect-diagnostics globalTimers:off
 // @effect-diagnostics nodeBuiltinImport:off -- the helper is a Node child process with an IPC channel, fed and read through Node streams.
 import * as NodeChildProcess from "node:child_process";
-import * as NodeFs from "node:fs/promises";
+import * as NodeFSP from "node:fs/promises";
 import * as NodePath from "node:path";
-import { PassThrough, Writable } from "node:stream";
+import * as NodeStream from "node:stream";
 
 import * as NodeServices from "@effect/platform-node/NodeServices";
 import * as NodeSink from "@effect/platform-node/NodeSink";
-import * as NodeStream from "@effect/platform-node/NodeStream";
+import * as EffectNodeStream from "@effect/platform-node/NodeStream";
 import * as Deferred from "effect/Deferred";
 import * as Duration from "effect/Duration";
 import * as Effect from "effect/Effect";
@@ -37,7 +25,7 @@ import * as Stream from "effect/Stream";
 import type * as ChildProcess from "effect/process/ChildProcess";
 import * as ChildProcessSpawner from "effect/process/ChildProcessSpawner";
 
-export const enabled = () => process.env.T4_SPAWN_BROKER === "1";
+const enabled = () => process.env.T4_SPAWN_BROKER === "1";
 
 // The helper: CommonJS, run with `node -e`. It spawns, streams output back,
 // and kills every process group it started when T3 goes away.
@@ -98,8 +86,8 @@ interface Entry {
       | { readonly error: HelperError }
       | { readonly helperGone: true },
   ) => void;
-  readonly stdout: PassThrough;
-  readonly stderr: PassThrough;
+  readonly stdout: NodeStream.PassThrough;
+  readonly stderr: NodeStream.PassThrough;
   readonly exit: Deferred.Deferred<ExitInfo>;
   pid: number | undefined;
   abandoned: boolean;
@@ -288,7 +276,7 @@ export const wrap = (
         Effect.succeed(undefined)
       : Effect.tryPromise({
           try: () =>
-            NodeFs.access(command.options.cwd!).then(() => NodePath.resolve(command.options.cwd!)),
+            NodeFSP.access(command.options.cwd!).then(() => NodePath.resolve(command.options.cwd!)),
           catch: (error) =>
             errnoError(
               "FileSystem",
@@ -322,8 +310,8 @@ export const wrap = (
                     errnoError("ChildProcess", "spawn", result.error, commandText(command)),
                   ),
                 ),
-        stdout: new PassThrough(),
-        stderr: new PassThrough(),
+        stdout: new NodeStream.PassThrough(),
+        stderr: new NodeStream.PassThrough(),
         exit: Deferred.makeUnsafe<ExitInfo>(),
         pid: undefined,
         abandoned: false,
@@ -443,8 +431,8 @@ export const wrap = (
         ),
       ),
     );
-    const readable = (stream: PassThrough, name: "stdout" | "stderr") =>
-      NodeStream.fromReadable<Uint8Array, PlatformError.PlatformError>({
+    const readable = (stream: NodeStream.PassThrough, name: "stdout" | "stderr") =>
+      EffectNodeStream.fromReadable<Uint8Array, PlatformError.PlatformError>({
         evaluate: () => stream,
         onError: (error) =>
           errnoError(
@@ -456,7 +444,7 @@ export const wrap = (
       });
     const stdout = readable(entry.stdout, "stdout");
     const stderr = readable(entry.stderr, "stderr");
-    const stdinWritable = new Writable({
+    const stdinWritable = new NodeStream.Writable({
       write(chunk: Uint8Array, _encoding, callback) {
         helper.send({ t: "stdin", id, data: chunk });
         callback();

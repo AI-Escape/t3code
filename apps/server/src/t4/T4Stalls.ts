@@ -1,11 +1,8 @@
 /**
- * t4 fork: recover turns that hang. Behaviour contract: `tick_stalled_turns`
- * and `stalled_turn` in t4's `t3agents.py` (USA-884 sat "running" for 5.5 h
- * with no output). A running turn that has produced nothing for
- * `silenceMinutes` - no item in its run updated, not waiting on the user, no
- * tool call still executing (a long foreground test run is not a stall) - is
- * interrupted and restarted with a note. A thread that stalls again within
- * `repeatHours` is stopped and pushed to the user instead of looped.
+ * t4 fork: recover hung turns, like t4's `tick_stalled_turns`. A running turn silent for
+ * `silenceMinutes` (no run item updated, not waiting on the user, no tool call still executing) is
+ * interrupted and restarted with a note; one that stalls again within `repeatHours` is stopped and
+ * pushed to the user instead of looped.
  */
 import { CommandId, type OrchestrationV2ThreadShell } from "@t3tools/contracts";
 import * as Clock from "effect/Clock";
@@ -32,16 +29,13 @@ const TOOL_ITEM_TYPES = new Set([
   "subagent",
 ]);
 
-export const stallNote = (minutes: number) =>
+const stallNote = (minutes: number) =>
   `(Thread tools: your turn stalled - no output for ${minutes} minutes - and was restarted. Any ` +
   "messages that arrived meanwhile are above in the conversation. Pick up where you were; if you " +
   "were waiting on the user's answer to a question, ask it again with your ask-user tool.)";
 
 /** A phone push (Pushover; keys from the environment) linking the t4 dashboard. */
-export const pushUser = Effect.fn("t4.T4Stalls.pushUser")(function* (
-  title: string,
-  message: string,
-) {
+const pushUser = Effect.fn("t4.T4Stalls.pushUser")(function* (title: string, message: string) {
   const token = process.env.PUSHOVER_APP_TOKEN;
   const user = process.env.PUSHOVER_USER_KEY;
   if (!token || !user) return;
@@ -67,7 +61,7 @@ export const pushUser = Effect.fn("t4.T4Stalls.pushUser")(function* (
 });
 
 /** Minutes the thread's running turn has been silent, or undefined if it isn't stalled. */
-export const silentMinutes = Effect.fn("t4.silentMinutes")(function* (
+const silentMinutes = Effect.fn("t4.silentMinutes")(function* (
   thread: OrchestrationV2ThreadShell,
   silenceMinutes: number,
 ) {

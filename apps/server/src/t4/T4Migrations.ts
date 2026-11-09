@@ -1,12 +1,8 @@
 /**
- * t4 fork: schema for t4's session tooling (handoff ledger, release managers,
- * linked issues, wakes, settle requests).
- *
- * These migrations keep their own ledger table, `t4_sql_migrations`, never
- * T3's `effect_sql_migrations`: the migrator skips every id at or below the
- * highest it has recorded, so a fork migration under an id upstream later
- * uses would mask that upstream migration forever
- * (docs/internals/legacy-orchestration-migration.md).
+ * t4 fork: schema for t4's session tooling. These migrations keep their own ledger table,
+ * `t4_sql_migrations`, never T3's `effect_sql_migrations`: the migrator skips every id at or below
+ * the highest recorded, so a fork id that upstream later reuses would mask upstream's migration
+ * forever (docs/internals/legacy-orchestration-migration.md).
  */
 import * as Effect from "effect/Effect";
 import * as Migrator from "effect/sql/Migrator";

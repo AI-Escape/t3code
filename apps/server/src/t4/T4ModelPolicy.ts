@@ -1,10 +1,7 @@
 /**
- * t4 fork: agents launch and delegate only on models the user chose for the
- * client - its default (T4DefaultModel), the launch presets, the release
- * manager's model, or the calling thread's own. Upstream's tools invite an
- * agent to pick any catalog model, and a PM told to build a product feature
- * on GPT-6.1 Terra launched all six of its workstreams on Terra instead of
- * the client's default Sol (ai-escape AI-27, 2026-10-29).
+ * t4 fork: agents launch and delegate only on models the user chose for the client: its default
+ * (T4DefaultModel), the launch presets, the release manager's model, or the calling thread's own.
+ * Upstream invites an agent to pick any catalog model, and PMs launched whole features off-default.
  */
 import type { ModelSelection, ProjectId } from "@t3tools/contracts";
 import * as Effect from "effect/Effect";

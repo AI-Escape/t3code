@@ -1,14 +1,8 @@
 /**
- * t4 fork: settling a thread the t4 way.
- *
- * Behaviour contract: `cmd_settle`, `tick_settles` and `dev_footprint` in
- * t4's `t3agents.py`. A settle is refused for release managers and while the
- * thread owes anything. It winds down the worktree's dev footprint with the
- * repo's retire script, notes pending wakes, and records a request that the
- * sweep carries out once the turn has ended (T3 refuses to settle a running
- * thread). A message that reaches the thread after the request means it was
- * taken up again: the request is dropped and the thread told - unless every
- * later message was a notice (a handoff that asks nothing).
+ * t4 fork: settling like t4's `cmd_settle`: refused for release managers and while the thread owes
+ * anything; winds down the worktree's dev footprint, notes pending wakes, and records a request the
+ * sweep carries out once the turn ends (T3 refuses to settle a running thread). A later message
+ * that is not a notice drops the request and tells the thread it was taken up again.
  */
 import type { OrchestrationV2ThreadShell } from "@t3tools/contracts";
 import { CommandId } from "@t3tools/contracts";
@@ -32,7 +26,7 @@ import { isRunning, isSettled, shortId } from "./T4Threads.ts";
 
 type Shell = OrchestrationV2ThreadShell;
 
-export const SETTLE_CANCELLED_NOTE =
+const SETTLE_CANCELLED_NOTE =
   "Note from the thread tools: your settle was cancelled because a message arrived after it. " +
   "Handle that message; if your work is still fully closed afterwards (nothing owed, nothing " +
   "awaiting the user), settle again as the last act of this turn.";
@@ -50,7 +44,7 @@ export interface T4SettleShape {
 
 export class T4Settle extends Context.Service<T4Settle, T4SettleShape>()("t3/t4/T4Settle") {}
 
-export const make = Effect.gen(function* () {
+const make = Effect.gen(function* () {
   const ledger = yield* T4Ledger.T4Ledger;
   const store = yield* T4Store.T4Store;
   const delivery = yield* T4Delivery.T4Delivery;

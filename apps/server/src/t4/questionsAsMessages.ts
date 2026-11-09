@@ -1,19 +1,8 @@
 /**
- * t4 fork: Claude asks the way Codex does - as a message-mode question.
- *
- * Claude Opus 5.5 writes much of its prose between tool calls inside its
- * thinking, and with summarized thinking (T3's `showThinkingSummaries`) the
- * server returns that prose only as a summary ("narration" blocks). The
- * message an agent wrote just before AskUserQuestion - the Show, the links,
- * the screenshots - reached the user as one vague sentence, and a reply to
- * a follow-up question did too, before the same question was asked again.
- * Only a turn's final text is always delivered verbatim.
- *
- * With `T4_CLAUDE_QUESTIONS_AS_MESSAGES=1`, AskUserQuestion posts the
- * question as a message-mode request (it stays answerable after the turn,
- * and the answer arrives as the next user message) and returns at once,
- * telling Claude to end its turn with everything the user decides from as
- * its final reply.
+ * t4 fork: with summarized thinking, Claude's prose between tool calls can reach the user only as a
+ * summary; just a turn's final text is verbatim. With `T4_CLAUDE_QUESTIONS_AS_MESSAGES=1`,
+ * AskUserQuestion posts a message-mode request (answerable after the turn) and returns at once,
+ * telling Claude to end its turn with everything the user decides from as its final reply.
  */
 export const t4QuestionsAsMessages = (env: NodeJS.ProcessEnv = process.env): boolean =>
   env.T4_CLAUDE_QUESTIONS_AS_MESSAGES?.trim() === "1";

@@ -1,15 +1,8 @@
 /**
- * t4 fork: a release manager that owes releases never goes quiet.
- *
- * ai-escape's release manager merged PR #79, ended its turn with a watch on
- * the merged PR (which never fires) while both deploys ran, and sat idle: no
- * owner heard back (2026-10-30). Every 2 minutes, a release manager that is
- * idle, still owes handoffs, and has nothing set to wake it - no workflow-run
- * watch, no wake scheduled, no other thread owing it an answer - after 10
- * quiet minutes gets one note to pick its queue back up; at most one an hour
- * per thread. Any wake counts, however far off: shopify-theme-v2's release
- * manager was nudged three times while holding a release until the Monday
- * the user had named (2026-10-30).
+ * t4 fork: a release manager that owes releases never goes quiet. Every 2 minutes, one that is
+ * idle, still owes handoffs and has nothing set to wake it (no workflow-run watch, no wake however
+ * far off, no thread owing it an answer) gets, after 10 quiet minutes, one note to pick its queue
+ * back up; at most one an hour per thread.
  */
 import { ThreadId } from "@t3tools/contracts";
 import * as Clock from "effect/Clock";
@@ -27,7 +20,7 @@ const QUIET_MS = 10 * 60_000;
 const REPEAT_MS = 60 * 60_000;
 const nudgedKey = (threadId: string) => `release-guard:${threadId}`;
 
-export const guardNote = (owes: ReadonlyArray<string>) =>
+const guardNote = (owes: ReadonlyArray<string>) =>
   `t4: you still owe ${owes.length} release${owes.length === 1 ? "" : "s"} (${owes.join("; ")}) and nothing is set to wake you - no workflow-run watch, no wake, no thread owing you an answer. Read \`release_queue\` and the real state (\`ci runs\`, \`gh pr list\`): for every release still running, \`watch_workflow_run\` with its merge \`commit\`; for every finished one, verify it and send the owner's \`shipped:\` or \`release failed\` notice now. Then end your turn.`;
 
 /**

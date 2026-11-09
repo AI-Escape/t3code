@@ -1,10 +1,7 @@
 /**
- * t4 fork: worktree directory naming. With `T4_WORKTREE_NAMING=issueId`, a
- * new worktree is `<worktrees>/<issue id or slug>` - short and flat - while
- * its branch keeps its full name. Every absolute path an agent types
- * (Claude's Read/Write/Edit take only absolute ones) carries this prefix;
- * upstream's `<worktrees>/<repo>/<branch>` ran to ~90 characters.
- * Behaviour contract: `create_worktree()` in t4's `t3agents.py`.
+ * t4 fork: with `T4_WORKTREE_NAMING=issueId`, a new worktree is `<worktrees>/<issue id or slug>`
+ * (short, since agents type absolute paths) while its branch keeps its full name. Behaviour
+ * contract: `create_worktree()` in t4's `t3agents.py`.
  */
 import * as Effect from "effect/Effect";
 

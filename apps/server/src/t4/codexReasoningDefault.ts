@@ -1,11 +1,7 @@
 /**
- * t4 fork: the reasoning effort T3 pre-selects for Codex models. T3 marks the
- * effort Codex's catalog calls default (`defaultReasoningEffort` from
- * `model/list`) - `low` for gpt-6.1-sol - so a thread started from T3's picker
- * ran at low even though t4 launches Codex with `model_reasoning_effort=high`.
- * With `T4_CODEX_DEFAULT_REASONING_EFFORT=high`, every Codex model that
- * supports that effort offers it as its default instead; a model that doesn't
- * keeps Codex's.
+ * t4 fork: T3 pre-selects the effort Codex's `model/list` calls default (`low` for some models),
+ * though t4 launches Codex at high. With `T4_CODEX_DEFAULT_REASONING_EFFORT=high`, each Codex
+ * model that supports that effort offers it as its default; others keep Codex's.
  */
 import type { ServerProviderModel } from "@t3tools/contracts";
 

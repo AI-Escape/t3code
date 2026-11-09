@@ -668,13 +668,10 @@ export function ComposerQueuedAttachmentRow({
   );
 }
 
-// t4 fork: the file input lives on <body>, outside the composer. On a phone the
-// composer collapses when the editor loses focus - which opening the system
-// file picker does - and the collapsed composer has no footer, so an input
-// inside this button was unmounted before the picked file arrived and the pick
-// did nothing (iOS Safari, 2026-10-28). Keeping the composer expanded while the
-// picker was up (27d72ca) passed in WebKit emulation but not on an iPhone, and
-// an input at the form's root (80d3f26) changed the form the keyboard sees.
+// t4 fork: the file input lives on <body>. On a phone, opening the file picker
+// blurs the editor and collapses the composer, which unmounted an input inside it
+// before the pick arrived. Holding the composer open failed on a real iPhone, and an
+// input at the form's root changed the form the keyboard sees.
 let attachInput: HTMLInputElement | null = null;
 let onAttachPicked: ((files: File[]) => void) | null = null;
 

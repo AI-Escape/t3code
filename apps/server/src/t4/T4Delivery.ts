@@ -1,26 +1,8 @@
 /**
- * t4 fork: delivering a message into a thread the way t4's thread tools do.
- *
- * Behaviour contract: `deliver()` in t4's `t3agents.py`. A running turn gets
- * the message steered in; `interrupt` stops that turn and restarts it with
- * the message. Two side effects are spelled out to the agent in the message
- * itself:
- *   - a pending live ask-user question can be closed by an incoming message
- *     - the message names it as still unanswered and has the agent ask again;
- *     a message-mode question (Codex's, and Claude's under
- *     T4_CLAUDE_QUESTIONS_AS_MESSAGES) stays open and answerable, so the
- *     message only says it is not the answer and not to ask again - asking
- *     again put the same questions up twice (usa-rs PM, 2026-10-29);
- *   - a steered message can cancel a running Claude tool call with Claude
- *     Code's "the user doesn't want to proceed" - the message says that was
- *     this message, not the user;
- *   - a message to a settled thread unsettles it (T3 clears the settle when a
- *     turn starts) - the message says so, and to settle again once the work
- *     is still done. Agents otherwise answered and kept believing they were
- *     settled, and the thread sat open until the user asked again.
- * Release managers always receive turns on the configured release-manager
- * model (within their provider). A delivery that asks nothing of its
- * recipient is recorded as a notice, so a pending settle survives it.
+ * t4 fork: delivering a message like t4's `deliver()`: steered into a running turn, or `interrupt`
+ * restarts the turn with it. It tells the agent a live question it closed is unanswered (a
+ * message-mode one stays open: don't ask twice), a cancelled Claude tool call was this message, a
+ * settled thread is unsettled. A delivery asking nothing is a notice, so a pending settle survives.
  */
 import {
   CommandId,
@@ -121,7 +103,7 @@ export const deliveryNotes = (input: {
   ...(input.claudeRunning ? [CANCELLED_TOOL_NOTE] : []),
 ];
 
-export const make = Effect.gen(function* () {
+const make = Effect.gen(function* () {
   const threadManagement = yield* ThreadManagementService.ThreadManagementService;
   const store = yield* T4Store.T4Store;
   const ledger = yield* T4Ledger.T4Ledger;

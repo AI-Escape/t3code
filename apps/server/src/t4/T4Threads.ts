@@ -52,11 +52,9 @@ export const isRunning = (t: Pick<Shell, "activeRunId" | "status">) =>
 export const isSettled = (t: Pick<Shell, "settledOverride" | "settledAt">) =>
   t.settledOverride === "settled" || (t.settledOverride === null && t.settledAt !== null);
 
-/** `is_retired()`. */
 export const isRetired = (t: Pick<Shell, "archivedAt" | "settledOverride" | "settledAt">) =>
   t.archivedAt !== null || isSettled(t);
 
-/** `state_of()`. */
 export function stateOf(t: Shell, nowMs: number): T4ThreadState {
   if (t.archivedAt !== null) return "archived";
   if (isRunning(t)) return "running";
@@ -81,11 +79,9 @@ export function lastActivityMs(t: Shell): number {
   return Math.max(ms(t.updatedAt) ?? 0, ms(t.createdAt) ?? 0);
 }
 
-/** `where()`. */
 export const whereOf = (t: Pick<Shell, "branch" | "worktreePath">) =>
   t.branch ?? (t.worktreePath !== null ? "worktree" : "main checkout");
 
-/** `ago()`. */
 export function ago(atMs: number, nowMs: number): string {
   const secs = Math.max(0, Math.floor((nowMs - atMs) / 1000));
   if (secs < 90) return `${secs}s`;
@@ -149,7 +145,6 @@ export function issueIdIn(text: string | null | undefined): string | null {
   return match ? match[1]!.toUpperCase() : null;
 }
 
-/** `slug()`. */
 export function slugOf(text: string, max = 32): string {
   const slug = text
     .toLowerCase()

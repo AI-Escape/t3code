@@ -1,14 +1,8 @@
 /**
- * t4 fork: scheduled sessions - a prompt that starts a fresh thread on a
- * schedule (a daily Sentry triage, a weekly report), managed from the t4
- * dashboard's client settings.
- *
- * They are T3's own scheduled tasks (not bound to a thread, so every run
- * launches a new one) with t4's cron schedule, so daily, weekly, monthly or
- * every-N-hours timings are one expression in the server's time zone. A task
- * T3 stores keeps the model it was saved with; one saved as "the client's
- * default" is listed in t4_meta and kept on the client's current default by
- * `syncDefaultModels` (a minute after the default changes, at most).
+ * t4 fork: scheduled sessions: T3 scheduled tasks bound to no thread (each run launches a new one)
+ * on t4's cron schedule in the server's time zone, managed from the t4 dashboard. A task keeps the
+ * model it was saved with; one saved as "the client's default" is listed in t4_meta and kept on the
+ * client's current default by `syncDefaultModels` (within a minute of a change).
  */
 import { ModelSelection, ProjectId, ScheduledTaskId, type ScheduledTask } from "@t3tools/contracts";
 import * as Effect from "effect/Effect";
@@ -20,6 +14,8 @@ import * as T4Store from "./T4Store.ts";
 
 const DEFAULT_MODEL_KEY = "schedules-on-default-model";
 const Ids = Schema.fromJsonString(Schema.Array(Schema.String));
+const decodeIds = Schema.decodeEffect(Ids);
+const encodeIds = Schema.encodeEffect(Ids);
 
 export const SaveScheduleBody = Schema.Struct({
   id: Schema.optional(Schema.String),
@@ -36,19 +32,17 @@ export type SaveScheduleBody = typeof SaveScheduleBody.Type;
 
 const readDefaultIds = (store: T4Store.T4StoreShape) =>
   store.meta(DEFAULT_MODEL_KEY).pipe(
-    Effect.flatMap((text) =>
-      text === undefined ? Effect.succeed([]) : Schema.decodeEffect(Ids)(text),
-    ),
+    Effect.flatMap((text) => (text === undefined ? Effect.succeed([]) : decodeIds(text))),
     Effect.orElseSucceed((): ReadonlyArray<string> => []),
   );
 const writeDefaultIds = (store: T4Store.T4StoreShape, ids: ReadonlyArray<string>) =>
-  Schema.encodeEffect(Ids)([...new Set(ids)]).pipe(
+  encodeIds([...new Set(ids)]).pipe(
     Effect.flatMap((text) => store.setMeta(DEFAULT_MODEL_KEY, text)),
     Effect.ignore,
   );
 
 /** A session schedule: launches a new thread each run (not a wake, not a webhook). */
-export const isSessionSchedule = (task: ScheduledTask) =>
+const isSessionSchedule = (task: ScheduledTask) =>
   task.threadId === null && task.schedule.type !== "webhook";
 
 export const listSchedules = Effect.fn("t4.T4Schedules.list")(function* () {
