@@ -291,9 +291,11 @@ export const make = Effect.gen(function* () {
     });
   });
 
-  const giveUp = (target: WatchTarget) =>
+  const giveUp = (target: WatchTarget, refused = false) =>
     record(target, null, {
-      text: `T3 Code stopped watching pull request #${target.link.number} (${target.link.url}) because it failed to read it from the host ${READ_FAILURE_LIMIT} times in a row. Check it yourself, and call watch_pull_request to watch it again.`,
+      text: refused
+        ? `T3 Code stopped watching pull request #${target.link.number} (${target.link.url}) because the host refused this token access to it. Watching again will not help: check it yourself (\`gh pr checks\`, \`ci\`).`
+        : `T3 Code stopped watching pull request #${target.link.number} (${target.link.url}) because it failed to read it from the host ${READ_FAILURE_LIMIT} times in a row. Check it yourself, and call watch_pull_request to watch it again.`,
       notification: {
         source: { kind: "monitor" },
         outcome: "failed",
@@ -494,14 +496,19 @@ export const make = Effect.gen(function* () {
       lastReads.delete(group.key);
       const reason = providerFailureReason(read.cause);
       if (reason === "rate-limited") return;
+      // A refused credential cannot read it on any later pass; end the watch now.
+      const refused = reason === "forbidden";
       // Transport and host failures can outlast the failure limit; keep the watch for recovery.
       if (reason === "failed") {
         readFailures.delete(group.key);
         return yield* Effect.failCause(read.cause);
       }
-      const failures = (readFailures.get(group.key) ?? 0) + 1;
+      const failures = refused ? READ_FAILURE_LIMIT : (readFailures.get(group.key) ?? 0) + 1;
       readFailures.set(group.key, failures);
-      if (failures >= READ_FAILURE_LIMIT && (yield* eachTarget(group, giveUp))) {
+      if (
+        failures >= READ_FAILURE_LIMIT &&
+        (yield* eachTarget(group, (target) => giveUp(target, refused)))
+      ) {
         readFailures.delete(group.key);
       }
       return yield* Effect.failCause(read.cause);

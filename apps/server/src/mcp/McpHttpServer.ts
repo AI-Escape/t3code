@@ -1043,6 +1043,13 @@ const T4_ALWAYS_LOAD = new Set([
   "watch_workflow_run",
   "release_queue",
   "request_secret",
+  "link_pull_request",
+  "watch_pull_request",
+  "unwatch_pull_request",
+  "list_scheduled_tasks",
+  "delete_scheduled_task",
+  "t3_background_wait",
+  "t3_thread_launch",
 ]);
 
 /** `McpServer.registerToolkit` advertises the full codec schema; agents get the compact one. */

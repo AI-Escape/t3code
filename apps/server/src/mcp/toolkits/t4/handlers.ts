@@ -452,6 +452,21 @@ export const layer = McpToolAccess.toLayer(T4Toolkit, {
             .settleHandoffs({ fromThreadId: target.id, toThreadId: me.id })
             .pipe(Effect.mapError(ledgerUnavailable))
         : 0;
+      // An answer to a thread whose work is closed has no one to read it: the debt is void.
+      if (done && !ask && isRetired(target)) {
+        return {
+          to: summaryOf(target, now),
+          isReleaseManager: ledger.isReleaseManager(world, target),
+          createdReleaseManager: false,
+          delivery: null,
+          settled,
+          nowOwesYou: false,
+          youStillOweThem: false,
+          notes: [
+            `"${target.title}" is ${target.archivedAt === null ? "settled" : "archived"} - its work is closed, so nothing was delivered and anything you owed it is void`,
+          ],
+        };
+      }
       // t4 fork: a pure fyi soon after the last one to this thread is bundled (fyiDigest).
       const pureFyi = !done && !ask && input.interrupt !== true;
       if (
