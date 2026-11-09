@@ -62,7 +62,7 @@ export interface T4Wake {
  */
 export const RELEASE_STATES = ["queued", "merged", "staging", "held", "shipped", "failed"] as const;
 export type T4ReleaseState = (typeof RELEASE_STATES)[number];
-export const isReleaseState = (state: unknown): state is T4ReleaseState =>
+const isReleaseState = (state: unknown): state is T4ReleaseState =>
   RELEASE_STATES.includes(state as T4ReleaseState);
 
 export interface T4ReleaseRow {
