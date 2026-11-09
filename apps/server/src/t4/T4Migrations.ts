@@ -104,7 +104,24 @@ const Migration0001 = Effect.gen(function* () {
   `;
 });
 
-const t4MigrationEntries = [[1, "T4SessionTooling", Migration0001]] as const;
+// Thread roles (AI-58): a thread marks itself PM (`set_thread_role`), or the
+// user does from the dashboard. Release managers come from
+// t4_release_managers; every other thread is an owner.
+const Migration0002 = Effect.gen(function* () {
+  const sql = yield* SqlClient.SqlClient;
+  yield* sql`
+    CREATE TABLE IF NOT EXISTS t4_thread_roles (
+      thread_id TEXT PRIMARY KEY,
+      role TEXT NOT NULL,
+      updated_at TEXT NOT NULL
+    ) WITHOUT ROWID
+  `;
+});
+
+const t4MigrationEntries = [
+  [1, "T4SessionTooling", Migration0001],
+  [2, "T4ThreadRoles", Migration0002],
+] as const;
 
 const run = Migrator.make({});
 

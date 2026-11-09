@@ -5,6 +5,7 @@
  * reads and writes rows, so every caller (MCP tools, HTTP routes, jobs, the
  * legacy import) shares one copy of the persistence code.
  */
+import * as Clock from "effect/Clock";
 import * as Context from "effect/Context";
 import * as SecureRandom from "effect/crypto/SecureRandom";
 import * as DateTime from "effect/DateTime";
@@ -59,6 +60,10 @@ const MAX_NOTICES = 500;
 
 type StoreError = SqlError.SqlError;
 
+/** A role a thread can be given; a release manager is one by t4_release_managers. */
+export type T4SetRole = "owner" | "pm";
+export const isSetRole = (role: unknown): role is T4SetRole => role === "owner" || role === "pm";
+
 export interface T4StoreShape {
   readonly openHandoffs: () => Effect.Effect<ReadonlyArray<T4Handoff>, StoreError>;
   readonly allHandoffs: () => Effect.Effect<ReadonlyArray<T4Handoff>, StoreError>;
@@ -85,6 +90,11 @@ export interface T4StoreShape {
   ) => Effect.Effect<ReadonlySet<string>, StoreError>;
 
   readonly releaseManagers: () => Effect.Effect<ReadonlyMap<string, string>, StoreError>;
+  /** Roles threads were given (AI-58): thread id -> "pm" | "owner". */
+  readonly threadRoles: () => Effect.Effect<ReadonlyMap<string, T4SetRole>, StoreError>;
+  readonly setThreadRole: (threadId: string, role: T4SetRole) => Effect.Effect<void, StoreError>;
+  /** Who launched whom: child thread id -> the thread that launched it (spawn entries). */
+  readonly spawnParents: () => Effect.Effect<ReadonlyMap<string, string>, StoreError>;
   readonly setReleaseManager: (
     projectId: string,
     threadId: string,
@@ -289,6 +299,35 @@ export const make = Effect.gen(function* () {
       SELECT project_id, thread_id FROM t4_release_managers
     `.pipe(Effect.map((rows) => new Map(rows.map((row) => [row.project_id, row.thread_id]))));
 
+  const threadRoles: T4StoreShape["threadRoles"] = () =>
+    sql<{ readonly thread_id: string; readonly role: string }>`
+      SELECT thread_id, role FROM t4_thread_roles
+    `.pipe(
+      Effect.map(
+        (rows) =>
+          new Map(
+            rows.flatMap((row) => (isSetRole(row.role) ? [[row.thread_id, row.role] as const] : [])),
+          ),
+      ),
+    );
+
+  const setThreadRole: T4StoreShape["setThreadRole"] = Effect.fn("T4Store.setThreadRole")(
+    function* (threadId: string, role: T4SetRole) {
+      const at = DateTime.formatIso(DateTime.makeUnsafe(yield* Clock.currentTimeMillis));
+      yield* sql`
+        INSERT INTO t4_thread_roles (thread_id, role, updated_at) VALUES (${threadId}, ${role}, ${at})
+        ON CONFLICT (thread_id) DO UPDATE SET role = excluded.role, updated_at = excluded.updated_at
+      `;
+    },
+  );
+
+  // The first launch of a thread names its parent; settled entries count too.
+  const spawnParents: T4StoreShape["spawnParents"] = () =>
+    sql<{ readonly from_thread_id: string; readonly to_thread_id: string }>`
+      SELECT from_thread_id, to_thread_id FROM t4_handoffs
+      WHERE kind = 'spawn' ORDER BY created_at DESC
+    `.pipe(Effect.map((rows) => new Map(rows.map((row) => [row.to_thread_id, row.from_thread_id]))));
+
   const setReleaseManager: T4StoreShape["setReleaseManager"] = (projectId, threadId) =>
     sql`
       INSERT INTO t4_release_managers (project_id, thread_id) VALUES (${projectId}, ${threadId})
@@ -411,6 +450,9 @@ export const make = Effect.gen(function* () {
     addNotice,
     noticeIds,
     releaseManagers,
+    threadRoles,
+    setThreadRole,
+    spawnParents,
     setReleaseManager,
     issueLinks,
     issueLinksFor,

@@ -1,8 +1,8 @@
 /**
  * t4 fork: a thread's standing in t4's session tooling, for thread reads
  * (`t3_thread_list`, `t3_thread_read`, the operator API): its t4 state,
- * whether it is a release manager, what it owes and is owed, and the issues
- * it has linked.
+ * whether it is a release manager, its role and the thread that launched it,
+ * what it owes and is owed, and the issues it has linked.
  */
 import * as Clock from "effect/Clock";
 import * as Effect from "effect/Effect";
@@ -11,9 +11,30 @@ import * as T4Ledger from "./T4Ledger.ts";
 import * as T4Store from "./T4Store.ts";
 import { stateOf } from "./T4Threads.ts";
 
+export type T4Role = "owner" | "pm" | "release-manager";
+
+/**
+ * A thread's role (AI-58): a release manager by the project's record or title;
+ * else the role it was given (`set_thread_role`, the dashboard); else a PM by
+ * "PM" in its title, which PM threads have carried by convention; else an
+ * owner.
+ */
+export const roleOf = (
+  thread: { readonly id: string; readonly title: string },
+  isReleaseManager: boolean,
+  given: ReadonlyMap<string, string>,
+): T4Role => {
+  if (isReleaseManager) return "release-manager";
+  const set = given.get(thread.id);
+  if (set === "pm" || set === "owner") return set;
+  return /\bPM\b/.test(thread.title) ? "pm" : "owner";
+};
+
 export interface T4ThreadFacts {
   readonly state: string;
   readonly isReleaseManager: boolean;
+  readonly role: T4Role;
+  readonly parentThreadId: string | null;
   readonly owes: number;
   readonly owedBy: number;
   readonly issues: ReadonlyArray<string>;
@@ -29,6 +50,8 @@ export const factsFor = Effect.fn("t4.factsFor")(function* (
   const now = yield* Clock.currentTimeMillis;
   const world = known ?? (yield* ledger.world());
   const links = yield* store.issueLinks();
+  const roles = yield* store.threadRoles();
+  const parents = yield* store.spawnParents();
   const facts = new Map<string, T4ThreadFacts>();
   for (const id of threadIds) {
     const thread = world.byId.get(id);
@@ -37,6 +60,8 @@ export const factsFor = Effect.fn("t4.factsFor")(function* (
     facts.set(id, {
       state: stateOf(thread, now),
       isReleaseManager: f.isReleaseManager,
+      role: roleOf(thread, f.isReleaseManager, roles),
+      parentThreadId: parents.get(id) ?? null,
       owes: f.owes,
       owedBy: f.owedBy,
       issues: links.filter((link) => link.threadId === id).map((link) => link.identifier),
