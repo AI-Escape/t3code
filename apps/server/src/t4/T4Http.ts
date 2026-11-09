@@ -45,6 +45,13 @@ import * as T4Schedules from "./T4Schedules.ts";
 import * as T4Spawn from "./T4Spawn.ts";
 import { clientDefaultModelSelection } from "./T4DefaultModel.ts";
 import * as T4Store from "./T4Store.ts";
+import {
+  claimResumeRun,
+  nextResumeSlotAt,
+  releaseResumeRun,
+  resumePace,
+  takeResumeSlot,
+} from "./limitResumePace.ts";
 import { isRetired, isSettled, shortId } from "./T4Threads.ts";
 
 type Shell = OrchestrationV2ThreadShell;
@@ -127,8 +134,6 @@ const MessageBody = Schema.Struct({
 const RoleBody = Schema.Struct({ role: Schema.Literals(["owner", "pm"]) });
 const ResumeBody = Schema.Struct({
   dryRun: Schema.optional(Schema.Boolean),
-  batch: Schema.optional(Schema.Number),
-  gapSeconds: Schema.optional(Schema.Number),
 });
 
 const body = <S extends Schema.Top>(schema: S) =>
@@ -809,8 +814,8 @@ export const layer = Layer.mergeAll(
       }));
       if (todo.length === 0 || input.dryRun === true)
         return json({ started: false, threads: listed });
-      const batch = Math.max(1, input.batch ?? 3);
-      const gap = Duration.seconds(Math.max(1, input.gapSeconds ?? 60));
+      if (!claimResumeRun()) return json({ started: false, running: true, threads: listed });
+      const pace = resumePace();
       const resume = (thread: Shell) =>
         delivery.deliver({
           target: thread,
@@ -826,30 +831,47 @@ export const layer = Layer.mergeAll(
           ),
           Effect.orElseSucceed(() => true),
         );
-      // `cmd_resume`: probe one; if its turn is refused again within 20 s the
-      // limit has not reset - stop. Otherwise the rest, a few at a time.
-      const run = Effect.gen(function* () {
-        const [probe, ...rest] = todo;
-        if (probe === undefined) return;
-        yield* resume(probe);
-        yield* Effect.sleep(Duration.seconds(20));
-        if (yield* stillLimited(probe.id)) {
-          yield* Effect.logInfo("t4 resume: the limit has not reset yet", { probe: probe.id });
-          return;
+      const resumeOnPace: (thread: Shell) => Effect.Effect<boolean> = Effect.fn(
+        "T4Http.resumeOnPace",
+      )(function* (thread: Shell) {
+        const nowMs = yield* Clock.currentTimeMillis;
+        const at = nextResumeSlotAt(nowMs, pace);
+        if (at > nowMs) {
+          yield* Effect.sleep(Duration.millis(at - nowMs));
+          return yield* resumeOnPace(thread);
         }
-        for (let i = 0; i < rest.length; i += batch) {
-          if (i > 0) yield* Effect.sleep(gap);
-          for (const thread of rest.slice(i, i + batch)) {
-            const fresh = yield* threads
-              .getThreadShell(thread.id)
-              .pipe(Effect.orElseSucceed(() => null));
-            if (fresh === null || fresh.status !== "failed") continue; // already moving
-            yield* resume(fresh).pipe(Effect.ignore);
+        const fresh = yield* threads
+          .getThreadShell(thread.id)
+          .pipe(Effect.orElseSucceed(() => null));
+        if (fresh === null || fresh.status !== "failed") return false; // already moving
+        if (!takeResumeSlot(nowMs, pace)) return yield* resumeOnPace(thread);
+        yield* resume(fresh).pipe(Effect.ignore);
+        return true;
+      });
+      // `cmd_resume`: probe one; if its turn is refused again within 20 s the
+      // limit has not reset - stop. Otherwise the rest on the shared pace
+      // (limitResumePace.ts), the sweep's resumes at a reset included.
+      const run = Effect.gen(function* () {
+        let probed = false;
+        for (const thread of todo) {
+          if (!(yield* resumeOnPace(thread)) || probed) continue;
+          probed = true;
+          yield* Effect.sleep(Duration.seconds(20));
+          if (yield* stillLimited(thread.id)) {
+            yield* Effect.logInfo("t4 resume: the limit has not reset yet", { probe: thread.id });
+            return;
           }
         }
-      }).pipe(Effect.ignoreCause({ log: true }));
+      }).pipe(Effect.ignoreCause({ log: true }), Effect.ensuring(Effect.sync(releaseResumeRun)));
       yield* Effect.forkDetach(run);
-      return json({ started: true, threads: listed });
+      // When the last resume should go out, for the dashboard's "resuming".
+      const startedMs = yield* Clock.currentTimeMillis;
+      const finishesAt = DateTime.formatIso(
+        DateTime.makeUnsafe(
+          startedMs + Math.max(0, Math.ceil(todo.length / pace.batch) - 1) * pace.gapMs + 20_000,
+        ),
+      );
+      return json({ started: true, threads: listed, finishesAt });
     }),
   ),
 );

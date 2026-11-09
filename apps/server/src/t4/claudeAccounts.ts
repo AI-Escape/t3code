@@ -36,6 +36,8 @@ import * as FS from "node:fs";
 import * as Path from "node:path";
 
 export const MAIN_CLAUDE_ACCOUNT = "main";
+/** The Claude provider instance t4 clients run (settings.json `providerInstances.claudeAgent`). */
+export const CLAUDE_INSTANCE_ID = "claudeAgent";
 const UNKNOWN_RESET_MS = 60 * 60 * 1000;
 
 export interface ClaudeAccount {
@@ -233,7 +235,8 @@ export const claudeSideProcessEnvironment = (
     return claudeAccountEnvironment(environment, picked);
   for (const file of accountFiles(env)) {
     const token = readToken(file);
-    if (token !== undefined) return claudeAccountEnvironment(environment, { key: keyOf(file), token });
+    if (token !== undefined)
+      return claudeAccountEnvironment(environment, { key: keyOf(file), token });
   }
   return environment;
 };
@@ -282,6 +285,24 @@ export const anotherClaudeAccountFree = (
       key !== current &&
       (key !== MAIN_CLAUDE_ACCOUNT || mainLoginAvailable(env)) &&
       (state.get(key) ?? 0) <= nowMs,
+  );
+};
+
+/**
+ * Whether every configured account (the main login when it exists) is used up;
+ * false without t4 accounts. Wakes wait then instead of starting a refused turn
+ * (ai-escape's 3-hourly AI-40 wake hit the weekly limit 10 times, 2026-11-09).
+ */
+export const everyClaudeAccountUsedUp = (
+  nowMs: number,
+  env: NodeJS.ProcessEnv = process.env,
+): boolean => {
+  const files = accountFiles(env);
+  if (files.length === 0) return false;
+  const state = loadState(env, files);
+  return accountList(env).every(
+    ({ key }) =>
+      (key === MAIN_CLAUDE_ACCOUNT && !mainLoginAvailable(env)) || (state.get(key) ?? 0) > nowMs,
   );
 };
 

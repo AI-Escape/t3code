@@ -54,6 +54,7 @@ import * as SecretRequests from "../secrets/SecretRequests.ts";
 import * as ManagedPolicy from "../policy/ManagedPolicy.ts";
 import * as DueHint from "../scheduling/DueHint.ts";
 import * as Scheduler from "../scheduling/Scheduler.ts";
+import { CLAUDE_INSTANCE_ID, everyClaudeAccountUsedUp } from "../t4/claudeAccounts.ts";
 import { isMissedFixedTimeRun, isSameSchedule, nextScheduledRunAt } from "./Schedule.ts";
 import {
   redactHeaders,
@@ -1076,6 +1077,31 @@ export const layer = Layer.effect(
       yield* notifyChanged;
     });
 
+    // t4 fork: while every Claude account is used up, a run that would start a
+    // Claude turn stays due and goes out once one frees, not as a refused turn.
+    const heldTasks = new Set<string>();
+    const runsOnClaude = (task: ScheduledTask) =>
+      task.threadId === null
+        ? Effect.succeed(task.modelSelection.instanceId === CLAUDE_INSTANCE_ID)
+        : threadManagement.getThreadShell(ThreadId.make(task.threadId)).pipe(
+            Effect.map((shell) => shell?.providerInstanceId === CLAUDE_INSTANCE_ID),
+            Effect.orElseSucceed(() => false),
+          );
+    const heldForClaudeLimit = Effect.fn("ScheduledTaskService.heldForClaudeLimit")(function* (
+      task: ScheduledTask,
+      claudeUsedUp: boolean,
+    ) {
+      const held = claudeUsedUp && (yield* runsOnClaude(task));
+      if (held && !heldTasks.has(task.id)) {
+        yield* Effect.logInfo("t4: holding a scheduled run until a Claude account frees up", {
+          taskId: task.id,
+        });
+      }
+      if (held) heldTasks.add(task.id);
+      else heldTasks.delete(task.id);
+      return held;
+    });
+
     const runDueTasks = Effect.fn("ScheduledTaskService.runDueTasks")(function* () {
       const now = yield* localNow;
       const nowMs = DateTime.toEpochMillis(now);
@@ -1106,14 +1132,16 @@ export const layer = Layer.effect(
       const due = tasks.flatMap((task) =>
         task.nextRunAt === null ? [] : [{ task, dueAt: DateTime.makeUnsafe(task.nextRunAt) }],
       );
+      const claudeUsedUp = due.length > 0 && everyClaudeAccountUsedUp(DateTime.toEpochMillis(now));
       yield* Effect.forEach(
         due,
         ({ task, dueAt }) =>
-          Effect.suspend(() =>
-            isMissedFixedTimeRun(task.schedule, dueAt, now)
-              ? rescheduleMissedRun(task, now)
-              : runTask(task, "scheduled"),
-          ).pipe(
+          Effect.gen(function* () {
+            if (isMissedFixedTimeRun(task.schedule, dueAt, now))
+              return yield* rescheduleMissedRun(task, now);
+            if (yield* heldForClaudeLimit(task, claudeUsedUp)) return;
+            yield* runTask(task, "scheduled");
+          }).pipe(
             Effect.catch((cause) =>
               Effect.logWarning("Scheduled task run failed", { taskId: task.id, cause }),
             ),

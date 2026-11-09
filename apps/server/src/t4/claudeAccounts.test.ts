@@ -8,6 +8,7 @@ import { afterEach, describe, expect, it } from "vite-plus/test";
 import {
   claudeAccountEnvironment,
   claudeSideProcessEnvironment,
+  everyClaudeAccountUsedUp,
   isClaudeAccountExhausted,
   markClaudeAccountExhausted,
   pickClaudeAccount,
@@ -46,8 +47,12 @@ describe("t4 claudeAccounts", () => {
     expect(pickClaudeAccount(1_000, env).key).toBe("2");
     expect(markClaudeAccountExhausted("2", 90_000, 2_000, env)).toBe(2_000);
     expect(pickClaudeAccount(2_000, env)).toEqual({ key: "main" });
+    expect(everyClaudeAccountUsedUp(2_000, env)).toBe(false);
     // All used up: go on when the first one resets.
     expect(markClaudeAccountExhausted("main", 70_000, 3_000, env)).toBe(50_000);
+    expect(everyClaudeAccountUsedUp(3_000, env)).toBe(true);
+    expect(everyClaudeAccountUsedUp(50_000, env)).toBe(false);
+    expect(everyClaudeAccountUsedUp(3_000, {})).toBe(false);
     expect(pickClaudeAccount(50_000, env).key).toBe("1");
   });
 
@@ -138,10 +143,14 @@ describe("t4 claudeAccounts", () => {
       CLAUDE_CODE_OAUTH_TOKEN: "token-one",
     });
     markClaudeAccountExhausted("1", 90_000, 1_000, noLogin);
-    expect(claudeSideProcessEnvironment({}, 1_000, noLogin).CLAUDE_CODE_OAUTH_TOKEN).toBe("token-two");
+    expect(claudeSideProcessEnvironment({}, 1_000, noLogin).CLAUDE_CODE_OAUTH_TOKEN).toBe(
+      "token-two",
+    );
     // Every account used up and no main login: a used-up account still signs in.
     markClaudeAccountExhausted("2", 90_000, 1_000, noLogin);
-    expect(claudeSideProcessEnvironment({}, 1_000, noLogin).CLAUDE_CODE_OAUTH_TOKEN).toBe("token-one");
+    expect(claudeSideProcessEnvironment({}, 1_000, noLogin).CLAUDE_CODE_OAUTH_TOKEN).toBe(
+      "token-one",
+    );
     // No usable account at all: left as it is, so T3 reports it unauthenticated.
     FS.rmSync(Path.join(dir, "1.token"));
     FS.rmSync(Path.join(dir, "2.token"));

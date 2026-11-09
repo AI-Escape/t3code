@@ -8,6 +8,7 @@ import * as DueHint from "../scheduling/DueHint.ts";
 import * as Scheduler from "../scheduling/Scheduler.ts";
 import { forkParked } from "../serverActivation.ts";
 import * as ServerSettings from "../serverSettings.ts";
+import { isAccountHandOff, nextResumeSlotAt, takeResumeSlot } from "../t4/limitResumePace.ts";
 import * as ProjectionStore from "./ProjectionStore.ts";
 import * as Orchestrator from "./Orchestrator.ts";
 import * as ThreadManagement from "./ThreadManagementService.ts";
@@ -92,6 +93,38 @@ const affectsLimitRecovery = (event: OrchestrationV2DomainEvent) =>
   event.type.startsWith("provider-session.") ||
   (event.type === "turn-item.updated" && event.payload.type === "error");
 
+/**
+ * t4 fork: one sweep's commands, oldest stop first. Resumes take a slot of the
+ * shared pace (limitResumePace.ts) unless the thread is being handed to
+ * another free Claude account; `paced` counts those left due for a later sweep.
+ */
+export function limitRecoveryCommands(
+  candidates: ReadonlyArray<ProjectionStore.ProjectionLimitRecoveryCandidate>,
+  autoResume: boolean,
+  nowMs: number,
+  snooze = false,
+) {
+  const stoppedAtMs = (thread: ProjectionStore.ProjectionLimitRecoveryCandidate) =>
+    DateTime.toEpochMillis(thread.latestRunCompletedAt ?? thread.updatedAt);
+  let paced = 0;
+  const commands = candidates
+    .toSorted((left, right) => stoppedAtMs(left) - stoppedAtMs(right))
+    .flatMap((thread) => {
+      const command = limitRecoveryCommand(thread, autoResume, nowMs, snooze);
+      if (command === null) return [];
+      if (
+        command.type === "message.dispatch" &&
+        !isAccountHandOff(stoppedAtMs(thread), Date.parse(thread.usageLimitResetAt!)) &&
+        !takeResumeSlot(nowMs)
+      ) {
+        paced++;
+        return [];
+      }
+      return [{ thread, command }];
+    });
+  return { commands, paced };
+}
+
 const makeSweep = Effect.gen(function* () {
   const projections = yield* ProjectionStore.ProjectionStoreV2;
   const threads = yield* ThreadManagement.ThreadManagementService;
@@ -115,16 +148,13 @@ const makeSweep = Effect.gen(function* () {
       autoResume: preferences.autoResumeLimitedThreads,
       snooze: preferences.snoozeLimitedThreads,
     });
-    let acted = false;
-    for (const thread of candidates) {
-      const command = limitRecoveryCommand(
-        thread,
-        preferences.autoResumeLimitedThreads,
-        nowMs,
-        preferences.snoozeLimitedThreads,
-      );
-      if (command === null) continue;
-      acted = true;
+    const { commands, paced } = limitRecoveryCommands(
+      candidates,
+      preferences.autoResumeLimitedThreads,
+      nowMs,
+      preferences.snoozeLimitedThreads,
+    );
+    for (const { thread, command } of commands) {
       yield* Effect.gen(function* () {
         if (command.type === "thread.metadata.update" && command.limitRecovery != null) {
           yield* orchestrator.autoArmLimitRecovery({
@@ -145,9 +175,11 @@ const makeSweep = Effect.gen(function* () {
       );
     }
     // A sweep that acted, or failed to, re-checks on the next tick.
-    if (acted) return;
+    if (commands.length > 0) return;
     const wakeAt = yield* projections.getLimitRecoveryWakeAt(now);
-    yield* due.record(readVersion, wakeAt ?? Infinity, nowMs);
+    // t4 fork: threads the pace held back are due when its next slot frees.
+    const pacedAt = paced > 0 ? nextResumeSlotAt(nowMs) : Infinity;
+    yield* due.record(readVersion, Math.min(wakeAt ?? Infinity, pacedAt), nowMs);
   });
 });
 
