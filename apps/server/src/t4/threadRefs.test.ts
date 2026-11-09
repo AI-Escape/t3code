@@ -1,7 +1,7 @@
+import { describe, expect, it } from "@effect/vitest";
 import { ThreadId } from "@t3tools/contracts";
 import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
-import { describe, expect, it } from "vite-plus/test";
 
 import * as ThreadManagementService from "../orchestration-v2/ThreadManagementService.ts";
 import { resolveThreadRef, shortId } from "./T4Threads.ts";
@@ -23,9 +23,7 @@ const services = Layer.mock(ThreadManagementService.ThreadManagementService)({
 });
 
 const resolve = (threadId: string) =>
-  Effect.runPromise(
-    resolveThreadIdParam({ threadId, message: "hi" }).pipe(Effect.provide(services)),
-  );
+  resolveThreadIdParam({ threadId, message: "hi" }).pipe(Effect.provide(services));
 
 describe("t4 thread refs", () => {
   it("short ids leave out t4-", () => {
@@ -33,35 +31,43 @@ describe("t4 thread refs", () => {
     expect(shortId("mcp:9b2e7d41-aaaa-4bbb-8ccc-dddd00001111")).toBe("9b2e7d41");
   });
 
-  it("resolves short ids with or without t4-, bare uuids and titles", async () => {
-    expect((await resolve("1c558f0a")).threadId).toBe("t4-1c558f0a-1111-4222-8333-444455556666");
-    expect((await resolve("t4-1c558f0a")).threadId).toBe("t4-1c558f0a-1111-4222-8333-444455556666");
-    expect((await resolve("9b2e7d41-aaaa-4bbb-8ccc-dddd00001111")).threadId).toBe(
-      "mcp:9b2e7d41-aaaa-4bbb-8ccc-dddd00001111",
-    );
-    expect((await resolve("USA-1519")).threadId).toBe("mcp:9b2e7d41-aaaa-4bbb-8ccc-dddd00001111");
-    expect((await resolve("USA-1519")).message).toBe("hi");
-    // The title it had before the thread renamed itself still finds it by issue id.
-    expect((await resolve("USA-1520 Save real warehouse addresses")).threadId).toBe(
-      "t4-1c558f0a-1111-4222-8333-444455556666",
-    );
-  });
+  it.effect("resolves short ids with or without t4-, bare uuids and titles", () =>
+    Effect.gen(function* () {
+      expect((yield* resolve("1c558f0a")).threadId).toBe("t4-1c558f0a-1111-4222-8333-444455556666");
+      expect((yield* resolve("t4-1c558f0a")).threadId).toBe(
+        "t4-1c558f0a-1111-4222-8333-444455556666",
+      );
+      expect((yield* resolve("9b2e7d41-aaaa-4bbb-8ccc-dddd00001111")).threadId).toBe(
+        "mcp:9b2e7d41-aaaa-4bbb-8ccc-dddd00001111",
+      );
+      expect((yield* resolve("USA-1519")).threadId).toBe(
+        "mcp:9b2e7d41-aaaa-4bbb-8ccc-dddd00001111",
+      );
+      expect((yield* resolve("USA-1519")).message).toBe("hi");
+      // The title it had before the thread renamed itself still finds it by issue id.
+      expect((yield* resolve("USA-1520 Save real warehouse addresses")).threadId).toBe(
+        "t4-1c558f0a-1111-4222-8333-444455556666",
+      );
+    }),
+  );
 
-  it("leaves exact, ambiguous and unknown refs alone", async () => {
-    expect((await resolve("t4-1c558f0a-1111-4222-8333-444455556666")).threadId).toBe(
-      "t4-1c558f0a-1111-4222-8333-444455556666",
-    );
-    // "t4-1c55" names two threads; too short a bare prefix matches nothing.
-    expect((await resolve("t4-1c55")).threadId).toBe("t4-1c55");
-    expect((await resolve("nope")).threadId).toBe("nope");
-    expect(resolveThreadRef("1c5", threads).type).toBe("none");
-  });
+  it.effect("leaves exact, ambiguous and unknown refs alone", () =>
+    Effect.gen(function* () {
+      expect((yield* resolve("t4-1c558f0a-1111-4222-8333-444455556666")).threadId).toBe(
+        "t4-1c558f0a-1111-4222-8333-444455556666",
+      );
+      // "t4-1c55" names two threads; too short a bare prefix matches nothing.
+      expect((yield* resolve("t4-1c55")).threadId).toBe("t4-1c55");
+      expect((yield* resolve("nope")).threadId).toBe("nope");
+      expect(resolveThreadRef("1c5", threads).type).toBe("none");
+    }),
+  );
 
-  it("passes params without a threadId through", async () => {
-    expect(
-      await Effect.runPromise(
-        resolveThreadIdParam({ projectId: "p" }).pipe(Effect.provide(services)),
-      ),
-    ).toEqual({ projectId: "p" });
-  });
+  it.effect("passes params without a threadId through", () =>
+    Effect.gen(function* () {
+      expect(
+        yield* resolveThreadIdParam({ projectId: "p" }).pipe(Effect.provide(services)),
+      ).toEqual({ projectId: "p" });
+    }),
+  );
 });

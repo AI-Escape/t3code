@@ -1,11 +1,7 @@
 /**
- * t4 fork: the user's answers to ask-user questions, for `t3_decisions`, in
- * two indexed queries.
- *
- * The tool read them thread by thread (requests, then question items) through
- * the projection: ~190 threads per call on usa-rs, ~30 s of T3's one database
- * reader, and every new thread calls it (2026-11-02). A request and its
- * question item share a node id, which is indexed on both tables.
+ * t4 fork: the user's answers to ask-user questions, for `t3_decisions`, in two indexed queries
+ * (reading them thread by thread through the projection held T3's one database reader for ~30 s). A
+ * request and its question item share a node id, which is indexed on both tables.
  */
 import * as Effect from "effect/Effect";
 import * as Option from "effect/Option";

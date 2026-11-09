@@ -1,9 +1,7 @@
 /**
- * t4 fork: a scheduled task posted into a thread is a wake. t4's rules for
- * them (behaviour contract: `cmd_wake`/`tick_wakes` in t4's `t3agents.py`):
- * at most 8 pending per thread, one-shots at most 30 days out, intervals at
- * least 5 minutes, and each run arrives as "WAKE (scheduled …)" with a
- * reminder on recurring ones to cancel it when the work is done.
+ * t4 fork: wake rules, matching `cmd_wake`/`tick_wakes` in t4's `t3agents.py`: at most 8 pending
+ * per thread, one-shots at most 30 days out, intervals at least 5 minutes, and each run arrives as
+ * "WAKE (scheduled …)", reminding recurring ones to cancel when the work is done.
  */
 const MAX_WAKES_PER_THREAD = 8;
 const MAX_ONE_SHOT_MS = 30 * 86_400_000;

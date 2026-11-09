@@ -192,7 +192,7 @@ const pendingWakesNote = Effect.fn("t4.pendingWakesNote")(function* (
 });
 
 const handoffHeader = (me: Shell, labels: ReadonlyArray<string>) =>
-  `HANDOFF from "${me.title}" (${shortId(me.id)}, ${whereOf(me)}) — ${labels.join(" · ")}:\n\n`;
+  `HANDOFF from "${me.title}" (${shortId(me.id)}, ${whereOf(me)}), ${labels.join(" · ")}:\n\n`;
 
 /** The PR an owner's handoff names: a pull-request URL, else the first `#123`. */
 export const prOfHandoff = (body: string): number | undefined => {
@@ -379,7 +379,7 @@ export const layer = McpToolAccess.toLayer(T4Toolkit, {
         const crypto = yield* SecureRandom.SecureRandom;
         const launches = yield* ThreadLaunch.ThreadLaunchService;
         const id = yield* crypto.uuidV4().pipe(Effect.orDie);
-        const title = `${config.releaseManagerTitlePrefix} — ${project.title}`;
+        const title = `${config.releaseManagerTitlePrefix}: ${project.title}`;
         const repo = project.workspaceRoot.split("/").filter(Boolean).at(-1) ?? project.title;
         const intro =
           `You are the release manager for ${project.title}: this project's one persistent release thread. ` +

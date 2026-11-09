@@ -1,13 +1,7 @@
 /**
- * t4 fork: "no reply needed" handoffs from one thread to another arrive at
- * most every ten minutes, bundled.
- *
- * ai-escape's AI-27 PM received 762 messages in a week - 377 fyi handoffs,
- * many of them progress narration from its release manager and children -
- * and compacted nine times (2026-10-29). A pure fyi (no `done`, no `ask`)
- * that follows the sender's last fyi to the same thread within the window is
- * queued; a job delivers each queue as one message once the window has
- * passed. Anything that answers or asks is delivered at once, as before.
+ * t4 fork: a pure fyi handoff (no `done`, no `ask`) that follows the sender's last fyi to the same
+ * thread within ten minutes is queued, and a job delivers each queue as one message once the
+ * window has passed. Anything that answers or asks is delivered at once.
  */
 import { ThreadId } from "@t3tools/contracts";
 import * as Clock from "effect/Clock";
@@ -28,28 +22,28 @@ const Pair = Schema.Struct({ from: Schema.String, to: Schema.String, fromTitle: 
 const Item = Schema.Struct({ at: Schema.Number, body: Schema.String });
 const Pairs = Schema.fromJsonString(Schema.Array(Pair));
 const Items = Schema.fromJsonString(Schema.Array(Item));
+const decodePairs = Schema.decodeEffect(Pairs);
+const decodeItems = Schema.decodeEffect(Items);
+const encodePairs = Schema.encodeEffect(Pairs);
+const encodeItems = Schema.encodeEffect(Items);
 
 const readPairs = (store: T4Store.T4StoreShape) =>
   store.meta(INDEX_KEY).pipe(
-    Effect.flatMap((text) =>
-      text === undefined ? Effect.succeed([]) : Schema.decodeEffect(Pairs)(text),
-    ),
+    Effect.flatMap((text) => (text === undefined ? Effect.succeed([]) : decodePairs(text))),
     Effect.orElseSucceed((): ReadonlyArray<typeof Pair.Type> => []),
   );
 const readItems = (store: T4Store.T4StoreShape, key: string) =>
   store.meta(key).pipe(
-    Effect.flatMap((text) =>
-      text === undefined ? Effect.succeed([]) : Schema.decodeEffect(Items)(text),
-    ),
+    Effect.flatMap((text) => (text === undefined ? Effect.succeed([]) : decodeItems(text))),
     Effect.orElseSucceed((): ReadonlyArray<typeof Item.Type> => []),
   );
 const writePairs = (store: T4Store.T4StoreShape, pairs: ReadonlyArray<typeof Pair.Type>) =>
-  Schema.encodeEffect(Pairs)(pairs).pipe(Effect.flatMap((text) => store.setMeta(INDEX_KEY, text)));
+  encodePairs(pairs).pipe(Effect.flatMap((text) => store.setMeta(INDEX_KEY, text)));
 const writeItems = (
   store: T4Store.T4StoreShape,
   key: string,
   items: ReadonlyArray<typeof Item.Type>,
-) => Schema.encodeEffect(Items)(items).pipe(Effect.flatMap((text) => store.setMeta(key, text)));
+) => encodeItems(items).pipe(Effect.flatMap((text) => store.setMeta(key, text)));
 
 /** When the sender's last fyi to this thread went out, or undefined if never. */
 const lastSent = (store: T4Store.T4StoreShape, from: string, to: string) =>
@@ -105,7 +99,7 @@ const digestText = (
   from: string,
   items: ReadonlyArray<{ readonly body: string }>,
 ) =>
-  `HANDOFF from "${fromTitle}" (${shortId(from)}) — no reply needed · ${items.length} updates, bundled:\n\n` +
+  `HANDOFF from "${fromTitle}" (${shortId(from)}), no reply needed · ${items.length} updates, bundled:\n\n` +
   items.map((item) => item.body.trim()).join("\n\n---\n\n");
 
 /** Delivers each queue whose window has passed. */

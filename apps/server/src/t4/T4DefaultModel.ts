@@ -1,10 +1,8 @@
 /**
- * t4 fork: the model a launch gets when it names none - the client's own
- * default (T3's `defaultModelSelection`, with the project's override in
- * `projectSettingsOverrides`), the same selection T3's UI pre-fills for a new
- * chat. The t4 dashboard edits it per client. Upstream's launch tool inherits
- * the launching thread's model instead, so a Codex release manager spawned
- * Codex threads into a client whose default is Claude.
+ * t4 fork: the model a launch gets when it names none: the client's own default (T3's
+ * `defaultModelSelection`, with the project's override in `projectSettingsOverrides`), as T3's UI
+ * pre-fills for a new chat. Upstream inherits the launching thread's model instead, so a Codex
+ * release manager spawned Codex threads into a client whose default is Claude.
  */
 import type { ModelSelection, ProjectId } from "@t3tools/contracts";
 import { resolveProjectSettings } from "@t3tools/shared/projectSettings";

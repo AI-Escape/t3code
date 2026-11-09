@@ -1,9 +1,9 @@
+import { describe, expect, it } from "@effect/vitest";
 import * as Clock from "effect/Clock";
 import * as DateTime from "effect/DateTime";
 import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
 import * as TestClock from "effect/testing/TestClock";
-import { describe, expect, it } from "vite-plus/test";
 
 import * as ThreadManagementService from "../orchestration-v2/ThreadManagementService.ts";
 import * as ScheduledTasks from "../scheduledTasks/ScheduledTaskService.ts";
@@ -96,8 +96,7 @@ const harness = (input: {
     }),
     TestClock.layer(),
   );
-  const run = (f: Effect.Effect<void, never, never>) =>
-    Effect.runPromise(f.pipe(Effect.provide(layer)));
+  const run = (f: Effect.Effect<void, never, never>) => f.pipe(Effect.provide(layer));
   return { delivered, run };
 };
 
@@ -125,39 +124,48 @@ describe("t4 release guard", () => {
     ).toBe(true);
   });
 
-  it("nudges an idle release manager that owes and has nothing to wake it, once an hour", async () => {
-    const h = harness({});
-    await h.run(
-      Effect.gen(function* () {
-        yield* TestClock.adjust("20 minutes");
-        yield* T4ReleaseGuard.sweep;
-        yield* T4ReleaseGuard.sweep;
-        expect(h.delivered).toHaveLength(1);
-        expect(h.delivered[0]).toContain('you still owe 1 release ("APP-1 Fix it")');
-        yield* TestClock.adjust(HOUR);
-        yield* T4ReleaseGuard.sweep;
-        expect(h.delivered).toHaveLength(2);
-      }) as never,
-    );
-  });
-
-  it("leaves it alone while a run is watched, a wake is set, it waits on a thread, or it runs", async () => {
-    for (const input of [
-      { watching: true },
-      { wakeInMs: 10 * 60_000 },
-      { wakeInMs: 3 * 24 * HOUR },
-      { awaiting: true },
-      { running: true },
-      { queue: [{ ownerThreadId: "t4-owner", state: "held" as const }] },
-    ]) {
-      const h = harness(input);
-      await h.run(
+  it.effect(
+    "nudges an idle release manager that owes and has nothing to wake it, once an hour",
+    () => {
+      const h = harness({});
+      return h.run(
         Effect.gen(function* () {
           yield* TestClock.adjust("20 minutes");
           yield* T4ReleaseGuard.sweep;
-          expect(h.delivered).toEqual([]);
+          yield* T4ReleaseGuard.sweep;
+          expect(h.delivered).toHaveLength(1);
+          expect(h.delivered[0]).toContain('you still owe 1 release ("APP-1 Fix it")');
+          yield* TestClock.adjust(HOUR);
+          yield* T4ReleaseGuard.sweep;
+          expect(h.delivered).toHaveLength(2);
         }) as never,
       );
-    }
-  });
+    },
+  );
+
+  it.effect(
+    "leaves it alone while a run is watched, a wake is set, it waits on a thread, or it runs",
+    () =>
+      Effect.forEach(
+        [
+          { watching: true },
+          { wakeInMs: 10 * 60_000 },
+          { wakeInMs: 3 * 24 * HOUR },
+          { awaiting: true },
+          { running: true },
+          { queue: [{ ownerThreadId: "t4-owner", state: "held" as const }] },
+        ],
+        (input) => {
+          const h = harness(input);
+          return h.run(
+            Effect.gen(function* () {
+              yield* TestClock.adjust("20 minutes");
+              yield* T4ReleaseGuard.sweep;
+              expect(h.delivered).toEqual([]);
+            }) as never,
+          );
+        },
+        { discard: true },
+      ),
+  );
 });

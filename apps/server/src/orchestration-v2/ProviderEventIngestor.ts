@@ -342,12 +342,9 @@ export const layer: Layer.Layer<
     );
 
     /**
-     * t4 fork: a message-mode question identical to one still open in the
-     * thread replaces it. Agents re-asked open questions word for word - 37
-     * stacked copies in a week, each answered separately (score's SCORE-2 asked
-     * one seven times in 37 minutes, 2026-10-29). The older card is cancelled
-     * so the user answers once; answering a message-mode question only sends
-     * a message, so nothing is lost with it.
+     * t4 fork: a message-mode question identical to one still open in the thread
+     * replaces it, since agents re-ask open questions word for word. Cancelling the
+     * older card loses nothing: answering a message-mode question only sends a message.
      */
     const dismissDuplicateQuestions = Effect.fn("ProviderEventIngestor.dismissDuplicateQuestions")(
       function* (input: ProviderEventIngestInput, item: OrchestrationV2TurnItem) {

@@ -1,19 +1,10 @@
 /**
- * t4 fork: a thread whose worktree is gone always resumes.
- *
- * t4's reaper removes a clean worktree once its thread has been settled 48 h
- * (and archived or deleted threads' at once), relying on T3 to recreate it
- * when the thread is used again. Upstream recreates it at turn start
- * (ProviderTurnStartService: the branch, else a fresh one from the project's
- * branch; the fork adds origin's copy of the branch) but without the project's
- * setup script, so the thread came back without t4's instructions and skills.
- * Here the setup script runs, as on a new worktree. It runs as a plain
- * process, not in a T3 terminal: turn start holds the worktree's workspace
- * lease, which opening a terminal there waits for (that deadlocked the first
- * version of this).
+ * t4 fork: when turn start recreates a reaped worktree, the project's setup script runs as on a new
+ * worktree. It runs as a plain process, not a T3 terminal: turn start holds the worktree's
+ * workspace lease, which opening a terminal there waits for (a deadlock).
  */
 // @effect-diagnostics-next-line nodeBuiltinImport:off -- runs the setup script outside T3 terminals, whose workspace lease turn start holds.
-import * as ChildProcess from "node:child_process";
+import * as NodeChildProcess from "node:child_process";
 
 import type { ProjectId, ProjectScript, ServerSettings } from "@t3tools/contracts";
 import {
@@ -27,7 +18,7 @@ const SETUP_TIMEOUT_MS = 10 * 60 * 1000;
 
 const runSetupScript = (command: string, cwd: string, env: Record<string, string>) =>
   Effect.callback<{ readonly exitCode: number | null; readonly output: string }>((resume) => {
-    const child = ChildProcess.execFile(
+    const child = NodeChildProcess.execFile(
       "/bin/sh",
       ["-c", command],
       { cwd, env: { ...process.env, ...env }, timeout: SETUP_TIMEOUT_MS, maxBuffer: 4 << 20 },

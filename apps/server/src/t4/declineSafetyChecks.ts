@@ -1,20 +1,8 @@
 /**
- * t4 fork: on a full-access thread, nobody approves anything.
- *
- * Claude runs with `bypassPermissions`, yet Claude Code still forwards some
- * of its own safety checks to the permission callback - "cannot be
- * auto-allowed by permission rules", whatever the mode. The one t4 hit is
- * the dangerous-rm guard: `cd ../../frontend-dashboard; ... rm -f
- * ../backend/api/data/shots/*` (a relative glob after a `cd`) put an
- * Approve/Decline card in front of the user (usa-rs USA-1424, 2026-10-26),
- * and the turn waited on it.
- *
- * With `T4_CLAUDE_DECLINE_SAFETY_CHECKS=1`, such a check (bypass refused it
- * and no ask rule matched - T3's `provider_check`) is declined at once with
- * a note telling Claude how to do it in a form the check can verify. The
- * guard still stops a removal it can't resolve; the agent rewrites it
- * instead of a person approving it. Asks from the user's own ask rules
- * still reach the user.
+ * t4 fork: under `bypassPermissions` Claude Code still forwards some safety checks (e.g. its
+ * dangerous-rm guard) to the permission callback. With `T4_CLAUDE_DECLINE_SAFETY_CHECKS=1`, such a
+ * `provider_check` is declined at once with a note on how to rewrite the command so the check can
+ * verify it; asks from the user's own ask rules still reach the user.
  */
 export const t4DeclineSafetyChecks = (env: NodeJS.ProcessEnv = process.env): boolean =>
   env.T4_CLAUDE_DECLINE_SAFETY_CHECKS?.trim() === "1";

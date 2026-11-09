@@ -1,25 +1,8 @@
 /**
- * t4 fork: what a thread launch does on top of T3's - t4's `spawn`.
- *
- * Behaviour contract: `cmd_spawn` in t4's `t3agents.py`.
- *   - Live-thread guard: a thread spawning work that names no issue refuses
- *     while other threads are live in the project (running, or active in the
- *     last 3 hours; excluding itself and release managers) unless `anyway` -
- *     if one already owns the work, message it instead. A launch that names
- *     its issues is checked by issue ownership alone: on a busy project the
- *     list is never empty, and agents re-ran with `anyway` within seconds
- *     (usa-rs, 2026-10-30).
- *   - Issues: each is linked to the new thread; one an open thread already
- *     owns is refused unless `anyway`.
- *   - A parent thread gets a parent->child `spawn` ledger entry, and the
- *     child's prompt ends with the spawn footer (release-manager wording when
- *     the parent is one).
- *   - A worktree launch in a project that is not a git checkout is refused
- *     before the thread exists. Upstream's base check treats a git error as
- *     "fine", so the launch was accepted and failed at worktree creation: a
- *     leftover usa-rs project on /srv/data/opencode (it held only imported CLI
- *     sessions, archived 2026-10-31) became the dashboard's default, and four
- *     Linear spawns on 2026-11-01 landed there as failed threads.
+ * t4 fork: what a launch adds to T3's, like t4's `cmd_spawn`. With no issue named it refuses while
+ * other threads are live in the project unless `anyway`; named issues are checked by ownership
+ * alone and linked. A parent gets a `spawn` ledger entry, the child's prompt a spawn footer. A
+ * worktree launch into a non-git project is refused up front (upstream treats a git error as fine).
  */
 import type { OrchestrationV2ThreadShell, ProjectId } from "@t3tools/contracts";
 import * as Clock from "effect/Clock";

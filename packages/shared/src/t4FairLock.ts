@@ -1,13 +1,8 @@
 /**
- * t4 fork: a one-holder lock that serves waiters in the order they arrived.
- *
- * Effect's Semaphore wakes waiters on a later tick, so a fiber that releases
- * and takes again at once (any loop of small reads) gets the permit back
- * before anyone waiting does. On T3's one database reader that starved every
- * other read: a `t3_decisions` call ran ~190 thread reads back to back and
- * held logins, the web app, the scheduler and turn starts for 29 s (usa-rs,
- * 2026-11-02). Here a free lock is taken only when nobody is queued, and a
- * release wakes the longest waiter, which takes it before anyone else can.
+ * t4 fork: a one-holder lock that serves waiters in arrival order. Effect's
+ * Semaphore wakes waiters on a later tick, so a loop that releases and retakes
+ * starves them (it stalled T3's single database reader). A free lock is taken only
+ * when nobody is queued, and a release hands it straight to the longest waiter.
  */
 import * as Effect from "effect/Effect";
 import * as Option from "effect/Option";

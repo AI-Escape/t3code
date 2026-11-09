@@ -1,10 +1,7 @@
 /**
- * t4 fork: t4's own database, `<userdata>/t4.sqlite`, beside T3's state
- * database. Keeping t4's tables out of T3's file leaves T3's schema,
- * migrations and planner statistics untouched (extra tables shared
- * `PRAGMA optimize`'s analysis budget), and makes rolling the fork back a
- * matter of ignoring one file. Provided only to T4Store, so every other
- * service keeps T3's SqlClient.
+ * t4 fork: t4's own database, `<userdata>/t4.sqlite`, beside T3's, so T3's schema, migrations and
+ * planner statistics stay untouched and rolling the fork back means ignoring one file. Provided
+ * only to T4Store; every other service keeps T3's SqlClient.
  */
 import * as NodeSqliteClient from "@t3tools/shared/nodeSqliteClient";
 import * as Effect from "effect/Effect";

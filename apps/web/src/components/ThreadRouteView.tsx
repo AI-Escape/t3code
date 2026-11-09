@@ -63,7 +63,7 @@ export function ThreadRouteView({
   // The ChatView that carried a draft keeps its key through the redirect to its thread, and only
   // until the route leaves that thread, so later visits reuse the shared unkeyed ChatView.
   const [handoffKey, setHandoffKey] = useState<{ threadKey: string; key: string } | null>(null);
-  const keyboardFrame = useKeyboardViewportFrame();
+  const { ref: keyboardFrameRef, style: keyboardFrameStyle } = useKeyboardViewportFrame();
   const nextHandoffKey =
     draftId !== null && draftSession === null && draftRedirect
       ? handoffKey?.key === draftId
@@ -210,8 +210,8 @@ export function ThreadRouteView({
     <SidebarInset
       className="h-svh min-h-0 overflow-hidden overscroll-y-none md:h-dvh"
       inert={background}
-      ref={keyboardFrame.ref}
-      style={keyboardFrame.style}
+      ref={keyboardFrameRef}
+      style={keyboardFrameStyle}
     >
       <BackgroundThreadContext value={background}>{view}</BackgroundThreadContext>
       {background ? null : redirect}

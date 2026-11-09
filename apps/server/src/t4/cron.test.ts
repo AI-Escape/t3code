@@ -7,6 +7,8 @@ import { nextScheduledRunAt } from "../scheduledTasks/Schedule.ts";
 import { nextCronRunAt, parseCron } from "./cron.ts";
 import { wakePrompt, wakeRefusal } from "./wakes.ts";
 
+const encodeSchedule = Schema.encodeSync(ScheduledTaskSchedule);
+
 const utc = (iso: string) => DateTime.makeUnsafe(iso);
 const iso = (value: DateTime.DateTime | null) =>
   value === null ? null : DateTime.formatIso(DateTime.toUtc(value));
@@ -90,13 +92,10 @@ describe("t4 once schedule", () => {
       type: "once",
       runAt: "2026-10-17T12:00:00.000Z",
     });
-    assert.deepEqual(
-      Schema.encodeSync(ScheduledTaskSchedule)({ type: "once", runAt: "2026-10-17T12:00:00.000Z" }),
-      {
-        type: "once",
-        runAt: "2026-10-17T12:00:00.000Z",
-      },
-    );
+    assert.deepEqual(encodeSchedule({ type: "once", runAt: "2026-10-17T12:00:00.000Z" }), {
+      type: "once",
+      runAt: "2026-10-17T12:00:00.000Z",
+    });
   });
 });
 

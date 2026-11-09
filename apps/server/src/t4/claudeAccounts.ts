@@ -1,39 +1,13 @@
 /**
- * t4 fork: extra Claude accounts used before the main login.
- *
- * `T4_CLAUDE_ACCOUNTS` lists long-lived OAuth token files (`claude
- * setup-token`), in priority order. A new Claude process gets the first
- * account that has not hit its usage limit as `CLAUDE_CODE_OAUTH_TOKEN`; only
- * when every one has does it fall back to the main login (the shared
- * `~/.claude` credentials). Only the login changes: settings, skills and
- * transcripts stay in the one `~/.claude`, so a thread resumes on another
- * account with its whole history. A turn stopped by a limit marks its account
- * used up until the reset Claude reported, and is resumed at once when another
- * account is free (ClaudeAdapterV2 reports the reset as now). A live process
- * whose account is used up is replaced at the next turn; one on the main
- * login moves back to an account when it next starts (an idle session is
- * released). usa-rs, 2026-10-29: two Team seats ahead of the main login.
- *
- * The order can instead come from `T4_CLAUDE_ACCOUNTS_FILE`, a JSON list the
- * t4 dashboard writes (`{"accounts": [{"key", "file"?}]}`; `main` is the
- * shared login and can sit anywhere, e.g. before a fallback account every
- * client shares). It is re-read when it changes, so accounts are added,
- * signed in again, reordered or removed without restarting the container; an
- * account taken off the list counts as used up, so its live processes move
- * on at their next turn. Without the file, `T4_CLAUDE_ACCOUNTS` applies.
- *
- * Which account was used up until when is kept beside the tokens
- * (`state.json`), so a restart does not retry an exhausted one. The file is
- * re-read when it changes: the dashboard clears a mark the account's live
- * limits contradict. On 2026-11-01 the main login sat marked used up until its
- * weekly reset, three days out, with 9% of its week used (it had just moved
- * to a plan with no 5-hour limit); once both seats ran out, five threads
- * waited hours for a seat's reset.
+ * t4 fork: accounts from `T4_CLAUDE_ACCOUNTS_FILE` (re-read on change) or `T4_CLAUDE_ACCOUNTS` go
+ * first as `CLAUDE_CODE_OAUTH_TOKEN`; only the login changes, so threads keep their `~/.claude`
+ * history. Used-up marks persist in `state.json` (re-read on change, so a restart skips them); an
+ * account taken off the list counts as used up.
  */
 // @effect-diagnostics-next-line nodeBuiltinImport:off -- token files and a small state file, read synchronously at process start.
-import * as FS from "node:fs";
+import * as NodeFS from "node:fs";
 // @effect-diagnostics-next-line nodeBuiltinImport:off -- token files and a small state file, read synchronously at process start.
-import * as Path from "node:path";
+import * as NodePath from "node:path";
 
 const MAIN_CLAUDE_ACCOUNT = "main";
 /** The Claude provider instance t4 clients run (settings.json `providerInstances.claudeAgent`). */
@@ -52,7 +26,7 @@ interface AccountEntry {
   readonly file?: string;
 }
 
-const keyOf = (file: string) => Path.basename(file).replace(/\.[^.]*$/, "");
+const keyOf = (file: string) => NodePath.basename(file).replace(/\.[^.]*$/, "");
 
 let listCache: {
   file: string;
@@ -66,7 +40,7 @@ const listFromFile = (file: string): ReadonlyArray<AccountEntry> | null => {
   if (listCache?.file === file && listCache.mtimeMs === mtimeMs) return listCache.entries;
   let entries: ReadonlyArray<AccountEntry> | null = null;
   try {
-    const saved = JSON.parse(FS.readFileSync(file, "utf8")) as { accounts?: unknown };
+    const saved = JSON.parse(NodeFS.readFileSync(file, "utf8")) as { accounts?: unknown };
     if (Array.isArray(saved.accounts)) {
       entries = saved.accounts.flatMap((a): AccountEntry[] => {
         const entry = a as { key?: unknown; file?: unknown };
@@ -106,8 +80,9 @@ const accountList = (env: NodeJS.ProcessEnv): ReadonlyArray<AccountEntry> => {
  * until one is made there, "main" is skipped like a used-up account.
  */
 const mainLoginAvailable = (env: NodeJS.ProcessEnv): boolean => {
-  const dir = env.CLAUDE_CONFIG_DIR?.trim() || (env.HOME ? Path.join(env.HOME, ".claude") : null);
-  return dir === null || fileMtimeMs(Path.join(dir, ".credentials.json")) !== null;
+  const dir =
+    env.CLAUDE_CONFIG_DIR?.trim() || (env.HOME ? NodePath.join(env.HOME, ".claude") : null);
+  return dir === null || fileMtimeMs(NodePath.join(dir, ".credentials.json")) !== null;
 };
 
 const accountFiles = (env: NodeJS.ProcessEnv): ReadonlyArray<string> =>
@@ -115,7 +90,7 @@ const accountFiles = (env: NodeJS.ProcessEnv): ReadonlyArray<string> =>
 
 const statePath = (env: NodeJS.ProcessEnv, files: ReadonlyArray<string>) =>
   env.T4_CLAUDE_ACCOUNTS_STATE?.trim() ||
-  Path.join(Path.dirname(env.T4_CLAUDE_ACCOUNTS_FILE?.trim() || files[0]!), "state.json");
+  NodePath.join(NodePath.dirname(env.T4_CLAUDE_ACCOUNTS_FILE?.trim() || files[0]!), "state.json");
 
 let exhaustedUntil: Map<string, number> | null = null;
 /** The state file's mtime when it was last read or written here. */
@@ -123,7 +98,7 @@ let loadedMtimeMs: number | null = null;
 
 const fileMtimeMs = (file: string): number | null => {
   try {
-    return FS.statSync(file).mtimeMs;
+    return NodeFS.statSync(file).mtimeMs;
   } catch {
     return null;
   }
@@ -137,7 +112,7 @@ const loadState = (env: NodeJS.ProcessEnv, files: ReadonlyArray<string>) => {
   exhaustedUntil = new Map();
   loadedMtimeMs = mtimeMs;
   try {
-    const saved = JSON.parse(FS.readFileSync(file, "utf8")) as Record<string, unknown>;
+    const saved = JSON.parse(NodeFS.readFileSync(file, "utf8")) as Record<string, unknown>;
     for (const [key, until] of Object.entries(saved.exhaustedUntil ?? {})) {
       if (typeof until === "number") exhaustedUntil.set(key, until);
     }
@@ -150,12 +125,12 @@ const loadState = (env: NodeJS.ProcessEnv, files: ReadonlyArray<string>) => {
 const saveState = (env: NodeJS.ProcessEnv, files: ReadonlyArray<string>) => {
   try {
     const file = statePath(env, files);
-    FS.writeFileSync(
+    NodeFS.writeFileSync(
       `${file}.tmp`,
       JSON.stringify({ exhaustedUntil: Object.fromEntries(exhaustedUntil ?? []) }, null, 2),
       { mode: 0o600 },
     );
-    FS.renameSync(`${file}.tmp`, file);
+    NodeFS.renameSync(`${file}.tmp`, file);
     loadedMtimeMs = fileMtimeMs(file);
   } catch {
     // Best effort: the in-memory state still steers this process.
@@ -164,7 +139,7 @@ const saveState = (env: NodeJS.ProcessEnv, files: ReadonlyArray<string>) => {
 
 const readToken = (file: string): string | undefined => {
   try {
-    const token = FS.readFileSync(file, "utf8").trim();
+    const token = NodeFS.readFileSync(file, "utf8").trim();
     return token.length > 0 ? token : undefined;
   } catch {
     return undefined;
@@ -213,14 +188,9 @@ export const claudeAccountEnvironment = (
     : { ...environment, CLAUDE_CODE_OAUTH_TOKEN: account.token };
 
 /**
- * The environment for a Claude process T3 starts beside the sessions: the
- * provider status check (whose "not authenticated" answer is T3's red banner)
- * and Claude text generation. They ran on the main login only, which t4's own
- * ~/.claude doesn't have since 2026-11-07, so every client said "Claude is
- * unauthenticated" while its sessions ran on the dashboard's accounts. They
- * get the account a new session would, else the first one with a token: a
- * used-up account still signs in, so only a client with no usable account at
- * all is reported unauthenticated.
+ * For Claude processes beside the sessions (status check, text generation): the account a new
+ * session would get, else the first with a token, since a used-up account still signs in. Only a
+ * client with no usable account at all is reported unauthenticated.
  */
 export const claudeSideProcessEnvironment = (
   environment: NodeJS.ProcessEnv,

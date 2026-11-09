@@ -1,16 +1,8 @@
 /**
- * t4 fork: wake a thread when a GitHub Actions run finishes.
- *
- * usa-rs's release manager spent 50 h of one week inside `gh run watch` and
- * ~3,600 `gh run view` / `gh api` polls (2026-10-29). Blocking in a tool call
- * also kept handoffs waiting: a message to a running Codex turn lands only
- * after the call returns. `watch_workflow_run` records the run, the caller
- * ends its turn, and this job checks each watched run every 30 s and posts
- * one message into the thread when it completes - so the thread is idle
- * while it waits and any handoff starts its turn at once.
- *
- * Watches live in t4_meta (a handful at a time); one older than six hours is
- * dropped with a note.
+ * t4 fork: wake a thread when a GitHub Actions run finishes, so agents end their turn instead of
+ * blocking in `gh run watch` (a message to a running Codex turn lands only after the call returns).
+ * Each watched run is checked every 30 s and one message posted when it completes. Watches live in
+ * t4_meta (a handful at a time); one older than six hours is dropped with a note.
  */
 import { ThreadId } from "@t3tools/contracts";
 import * as Clock from "effect/Clock";
@@ -44,6 +36,7 @@ const Watch = Schema.Struct({
 type Watch = typeof Watch.Type;
 const Watches = Schema.fromJsonString(Schema.Array(Watch));
 const decodeWatches = Schema.decodeUnknownEffect(Watches);
+const encodeWatches = Schema.encodeEffect(Watches);
 
 /**
  * A watch on every run for a commit, including runs that start later - a
@@ -74,6 +67,8 @@ const CommitWatch = Schema.Struct({
 });
 type CommitWatch = typeof CommitWatch.Type;
 const CommitWatches = Schema.fromJsonString(Schema.Array(CommitWatch));
+const decodeCommitWatches = Schema.decodeEffect(CommitWatches);
+const encodeCommitWatches = Schema.encodeEffect(CommitWatches);
 const COMMIT_META_KEY = "workflow-commit-watches";
 /** With nothing running for this long after the last run ended, the chain is done. */
 const COMMIT_QUIET_MS = 20 * 60_000;
@@ -192,7 +187,7 @@ const make = Effect.gen(function* () {
     Effect.orElseSucceed((): ReadonlyArray<Watch> => []),
   );
   const save = (watches: ReadonlyArray<Watch>) =>
-    Schema.encodeEffect(Watches)(watches).pipe(
+    encodeWatches(watches).pipe(
       Effect.flatMap((text) => store.setMeta(META_KEY, text)),
       Effect.ignore,
     );
@@ -241,13 +236,11 @@ const make = Effect.gen(function* () {
   });
 
   const loadCommits = store.meta(COMMIT_META_KEY).pipe(
-    Effect.flatMap((text) =>
-      text === undefined ? Effect.succeed([]) : Schema.decodeEffect(CommitWatches)(text),
-    ),
+    Effect.flatMap((text) => (text === undefined ? Effect.succeed([]) : decodeCommitWatches(text))),
     Effect.orElseSucceed((): ReadonlyArray<CommitWatch> => []),
   );
   const saveCommits = (list: ReadonlyArray<CommitWatch>) =>
-    Schema.encodeEffect(CommitWatches)(list).pipe(
+    encodeCommitWatches(list).pipe(
       Effect.flatMap((text) => store.setMeta(COMMIT_META_KEY, text)),
       Effect.ignore,
     );

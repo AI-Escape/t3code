@@ -35,16 +35,10 @@ class ThreadPullRequestServiceV2 extends Context.Service<
   }
 >()("t3/orchestration-v2/ThreadPullRequestService/ThreadPullRequestServiceV2") {}
 
-// t4 fork: the full sweep starts several git processes per open thread, and
-// each start blocks the main thread while Node copies the 1.3 GB server
-// (~55 ms here, ~1 ms for a small process). On usa-rs (~80 open threads) a
-// sweep was 424 starts, the server froze ~23 s each minute an app was open,
-// and database reads waited up to 31 s behind it (2026-11-02). Every thread
-// is still refreshed when its run ends or its checkpoint is captured; the
-// sweep only catches pull requests opened outside a turn.
-// T4_PR_DISCOVERY=off turns discovery off altogether: no sweep, no lookup
-// when a run ends. Nothing in t4 reads discovered PRs (agents link theirs
-// with link_pull_request), so every client runs with it off.
+// t4 fork: each git process start blocks the main thread while Node copies the
+// large server process, so a sweep over many open threads froze it for seconds;
+// it only catches PRs opened outside a turn. T4_PR_DISCOVERY=off disables discovery
+// entirely (agents link PRs with link_pull_request; nothing in t4 reads the rest).
 const discoveryOff = process.env.T4_PR_DISCOVERY === "off";
 const sweepMinutes = Number(process.env.T4_PR_SWEEP_MINUTES ?? "15");
 const SWEEP_EVERY =

@@ -52,7 +52,7 @@ import {
   resumePace,
   takeResumeSlot,
 } from "./limitResumePace.ts";
-import { isRetired, isSettled, shortId } from "./T4Threads.ts";
+import { isSettled, shortId } from "./T4Threads.ts";
 
 type Shell = OrchestrationV2ThreadShell;
 
@@ -209,13 +209,13 @@ export const layer = Layer.mergeAll(
             nextRunAt: task.nextRunAt,
           })),
         handoffs: open,
-        releaseManagers: Object.fromEntries([...(yield* store.releaseManagers()).entries()]),
+        releaseManagers: Object.fromEntries(yield* store.releaseManagers()),
         // Roles threads were given (AI-58) and who launched whom, for the
         // dashboard's roles and By PM view.
-        roles: Object.fromEntries([...(yield* store.threadRoles()).entries()]),
-        parents: Object.fromEntries([...(yield* store.spawnParents()).entries()]),
+        roles: Object.fromEntries(yield* store.threadRoles()),
+        parents: Object.fromEntries(yield* store.spawnParents()),
         issueLinks: yield* store.issueLinks(),
-        settleRequests: Object.fromEntries([...(yield* store.settleRequests()).entries()]),
+        settleRequests: Object.fromEntries(yield* store.settleRequests()),
         // Release managers' queues (AI-71): the dashboard's "on staging" list,
         // with what shipped in the last three days.
         releaseQueue: yield* store.releaseQueue({
@@ -529,10 +529,9 @@ export const layer = Layer.mergeAll(
   ),
 
   // Import the project's recent Claude Code / Codex CLI sessions (the last 30
-  // days, those run in its folder) as T3 threads - what the welcome wizard's
-  // import step does, which is the only place T3's web app offers it. Used to
-  // move a session started outside T3 into a client (2026-11-07: the host
-  // session that built much of t4, into ai-escape's t4 project).
+  // days, run in its folder) as T3 threads, as the welcome wizard's import step
+  // does (the only place T3's web app offers it), to move a session started
+  // outside T3 into a client.
   route(
     "POST",
     "/api/t4/projects/:projectId/import-sessions",

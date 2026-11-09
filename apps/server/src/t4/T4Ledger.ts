@@ -113,7 +113,7 @@ const make = Effect.gen(function* () {
 
   const isReleaseManager: T4LedgerShape["isReleaseManager"] = (w, thread) =>
     w.releaseManagers.has(thread.id) ||
-    titledReleaseManager({ ...thread, ...(w.byId.get(thread.id) ?? {}) });
+    titledReleaseManager({ ...thread, ...w.byId.get(thread.id) });
 
   const findReleaseManager: T4LedgerShape["findReleaseManager"] = Effect.fn(
     "t4.T4Ledger.findReleaseManager",

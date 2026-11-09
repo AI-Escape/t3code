@@ -1,11 +1,8 @@
 /**
- * t4 fork: recover turns that hang. Behaviour contract: `tick_stalled_turns`
- * and `stalled_turn` in t4's `t3agents.py` (USA-884 sat "running" for 5.5 h
- * with no output). A running turn that has produced nothing for
- * `silenceMinutes` - no item in its run updated, not waiting on the user, no
- * tool call still executing (a long foreground test run is not a stall) - is
- * interrupted and restarted with a note. A thread that stalls again within
- * `repeatHours` is stopped and pushed to the user instead of looped.
+ * t4 fork: recover hung turns, like t4's `tick_stalled_turns`. A running turn silent for
+ * `silenceMinutes` (no run item updated, not waiting on the user, no tool call still executing) is
+ * interrupted and restarted with a note; one that stalls again within `repeatHours` is stopped and
+ * pushed to the user instead of looped.
  */
 import { CommandId, type OrchestrationV2ThreadShell } from "@t3tools/contracts";
 import * as Clock from "effect/Clock";
