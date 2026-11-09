@@ -631,9 +631,20 @@ it.live("a secret card stays open after the turn, and its answer reaches the age
       const [card] = yield* secretCard();
       expect(card).toMatchObject({ status: "waiting", secretStatus: "pending" });
 
-      // The agent ends its turn; the card stays open and a retry finds it.
+      // The agent ends its turn; the card stays open, and the thread still
+      // asks for input - in the stored shell the dashboard reads and in memory.
       yield* endRun(a);
       expect((yield* secretCard())[0]).toMatchObject({ secretStatus: "pending" });
+      const asks = () =>
+        Effect.gen(function* () {
+          const stored = (yield* a.orchestrator.getThreadShell(threadId))?.pendingRuntimeRequest;
+          const live = ProjectionStore.threadShellFromProjection(
+            yield* a.orchestrator.getThreadProjection(threadId),
+          ).pendingRuntimeRequest;
+          return [stored ?? null, live];
+        });
+      expect(yield* asks()).toMatchObject([{ kind: "user_input" }, { kind: "user_input" }]);
+      expect(yield* a.projections.getSettlementCandidates(threadId)).toEqual([]);
 
       // The user enters it long after; the agent hears where it is.
       yield* a.secrets.answer({
@@ -645,6 +656,7 @@ it.live("a secret card stays open after the turn, and its answer reaches the age
         status: "completed",
         secretStatus: "saved",
       });
+      expect(yield* asks()).toEqual([null, null]);
       const { messages } = yield* outcomeMessages(a);
       expect(messages).toHaveLength(1);
       expect(messages[0]).toMatchObject({

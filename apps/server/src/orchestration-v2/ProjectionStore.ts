@@ -1483,17 +1483,17 @@ function secretRequestAsPendingInput(
 }
 
 /**
- * A secret card is answered while its agent waits in the run. A link card's
- * agent asked without waiting, so the card waits on the user after its run,
- * until the user writes in the thread again and so has moved past it.
+ * A link card's agent asked without waiting, so the card waits on the user
+ * after its run, until the user writes in the thread again and so has moved
+ * past it. t4 fork: a secret card's agent asks without waiting too, and the
+ * card waits on the user until it is answered or closed.
  */
 const waitsOnUser = (
   item: OrchestrationV2TurnItem,
-  liveRunIds: ReadonlySet<RunId>,
   latestUserAuthoredMessageAt: DateTime.Utc | null,
 ) =>
   (item.type === "link_request" && linkCardStillAsks(item, latestUserAuthoredMessageAt)) ||
-  (item.type === "secret_request" && item.runId !== null && liveRunIds.has(item.runId));
+  item.type === "secret_request";
 
 const linkCardStillAsks = (
   item: OrchestrationV2TurnItem,
@@ -1528,7 +1528,6 @@ export function threadShellFromProjection(
   const activityRun =
     runs.filter(isActivityRunForShell).toSorted((left, right) => right.ordinal - left.ordinal)[0] ??
     null;
-  const liveRunIds = new Set(runs.filter(isActivityRunForShell).map((run) => run.id));
   let pendingRuntimeRequest = pendingRuntimeRequestSummary(
     projection.runtimeRequests
       .filter((request) => request.status === "pending")
@@ -1550,9 +1549,7 @@ export function threadShellFromProjection(
       secretRequestAsPendingInput(
         projection.turnItems
           .filter(
-            (item) =>
-              item.status === "waiting" &&
-              waitsOnUser(item, liveRunIds, latestUserAuthoredMessageAt),
+            (item) => item.status === "waiting" && waitsOnUser(item, latestUserAuthoredMessageAt),
           )
           .toSorted(
             (left, right) =>
@@ -6220,13 +6217,12 @@ export const layer: Layer.Layer<ProjectionStoreV2, never, SqlClient.SqlClient> =
               ) AS pending_request_payload_json,
               (
                 SELECT secret.payload_json
-                -- Keep runs outermost so completed history is never scanned for a pending secret.
-                FROM orchestration_v2_projection_runs r
-                CROSS JOIN orchestration_v2_projection_turn_items secret
-                  INDEXED BY orchestration_v2_projection_turn_items_thread_run_idx
-                WHERE r.thread_id = t.thread_id
-                  AND r.status IN ('preparing', 'starting', 'running', 'waiting')
-                  AND secret.thread_id = t.thread_id AND secret.run_id = r.run_id
+                -- t4 fork: a secret card waits on the user after its run. The
+                -- live-items index keeps completed history out of the scan.
+                FROM orchestration_v2_projection_turn_items secret
+                  INDEXED BY orchestration_v2_projection_turn_items_active_ordinal_idx
+                WHERE secret.thread_id = t.thread_id
+                  AND secret.status IN ('pending', 'running', 'waiting')
                   AND secret.type = 'secret_request' AND secret.status = 'waiting'
                 ORDER BY secret.updated_at DESC, secret.turn_item_id DESC
                 LIMIT 1
@@ -6535,6 +6531,14 @@ export const layer: Layer.Layer<ProjectionStoreV2, never, SqlClient.SqlClient> =
               AND NOT EXISTS (
                 SELECT 1 FROM orchestration_v2_projection_runtime_requests request
                 WHERE request.thread_id = t.thread_id AND request.status = 'pending'
+              )
+              -- t4 fork: an open secret card waits on the user.
+              AND NOT EXISTS (
+                SELECT 1 FROM orchestration_v2_projection_turn_items secret
+                  INDEXED BY orchestration_v2_projection_turn_items_active_ordinal_idx
+                WHERE secret.thread_id = t.thread_id
+                  AND secret.status IN ('pending', 'running', 'waiting')
+                  AND secret.type = 'secret_request' AND secret.status = 'waiting'
               )
               AND NOT EXISTS (
                 SELECT 1 FROM orchestration_v2_projection_turn_items link

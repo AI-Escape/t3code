@@ -6199,7 +6199,8 @@ it.layer(layerTest)("ProjectionStoreV2", (it) => {
     }),
   );
 
-  it.effect("selects the latest waiting secret only from active runs", () =>
+  // t4 fork: a secret card waits on the user after its run, as a link card does.
+  it.effect("selects the latest waiting secret, whatever its run's status", () =>
     Effect.gen(function* () {
       const projectionStore = yield* ProjectionStore.ProjectionStoreV2;
       const sql = yield* SqlClient.SqlClient;
@@ -6300,14 +6301,13 @@ it.layer(layerTest)("ProjectionStoreV2", (it) => {
         assert.isDefined(thread);
         const projection = yield* projectionStore.getThreadProjection(threadId);
         const memoryShell = ProjectionStore.threadShellFromProjection(projection);
-        const terminal = status === "completed" || status === "rolled_back";
         assert.deepEqual(
           [thread?.pendingRuntimeRequest?.id, memoryShell.pendingRuntimeRequest?.id],
-          terminal ? [requestId, requestId] : ["secret:b", "secret:b"],
+          ["secret:b", "secret:b"],
         );
         assert.deepEqual(
           [thread?.pendingRuntimeRequest?.blocking, memoryShell.pendingRuntimeRequest?.blocking],
-          terminal ? [false, false] : [true, true],
+          [true, true],
         );
       }
     }),
