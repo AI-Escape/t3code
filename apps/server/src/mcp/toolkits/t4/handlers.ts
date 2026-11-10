@@ -811,7 +811,7 @@ export const layer = McpToolAccess.toLayer(T4Toolkit, {
       if (commit !== undefined && commit.length > 0) {
         if (!/^[0-9a-f]{7,40}$/i.test(commit))
           return yield* invalid(`'${commit}' is not a commit SHA`);
-        const runs = yield* runWatch
+        const { commit: sha, runs } = yield* runWatch
           .watchCommit({ ...where, commit })
           .pipe(
             Effect.mapError((error) =>
@@ -820,8 +820,8 @@ export const layer = McpToolAccess.toLayer(T4Toolkit, {
           );
         return {
           watching: true,
-          runId: `commit ${commit.slice(0, 10)}`,
-          name: `every run for commit ${commit.slice(0, 10)}`,
+          runId: `commit ${sha.slice(0, 10)}`,
+          name: `every run for commit ${sha.slice(0, 10)}`,
           status: runs.some((run) => run.status === "in_progress" || run.status === "queued")
             ? "in_progress"
             : "watching",

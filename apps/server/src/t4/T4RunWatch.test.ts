@@ -2,6 +2,7 @@ import { describe, expect, it } from "@effect/vitest";
 import * as Effect from "effect/Effect";
 import * as Exit from "effect/Exit";
 import * as Layer from "effect/Layer";
+import * as TestClock from "effect/testing/TestClock";
 
 import * as ThreadManagementService from "../orchestration-v2/ThreadManagementService.ts";
 import * as ProcessRunner from "../processRunner.ts";
@@ -9,10 +10,16 @@ import * as T4Delivery from "./T4Delivery.ts";
 import * as T4RunWatch from "./T4RunWatch.ts";
 import * as T4Store from "./T4Store.ts";
 
+/** Test runs name a short commit; GitHub knows it by this full SHA. */
+const full = (commit: string) => commit.padEnd(40, "0");
+
 const harness = () => {
   const meta = new Map<string, string>();
   const delivered: Array<{ threadId: string; text: string }> = [];
   const runs = new Map<string, Record<string, unknown>>();
+  const listed: Array<string> = [];
+  const settled = new Set<string>();
+  const state = { listFails: false };
   const layer = T4RunWatch.layer.pipe(
     Layer.provide(
       Layer.mergeAll(
@@ -29,13 +36,37 @@ const harness = () => {
         }),
         Layer.mock(ThreadManagementService.ThreadManagementService)({
           getThreadShell: (id) =>
-            Effect.succeed({ id, deletedAt: null, archivedAt: null } as never),
+            Effect.succeed({
+              id,
+              deletedAt: null,
+              archivedAt: null,
+              settledOverride: null,
+              settledAt: settled.has(id) ? "2026-11-10T00:00:00.000Z" : null,
+            } as never),
         }),
         Layer.mock(ProcessRunner.ProcessRunner)({
           run: (input) => {
+            if (input.args[0] === "api") {
+              const commit = String(input.args[1]).split("/commits/")[1] ?? "";
+              const known = commit !== "0000000";
+              return Effect.succeed({
+                stdout: known ? `${full(commit)}\n` : "",
+                stderr: known ? "" : "gh: No commit found for SHA: 0000000 (HTTP 422)",
+                code: known ? 0 : 1,
+                timedOut: false,
+              } as never);
+            }
             if (input.args[1] === "list") {
+              listed.push(String(input.args[3]));
+              if (state.listFails)
+                return Effect.succeed({
+                  stdout: "",
+                  stderr: "failed to determine base repo",
+                  code: 1,
+                  timedOut: false,
+                } as never);
               const list = [...runs.entries()]
-                .filter(([, r]) => r.commit === input.args[3])
+                .filter(([, r]) => full(String(r.commit)) === input.args[3])
                 .map(([id, r]) => ({ databaseId: Number(id), ...r }));
               return Effect.succeed({
                 stdout: JSON.stringify(list),
@@ -58,7 +89,7 @@ const harness = () => {
   );
   const use = <A, E>(f: (watch: T4RunWatch.T4RunWatchShape) => Effect.Effect<A, E>) =>
     T4RunWatch.T4RunWatch.pipe(Effect.flatMap(f), Effect.provide(layer));
-  return { meta, delivered, runs, use };
+  return { meta, delivered, runs, listed, settled, state, use };
 };
 
 const input = { threadId: "t4-rm", repository: null, cwd: "/srv/Code/usa-rs", note: null };
@@ -126,7 +157,7 @@ describe("t4 watch_workflow_run", () => {
           displayTitle: "staging",
           status: "in_progress",
         });
-        const runs = yield* h.use((w) => w.watchCommit({ ...input, commit: "abc1234" }));
+        const { runs } = yield* h.use((w) => w.watchCommit({ ...input, commit: "abc1234" }));
         expect(runs).toHaveLength(1);
 
         h.runs.set("10", { ...h.runs.get("10"), status: "completed", conclusion: "success" });
@@ -201,7 +232,7 @@ describe("t4 watch_workflow_run", () => {
       const h = harness();
       h.runs.set("30", {
         commit: "aaa1111",
-        headSha: "aaa1111ffff",
+        headSha: full("aaa1111"),
         displayTitle: "staging",
         status: "in_progress",
         jobs: [],
@@ -210,6 +241,61 @@ describe("t4 watch_workflow_run", () => {
       const watched = yield* h.use((w) => w.watch({ ...input, runId: "30" }));
       expect(watched.watching).toBe(true);
       expect(h.meta.get("workflow-run-watches")).toBeUndefined();
+    }),
+  );
+
+  it.effect("watches a short commit by its full SHA and refuses one GitHub can't find", () =>
+    Effect.gen(function* () {
+      const h = harness();
+      h.runs.set("40", { commit: "cbdc633e1", displayTitle: "tests", status: "in_progress" });
+      const watched = yield* h.use((w) => w.watchCommit({ ...input, commit: "cbdc633e1" }));
+      expect(watched.commit).toBe(full("cbdc633e1"));
+      expect(watched.runs).toHaveLength(1);
+      expect(h.listed).toEqual([full("cbdc633e1")]);
+      expect(JSON.parse(h.meta.get("workflow-commit-watches")!)[0].commit).toBe(full("cbdc633e1"));
+
+      const exit = yield* Effect.exit(h.use((w) => w.watchCommit({ ...input, commit: "0000000" })));
+      expect(Exit.isFailure(exit)).toBe(true);
+    }),
+  );
+
+  it.effect("tells the thread when no run ever starts for the commit", () =>
+    Effect.gen(function* () {
+      const h = harness();
+      yield* h.use((w) =>
+        w.watchCommit({ ...input, commit: "bbb2222", note: "hand it to release" }),
+      );
+      yield* h.use((w) => w.sweep);
+      expect(h.delivered).toEqual([]);
+
+      yield* TestClock.adjust("21 minutes");
+      yield* h.use((w) => w.sweep);
+      expect(h.delivered).toHaveLength(1);
+      expect(h.delivered[0]!.text).toContain("No workflow run started for commit bbb2222000");
+      expect(h.delivered[0]!.text).toContain("Your note: hand it to release");
+      expect(JSON.parse(h.meta.get("workflow-commit-watches")!)).toEqual([]);
+    }),
+  );
+
+  it.effect("ends a watch GitHub can't read after six hours, quietly for a settled thread", () =>
+    Effect.gen(function* () {
+      const h = harness();
+      yield* h.use((w) => w.watchCommit({ ...input, commit: "ccc3333" }));
+      yield* h.use((w) => w.watchCommit({ ...input, threadId: "t4-done", commit: "ddd4444" }));
+      h.settled.add("t4-done");
+      h.state.listFails = true;
+
+      yield* TestClock.adjust("5 hours");
+      yield* h.use((w) => w.sweep);
+      expect(h.delivered).toEqual([]);
+      expect(JSON.parse(h.meta.get("workflow-commit-watches")!)).toHaveLength(2);
+
+      yield* TestClock.adjust("2 hours");
+      yield* h.use((w) => w.sweep);
+      expect(h.delivered).toHaveLength(1);
+      expect(h.delivered[0]!.threadId).toBe("t4-rm");
+      expect(h.delivered[0]!.text).toContain("ended after six hours");
+      expect(JSON.parse(h.meta.get("workflow-commit-watches")!)).toEqual([]);
     }),
   );
 });
