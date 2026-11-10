@@ -80,6 +80,7 @@ import * as PortScanner from "../../preview/PortScanner.ts";
 import { attachmentRelativePath } from "../../attachmentStore.ts";
 import { QUESTION_POSTED_NOTE } from "../../t4/questionsAsMessages.ts";
 import { safetyCheckDeclinedNote } from "../../t4/declineSafetyChecks.ts";
+import { resetClaudeAccountState } from "../../t4/claudeAccounts.ts";
 import { WorkflowAgentTranscriptReadObserver } from "../workflowAgentTranscript.ts";
 import * as ServerConfig from "../../config.ts";
 import * as McpProviderSession from "@t3tools/provider-core/server/mcpSession";
@@ -9000,6 +9001,77 @@ describe("ClaudeAdapterV2 background wake turns", () => {
           assert.include(terminal.failure.message, "/compact");
         }
       }).pipe(
+        Effect.provide(
+          Layer.mergeAll(
+            IdAllocator.layer,
+            McpProviderSessions.layer,
+            NodeServices.layer,
+            NodeCrypto.layer,
+          ),
+        ),
+      ),
+  );
+
+  // t4 fork (AI-78): a refusal on Fable's own weekly limit marks the account for Fable only.
+  it.effect.each([
+    { rateLimitType: "seven_day_overage_included", markedIn: "fableExhaustedUntil" },
+    { rateLimitType: "seven_day", markedIn: "exhaustedUntil" },
+  ] as const)(
+    "marks the t4 account used up by the refused window ($rateLimitType)",
+    ({ rateLimitType, markedIn }) =>
+      Effect.gen(function* () {
+        const dir = NodeFS.mkdtempSync(NodePath.join(process.env.TMPDIR ?? "/tmp", "t4-acct-"));
+        NodeFS.writeFileSync(NodePath.join(dir, "1.token"), "token-one\n");
+        NodeFS.writeFileSync(NodePath.join(dir, "2.token"), "token-two\n");
+        const saved = process.env.T4_CLAUDE_ACCOUNTS;
+        process.env.T4_CLAUDE_ACCOUNTS = `${dir}/1.token,${dir}/2.token`;
+        resetClaudeAccountState();
+        yield* Effect.addFinalizer(() =>
+          Effect.sync(() => {
+            if (saved === undefined) delete process.env.T4_CLAUDE_ACCOUNTS;
+            else process.env.T4_CLAUDE_ACCOUNTS = saved;
+            resetClaudeAccountState();
+          }),
+        );
+        const harness = yield* makeWakeHarness;
+        yield* harness.runtime.startTurn(
+          makeClaudeTestTurnInput({
+            threadId: harness.threadId,
+            providerThread: harness.providerThread,
+            now: yield* DateTime.now,
+            attemptId: RunAttemptId.make(`attempt-t4-account-${rateLimitType}`),
+            text: "Continue.",
+            attachments: [],
+          }),
+        );
+        const resetsAt =
+          Math.floor(DateTime.toEpochMillis(yield* DateTime.now) / 1000) + 3 * 86_400;
+        yield* Queue.offerAll(harness.sdkMessages, [
+          claudeSdkFrame({
+            type: "rate_limit_event",
+            rate_limit_info: { status: "rejected", rateLimitType, resetsAt },
+            uuid: "00000000-0000-4000-8000-000000000670",
+            session_id: WAKE_NATIVE_SESSION,
+          }),
+          makeResultFrame({
+            uuid: "00000000-0000-4000-8000-000000000671",
+            result: "You've hit your limit",
+            isError: true,
+            numTurns: 1,
+            terminalReason: "blocking_limit",
+          }),
+        ]);
+        const terminal = yield* Queue.take(harness.terminalReceipts);
+        assert.equal(terminal.status, "failed");
+        if (terminal.status !== "failed") return;
+        assert.equal(terminal.failure.class, "usage_limit");
+        const state = JSON.parse(NodeFS.readFileSync(NodePath.join(dir, "state.json"), "utf8"));
+        const other = markedIn === "exhaustedUntil" ? "fableExhaustedUntil" : "exhaustedUntil";
+        assert.deepEqual(Object.keys(state[markedIn]), ["1"]);
+        assert.equal(state[markedIn]["1"], resetsAt * 1000);
+        assert.deepEqual(state[other], {});
+      }).pipe(
+        Effect.scoped,
         Effect.provide(
           Layer.mergeAll(
             IdAllocator.layer,

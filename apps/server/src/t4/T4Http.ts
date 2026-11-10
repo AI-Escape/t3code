@@ -36,6 +36,7 @@ import * as Project from "../project/ProjectService.ts";
 import * as ThreadManagementService from "../orchestration-v2/ThreadManagementService.ts";
 import * as ScheduledTasks from "../scheduledTasks/ScheduledTaskService.ts";
 import * as SecretRequests from "../secrets/SecretRequests.ts";
+import { CLAUDE_INSTANCE_ID, everyClaudeAccountUsedUp } from "./claudeAccounts.ts";
 import * as T4Config from "./T4Config.ts";
 import * as T4Delivery from "./T4Delivery.ts";
 import { factsFor } from "./T4Facts.ts";
@@ -143,14 +144,25 @@ const body = <S extends Schema.Top>(schema: S) =>
   );
 
 /** `limited_threads()`: open threads stopped on a usage limit, release managers first, oldest stop first. */
-const limitedThreads = (world: T4Ledger.T4World, ledger: T4Ledger.T4LedgerShape) =>
+/**
+ * A Claude thread whose model every account is used up for while other models
+ * still run (Fable's own weekly limit, AI-78) would only be refused again - and
+ * as the probe it would stop the resumes behind it.
+ */
+const blockedForItsModel = (thread: Shell, nowMs: number) =>
+  thread.providerInstanceId === CLAUDE_INSTANCE_ID &&
+  everyClaudeAccountUsedUp(nowMs, process.env, thread.modelSelection.model) &&
+  !everyClaudeAccountUsedUp(nowMs, process.env, null);
+
+const limitedThreads = (world: T4Ledger.T4World, ledger: T4Ledger.T4LedgerShape, nowMs: number) =>
   world.threads
     .filter(
       (thread) =>
         thread.archivedAt === null &&
         !isSettled(thread) &&
         thread.status === "failed" &&
-        thread.lastErrorClass === "usage_limit",
+        thread.lastErrorClass === "usage_limit" &&
+        !blockedForItsModel(thread, nowMs),
     )
     .toSorted((left, right) => {
       const rm =
@@ -805,7 +817,7 @@ export const layer = Layer.mergeAll(
       const threads = yield* ThreadManagementService.ThreadManagementService;
       const delivery = yield* T4Delivery.T4Delivery;
       const world = yield* ledger.world();
-      const todo = limitedThreads(world, ledger);
+      const todo = limitedThreads(world, ledger, yield* Clock.currentTimeMillis);
       const listed = todo.map((thread) => ({
         threadId: thread.id,
         shortId: shortId(thread.id),

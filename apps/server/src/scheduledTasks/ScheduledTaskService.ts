@@ -1080,21 +1080,35 @@ export const layer = Layer.effect(
     // t4 fork: while every Claude account is used up, a run that would start a
     // Claude turn stays due and goes out once one frees, not as a refused turn.
     const heldTasks = new Set<string>();
-    const runsOnClaude = (task: ScheduledTask) =>
+    /** The Claude model a run would start a turn on, or null when it runs on another provider. */
+    const claudeModelOf = (task: ScheduledTask) =>
       task.threadId === null
-        ? Effect.succeed(task.modelSelection.instanceId === CLAUDE_INSTANCE_ID)
+        ? Effect.succeed(
+            task.modelSelection.instanceId === CLAUDE_INSTANCE_ID
+              ? task.modelSelection.model
+              : null,
+          )
         : threadManagement.getThreadShell(ThreadId.make(task.threadId)).pipe(
-            Effect.map((shell) => shell?.providerInstanceId === CLAUDE_INSTANCE_ID),
-            Effect.orElseSucceed(() => false),
+            Effect.map((shell) =>
+              shell?.providerInstanceId === CLAUDE_INSTANCE_ID ? shell.modelSelection.model : null,
+            ),
+            Effect.orElseSucceed(() => null),
           );
+    // t4 fork: a Claude run waits while every account is used up for its model
+    // (Fable's own weekly limit counts for Fable runs only).
     const heldForClaudeLimit = Effect.fn("ScheduledTaskService.heldForClaudeLimit")(function* (
       task: ScheduledTask,
-      claudeUsedUp: boolean,
+      nowMs: number,
     ) {
-      const held = claudeUsedUp && (yield* runsOnClaude(task));
+      // Fable is blocked whenever any model is: read the task's model only then.
+      const model = everyClaudeAccountUsedUp(nowMs, process.env, "fable")
+        ? yield* claudeModelOf(task)
+        : null;
+      const held = model !== null && everyClaudeAccountUsedUp(nowMs, process.env, model);
       if (held && !heldTasks.has(task.id)) {
         yield* Effect.logInfo("t4: holding a scheduled run until a Claude account frees up", {
           taskId: task.id,
+          model,
         });
       }
       if (held) heldTasks.add(task.id);
@@ -1132,14 +1146,13 @@ export const layer = Layer.effect(
       const due = tasks.flatMap((task) =>
         task.nextRunAt === null ? [] : [{ task, dueAt: DateTime.makeUnsafe(task.nextRunAt) }],
       );
-      const claudeUsedUp = due.length > 0 && everyClaudeAccountUsedUp(DateTime.toEpochMillis(now));
       yield* Effect.forEach(
         due,
         ({ task, dueAt }) =>
           Effect.gen(function* () {
             if (isMissedFixedTimeRun(task.schedule, dueAt, now))
               return yield* rescheduleMissedRun(task, now);
-            if (yield* heldForClaudeLimit(task, claudeUsedUp)) return;
+            if (yield* heldForClaudeLimit(task, nowMs)) return;
             yield* runTask(task, "scheduled");
           }).pipe(
             Effect.catch((cause) =>

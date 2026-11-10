@@ -1,8 +1,7 @@
 /**
- * t4 fork: accounts from `T4_CLAUDE_ACCOUNTS_FILE` (re-read on change) or `T4_CLAUDE_ACCOUNTS` go
- * first as `CLAUDE_CODE_OAUTH_TOKEN`; only the login changes, so threads keep their `~/.claude`
- * history. Used-up marks persist in `state.json` (re-read on change, so a restart skips them); an
- * account taken off the list counts as used up.
+ * t4 fork: listed accounts (`T4_CLAUDE_ACCOUNTS_FILE`/`T4_CLAUDE_ACCOUNTS`) go first as
+ * `CLAUDE_CODE_OAUTH_TOKEN`; used-up marks persist in `state.json`, an unlisted account counts as
+ * used up, and Fable's own weekly limit (AI-78) marks an account for Fable only.
  */
 // @effect-diagnostics-next-line nodeBuiltinImport:off -- token files and a small state file, read synchronously at process start.
 import * as NodeFS from "node:fs";
@@ -25,6 +24,13 @@ interface AccountEntry {
   /** The token file; none for the main login. */
   readonly file?: string;
 }
+
+/** Which used-up marks bind: every model's, or Fable's own weekly limit on top. */
+export type ClaudeLimitScope = "all" | "fable";
+/** Claude's rate-limit window for Fable's own weekly allowance. */
+export const FABLE_RATE_LIMIT_TYPE = "seven_day_overage_included";
+export const isFableModel = (model: string | null | undefined): boolean =>
+  typeof model === "string" && /fable/i.test(model);
 
 const keyOf = (file: string) => NodePath.basename(file).replace(/\.[^.]*$/, "");
 
@@ -92,7 +98,14 @@ const statePath = (env: NodeJS.ProcessEnv, files: ReadonlyArray<string>) =>
   env.T4_CLAUDE_ACCOUNTS_STATE?.trim() ||
   NodePath.join(NodePath.dirname(env.T4_CLAUDE_ACCOUNTS_FILE?.trim() || files[0]!), "state.json");
 
-let exhaustedUntil: Map<string, number> | null = null;
+interface LimitState {
+  /** Used up for every model (the 5-hour and weekly limits). */
+  readonly all: Map<string, number>;
+  /** Used up for Fable only (its own weekly limit). */
+  readonly fable: Map<string, number>;
+}
+
+let limitState: LimitState | null = null;
 /** The state file's mtime when it was last read or written here. */
 let loadedMtimeMs: number | null = null;
 
@@ -104,22 +117,31 @@ const fileMtimeMs = (file: string): number | null => {
   }
 };
 
-const loadState = (env: NodeJS.ProcessEnv, files: ReadonlyArray<string>) => {
+const readMarks = (value: unknown): Map<string, number> => {
+  const marks = new Map<string, number>();
+  if (typeof value !== "object" || value === null) return marks;
+  for (const [key, until] of Object.entries(value)) {
+    if (typeof until === "number") marks.set(key, until);
+  }
+  return marks;
+};
+
+const loadState = (env: NodeJS.ProcessEnv, files: ReadonlyArray<string>): LimitState => {
   const file = statePath(env, files);
   const mtimeMs = fileMtimeMs(file);
-  if (exhaustedUntil !== null && (mtimeMs === null || mtimeMs === loadedMtimeMs))
-    return exhaustedUntil;
-  exhaustedUntil = new Map();
+  if (limitState !== null && (mtimeMs === null || mtimeMs === loadedMtimeMs)) return limitState;
   loadedMtimeMs = mtimeMs;
   try {
     const saved = JSON.parse(NodeFS.readFileSync(file, "utf8")) as Record<string, unknown>;
-    for (const [key, until] of Object.entries(saved.exhaustedUntil ?? {})) {
-      if (typeof until === "number") exhaustedUntil.set(key, until);
-    }
+    limitState = {
+      all: readMarks(saved.exhaustedUntil),
+      fable: readMarks(saved.fableExhaustedUntil),
+    };
   } catch {
     // No state yet, or unreadable: every account starts available.
+    limitState = { all: new Map(), fable: new Map() };
   }
-  return exhaustedUntil;
+  return limitState;
 };
 
 const saveState = (env: NodeJS.ProcessEnv, files: ReadonlyArray<string>) => {
@@ -127,7 +149,14 @@ const saveState = (env: NodeJS.ProcessEnv, files: ReadonlyArray<string>) => {
     const file = statePath(env, files);
     NodeFS.writeFileSync(
       `${file}.tmp`,
-      JSON.stringify({ exhaustedUntil: Object.fromEntries(exhaustedUntil ?? []) }, null, 2),
+      JSON.stringify(
+        {
+          exhaustedUntil: Object.fromEntries(limitState?.all ?? []),
+          fableExhaustedUntil: Object.fromEntries(limitState?.fable ?? []),
+        },
+        null,
+        2,
+      ),
       { mode: 0o600 },
     );
     NodeFS.renameSync(`${file}.tmp`, file);
@@ -136,6 +165,10 @@ const saveState = (env: NodeJS.ProcessEnv, files: ReadonlyArray<string>) => {
     // Best effort: the in-memory state still steers this process.
   }
 };
+
+/** Until when `key` can't run `model`: its every-model mark, and Fable's own for a Fable model. */
+const blockedUntil = (state: LimitState, key: string, model: string | null | undefined) =>
+  Math.max(state.all.get(key) ?? 0, isFableModel(model) ? (state.fable.get(key) ?? 0) : 0);
 
 const readToken = (file: string): string | undefined => {
   try {
@@ -150,25 +183,27 @@ export const isClaudeAccountExhausted = (
   key: string,
   nowMs: number,
   env: NodeJS.ProcessEnv = process.env,
+  model?: string | null,
 ): boolean => {
   const files = accountFiles(env);
   if (files.length === 0) return false;
   // Taken off the list: its processes move to a listed account.
   if (!accountList(env).some((entry) => entry.key === key)) return true;
   if (key === MAIN_CLAUDE_ACCOUNT && !mainLoginAvailable(env)) return true;
-  return (loadState(env, files).get(key) ?? 0) > nowMs;
+  return blockedUntil(loadState(env, files), key, model) > nowMs;
 };
 
-/** The first account in order not used up (the main login included), else the main login. */
+/** The first account in order not used up for `model` (the main login included), else the main login. */
 export const pickClaudeAccount = (
   nowMs: number,
   env: NodeJS.ProcessEnv = process.env,
+  model?: string | null,
 ): ClaudeAccount => {
   const files = accountFiles(env);
   if (files.length === 0) return { key: MAIN_CLAUDE_ACCOUNT };
   const state = loadState(env, files);
   for (const { key, file } of accountList(env)) {
-    if ((state.get(key) ?? 0) > nowMs) continue;
+    if (blockedUntil(state, key, model) > nowMs) continue;
     if (file === undefined) {
       if (mainLoginAvailable(env)) return { key: MAIN_CLAUDE_ACCOUNT };
       continue;
@@ -209,28 +244,33 @@ export const claudeSideProcessEnvironment = (
 };
 
 /**
- * Records that `key` hit its usage limit until `resetAtMs` (an hour when
- * Claude gave no reset). Returns when the thread can go on: `nowMs` when
- * another account is free, else the earliest time any account frees up -
- * or undefined without t4 accounts configured.
+ * Marks `key` used up until `resetAtMs` (an hour if unknown), for every model or, with scope
+ * "fable", for Fable only. Returns when the thread can go on: now when another account is free
+ * for it, else the earliest reset; undefined without t4 accounts.
  */
 export const markClaudeAccountExhausted = (
   key: string,
   resetAtMs: number | null,
   nowMs: number,
   env: NodeJS.ProcessEnv = process.env,
+  scope: ClaudeLimitScope = "all",
 ): number | undefined => {
   const files = accountFiles(env);
   if (files.length === 0) return undefined;
   const state = loadState(env, files);
-  state.set(key, resetAtMs !== null && resetAtMs > nowMs ? resetAtMs : nowMs + UNKNOWN_RESET_MS);
+  state[scope].set(
+    key,
+    resetAtMs !== null && resetAtMs > nowMs ? resetAtMs : nowMs + UNKNOWN_RESET_MS,
+  );
   saveState(env, files);
+  const model = scope === "fable" ? "fable" : undefined;
   const keys = accountList(env)
     .map((entry) => entry.key)
     .filter((other) => other !== MAIN_CLAUDE_ACCOUNT || mainLoginAvailable(env));
   if (keys.length === 0) return nowMs + UNKNOWN_RESET_MS;
-  if (keys.some((other) => (state.get(other) ?? 0) <= nowMs)) return nowMs;
-  return Math.min(...keys.map((other) => state.get(other)!));
+  const until = keys.map((other) => blockedUntil(state, other, model));
+  if (until.some((at) => at <= nowMs)) return nowMs;
+  return Math.min(...until);
 };
 
 /**
@@ -243,6 +283,7 @@ export const anotherClaudeAccountFree = (
   current: string,
   nowMs: number,
   env: NodeJS.ProcessEnv = process.env,
+  model?: string | null,
 ): boolean => {
   const files = accountFiles(env);
   if (files.length === 0) return false;
@@ -251,31 +292,34 @@ export const anotherClaudeAccountFree = (
     ({ key }) =>
       key !== current &&
       (key !== MAIN_CLAUDE_ACCOUNT || mainLoginAvailable(env)) &&
-      (state.get(key) ?? 0) <= nowMs,
+      blockedUntil(state, key, model) <= nowMs,
   );
 };
 
 /**
- * Whether every configured account (the main login when it exists) is used up;
- * false without t4 accounts. Wakes wait then instead of starting a refused turn
- * (ai-escape's 3-hourly AI-40 wake hit the weekly limit 10 times, 2026-11-09).
+ * Whether every configured account (the main login when it exists) is used up
+ * for `model`; false without t4 accounts. Wakes wait then instead of starting a
+ * refused turn (ai-escape's 3-hourly AI-40 wake hit the weekly limit 10 times,
+ * 2026-11-09).
  */
 export const everyClaudeAccountUsedUp = (
   nowMs: number,
   env: NodeJS.ProcessEnv = process.env,
+  model?: string | null,
 ): boolean => {
   const files = accountFiles(env);
   if (files.length === 0) return false;
   const state = loadState(env, files);
   return accountList(env).every(
     ({ key }) =>
-      (key === MAIN_CLAUDE_ACCOUNT && !mainLoginAvailable(env)) || (state.get(key) ?? 0) > nowMs,
+      (key === MAIN_CLAUDE_ACCOUNT && !mainLoginAvailable(env)) ||
+      blockedUntil(state, key, model) > nowMs,
   );
 };
 
 /** Test hook: forget the loaded state. */
 export const resetClaudeAccountState = () => {
-  exhaustedUntil = null;
+  limitState = null;
   loadedMtimeMs = null;
   listCache = null;
 };

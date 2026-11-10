@@ -157,6 +157,7 @@ import { safetyCheckDeclinedNote, t4DeclineSafetyChecks } from "../../t4/decline
 // t4 fork: claudeAccounts.
 import {
   anotherClaudeAccountFree,
+  FABLE_RATE_LIMIT_TYPE,
   claudeAccountEnvironment,
   isClaudeAccountExhausted,
   markClaudeAccountExhausted,
@@ -4049,7 +4050,7 @@ const CLAUDE_USAGE_LIMIT_WINDOWS = {
   seven_day: "7-day",
   seven_day_opus: "7-day Opus",
   seven_day_sonnet: "7-day Sonnet",
-  seven_day_overage_included: "7-day model",
+  seven_day_overage_included: "Fable",
   overage: "overage",
 } satisfies Record<NonNullable<SDKRateLimitInfo["rateLimitType"]>, string>;
 
@@ -8494,8 +8495,13 @@ export const makeClaudeAdapterV2 = Effect.fn("makeClaudeAdapterV2")(function* (
                 const t4Live = yield* Ref.get(queryContext);
                 const notice =
                   t4Live !== null &&
-                  anotherClaudeAccountFree(t4Live.t4Account, DateTime.toEpochMillis(now))
-                    ? "Claude usage limit reached on this account. The thread continues on another Claude account in about a minute."
+                  anotherClaudeAccountFree(
+                    t4Live.t4Account,
+                    DateTime.toEpochMillis(now),
+                    process.env,
+                    limitType === FABLE_RATE_LIMIT_TYPE ? t4Live.selection.apiModelId : null,
+                  )
+                    ? `Claude ${limitType === FABLE_RATE_LIMIT_TYPE ? "Fable " : "usage "}limit reached on this account. The thread continues on another Claude account in about a minute.`
                     : describeClaudeUsageLimit(rateLimitInfo, DateTime.toEpochMillis(now), names);
                 yield* emitProviderEvent({
                   type: "turn_item.updated",
@@ -9647,22 +9653,31 @@ export const makeClaudeAdapterV2 = Effect.fn("makeClaudeAdapterV2")(function* (
               resetTimes.length > 0 && resetTimes.every((time) => time !== null)
                 ? resetTimes.reduce((latest, time) => (time! > latest ? time! : latest), "")
                 : null;
-            // t4 fork: the account is used up until its reset; the thread resumes
-            // when another account is free, at least a minute past the turn's end:
-            // T3's limit recovery ignores a reset at or before the run's recorded
-            // completion, which lands after this completedAt (one second was too little).
+            // t4 fork: the account is used up until its reset (Fable's own weekly limit alone:
+            // for Fable only); resume at least a minute past the turn's end, since T3's limit
+            // recovery ignores a reset at or before the run's recorded completion.
+            const t4LimitTypes = new Set(context.rejectedRateLimitTypes);
+            if (assistantLimit?.type != null) t4LimitTypes.add(assistantLimit.type);
+            const t4LimitScope =
+              t4LimitTypes.size > 0 &&
+              [...t4LimitTypes].every((type) => type === FABLE_RATE_LIMIT_TYPE)
+                ? ("fable" as const)
+                : ("all" as const);
             const t4ResumeAtMs =
               usageLimited && !interrupted
                 ? markClaudeAccountExhausted(
                     liveQuery.t4Account,
                     claudeResetAt === null ? null : Date.parse(claudeResetAt),
                     DateTime.toEpochMillis(completedAt),
+                    process.env,
+                    t4LimitScope,
                   )
                 : undefined;
             if (t4ResumeAtMs !== undefined) {
               yield* Effect.logInfo("t4.claude-account-limit", {
                 threadId: context.input.threadId,
                 account: liveQuery.t4Account,
+                scope: t4LimitScope,
                 resetAt: claudeResetAt,
               });
             }
@@ -10526,7 +10541,12 @@ export const makeClaudeAdapterV2 = Effect.fn("makeClaudeAdapterV2")(function* (
             existing.queryPolicyKey === queryPolicyKey &&
             !existing.stopping &&
             existing.selection.queryIdentity === compiledSelection.queryIdentity &&
-            !isClaudeAccountExhausted(existing.t4Account, t4NowMs)
+            !isClaudeAccountExhausted(
+              existing.t4Account,
+              t4NowMs,
+              process.env,
+              compiledSelection.apiModelId,
+            )
           ) {
             // A denied ExitPlanMode leaves Claude in plan mode. Restore only from plan:
             // Auto/default may reflect a policy restriction that forbids restoring bypass.
@@ -10556,7 +10576,12 @@ export const makeClaudeAdapterV2 = Effect.fn("makeClaudeAdapterV2")(function* (
             (existing.nativeThreadId === nativeThreadId ||
               existing.lastTurn?.input.threadId === turnInput.threadId) &&
             !existing.stopping &&
-            isClaudeAccountExhausted(existing.t4Account, t4NowMs)
+            isClaudeAccountExhausted(
+              existing.t4Account,
+              t4NowMs,
+              process.env,
+              compiledSelection.apiModelId,
+            )
           ) {
             existing.stopping = true;
           }
@@ -10606,7 +10631,7 @@ export const makeClaudeAdapterV2 = Effect.fn("makeClaudeAdapterV2")(function* (
             turnInput.runtimePolicy.cwd,
             launchArgSettings,
           );
-          const t4Account = pickClaudeAccount(t4NowMs);
+          const t4Account = pickClaudeAccount(t4NowMs, process.env, compiledSelection.apiModelId);
           if (t4Account.token !== undefined) {
             yield* Effect.logInfo("t4.claude-account", {
               threadId: turnInput.threadId,

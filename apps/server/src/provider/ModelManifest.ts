@@ -20,6 +20,7 @@ import * as ServerSettings from "../serverSettings.ts";
 import { hasValidClaudeManifestAdapters } from "./ClaudeModelManifest.ts";
 import bundledManifestJson from "./model-manifest.json" with { type: "json" };
 import { ProviderCompatibilityPolicy } from "./providerCompatibility.ts";
+import { applyT4FableEffortDefault } from "../t4/fableEffortDefault.ts";
 import * as ModelCatalog from "@t3tools/provider-core/server/ModelCatalog";
 
 const MODEL_MANIFEST_URL =
@@ -101,8 +102,10 @@ export type ModelManifestData = typeof ModelManifestSchema.Type;
 
 const decodeManifest = Schema.decodeUnknownEffect(ModelManifestSchema);
 
-export const BUNDLED_MODEL_MANIFEST: ModelManifestData =
-  Schema.decodeUnknownSync(ModelManifestSchema)(bundledManifestJson);
+// t4 fork: every manifest T3 loads gets t4's Fable effort default (t4/fableEffortDefault.ts).
+export const BUNDLED_MODEL_MANIFEST: ModelManifestData = applyT4FableEffortDefault(
+  Schema.decodeUnknownSync(ModelManifestSchema)(bundledManifestJson),
+);
 
 function manifestUpdatedAtMs(manifest: ModelManifestData): number {
   if (manifest.updatedAt === undefined) return 0;
@@ -213,7 +216,7 @@ export const make = Effect.gen(function* () {
       if (manifestUpdatedAtMs(BUNDLED_MODEL_MANIFEST) > manifestUpdatedAtMs(fromDisk.manifest)) {
         return;
       }
-      manifest = fromDisk.manifest;
+      manifest = applyT4FableEffortDefault(fromDisk.manifest);
       fetchedAtMs = fromDisk.fetchedAtMs;
     }),
   );
@@ -245,7 +248,7 @@ export const make = Effect.gen(function* () {
       return manifest;
     }
 
-    manifest = fetched;
+    manifest = applyT4FableEffortDefault(fetched);
     fetchedAtMs = now;
     yield* encodeManifestCache({ fetchedAtMs: now, manifest: fetched }).pipe(
       Effect.flatMap((contents) => writeFileStringAtomically({ filePath: cachePath, contents })),
