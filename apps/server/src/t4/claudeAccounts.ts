@@ -138,7 +138,10 @@ const loadState = (env: NodeJS.ProcessEnv, files: ReadonlyArray<string>): LimitS
   loadedMtimeMs = mtimeMs;
   try {
     const saved = JSON.parse(NodeFS.readFileSync(file, "utf8")) as Record<string, unknown>;
-    limitState = { all: readMarks(saved.exhaustedUntil), fable: readMarks(saved.fableExhaustedUntil) };
+    limitState = {
+      all: readMarks(saved.exhaustedUntil),
+      fable: readMarks(saved.fableExhaustedUntil),
+    };
   } catch {
     // No state yet, or unreadable: every account starts available.
     limitState = { all: new Map(), fable: new Map() };

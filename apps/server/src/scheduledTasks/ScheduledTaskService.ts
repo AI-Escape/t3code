@@ -1084,7 +1084,9 @@ export const layer = Layer.effect(
     const claudeModelOf = (task: ScheduledTask) =>
       task.threadId === null
         ? Effect.succeed(
-            task.modelSelection.instanceId === CLAUDE_INSTANCE_ID ? task.modelSelection.model : null,
+            task.modelSelection.instanceId === CLAUDE_INSTANCE_ID
+              ? task.modelSelection.model
+              : null,
           )
         : threadManagement.getThreadShell(ThreadId.make(task.threadId)).pipe(
             Effect.map((shell) =>

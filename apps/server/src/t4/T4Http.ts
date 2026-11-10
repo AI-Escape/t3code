@@ -154,11 +154,7 @@ const blockedForItsModel = (thread: Shell, nowMs: number) =>
   everyClaudeAccountUsedUp(nowMs, process.env, thread.modelSelection.model) &&
   !everyClaudeAccountUsedUp(nowMs, process.env, null);
 
-const limitedThreads = (
-  world: T4Ledger.T4World,
-  ledger: T4Ledger.T4LedgerShape,
-  nowMs: number,
-) =>
+const limitedThreads = (world: T4Ledger.T4World, ledger: T4Ledger.T4LedgerShape, nowMs: number) =>
   world.threads
     .filter(
       (thread) =>
