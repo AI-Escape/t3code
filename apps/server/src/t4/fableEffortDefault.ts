@@ -1,8 +1,6 @@
 /**
- * t4 fork: Fable's effort defaults to high (the user's word, AI-78). Upstream's model manifest
- * marks medium, and T3 replaces its bundled manifest with upstream's whenever that is newer, so the
- * default is applied to every manifest T3 loads - bundled, cached or fetched. It drives T3's
- * picker and the effort of any Fable turn sent without one.
+ * t4 fork: Fable's effort defaults to high (AI-78). Upstream's manifest says medium and replaces
+ * the bundled one when newer, so this applies to every manifest T3 loads (bundled, cached, fetched).
  */
 import type { ModelManifestData } from "../provider/ModelManifest.ts";
 import { isFableModel } from "./claudeAccounts.ts";

@@ -9653,11 +9653,9 @@ export const makeClaudeAdapterV2 = Effect.fn("makeClaudeAdapterV2")(function* (
               resetTimes.length > 0 && resetTimes.every((time) => time !== null)
                 ? resetTimes.reduce((latest, time) => (time! > latest ? time! : latest), "")
                 : null;
-            // t4 fork: the account is used up until its reset; the thread resumes
-            // when another account is free, at least a minute past the turn's end:
-            // T3's limit recovery ignores a reset at or before the run's recorded
-            // completion, which lands after this completedAt (one second was too little).
-            // A refusal on Fable's own weekly limit alone marks the account for Fable only.
+            // t4 fork: the account is used up until its reset (Fable's own weekly limit alone:
+            // for Fable only); resume at least a minute past the turn's end, since T3's limit
+            // recovery ignores a reset at or before the run's recorded completion.
             const t4LimitTypes = new Set(context.rejectedRateLimitTypes);
             if (assistantLimit?.type != null) t4LimitTypes.add(assistantLimit.type);
             const t4LimitScope =

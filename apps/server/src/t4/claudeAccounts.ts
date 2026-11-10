@@ -1,12 +1,7 @@
 /**
- * t4 fork: accounts from `T4_CLAUDE_ACCOUNTS_FILE` (re-read on change) or `T4_CLAUDE_ACCOUNTS` go
- * first as `CLAUDE_CODE_OAUTH_TOKEN`; only the login changes, so threads keep their `~/.claude`
- * history. Used-up marks persist in `state.json` (re-read on change, so a restart skips them); an
- * account taken off the list counts as used up.
- *
- * Fable has a weekly limit of its own (Claude's `seven_day_overage_included` window, "Fable limit" in
- * Claude Code; AI-78): a refusal on it marks the account used up for Fable only
- * (`fableExhaustedUntil`), so Fable threads move to the next account and other models stay on it.
+ * t4 fork: listed accounts (`T4_CLAUDE_ACCOUNTS_FILE`/`T4_CLAUDE_ACCOUNTS`) go first as
+ * `CLAUDE_CODE_OAUTH_TOKEN`; used-up marks persist in `state.json`, an unlisted account counts as
+ * used up, and Fable's own weekly limit (AI-78) marks an account for Fable only.
  */
 // @effect-diagnostics-next-line nodeBuiltinImport:off -- token files and a small state file, read synchronously at process start.
 import * as NodeFS from "node:fs";
@@ -249,11 +244,9 @@ export const claudeSideProcessEnvironment = (
 };
 
 /**
- * Records that `key` hit its usage limit until `resetAtMs` (an hour when
- * Claude gave no reset) - for every model, or with `scope` "fable" its Fable
- * limit only. Returns when the thread can go on: `nowMs` when another account
- * is free for it, else the earliest time any account frees up - or undefined
- * without t4 accounts configured.
+ * Marks `key` used up until `resetAtMs` (an hour if unknown), for every model or, with scope
+ * "fable", for Fable only. Returns when the thread can go on: now when another account is free
+ * for it, else the earliest reset; undefined without t4 accounts.
  */
 export const markClaudeAccountExhausted = (
   key: string,
