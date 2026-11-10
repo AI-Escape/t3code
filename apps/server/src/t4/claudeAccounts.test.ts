@@ -6,6 +6,7 @@ import * as NodePath from "node:path";
 import { afterEach, describe, expect, it } from "vite-plus/test";
 
 import {
+  anotherClaudeAccountFree,
   claudeAccountEnvironment,
   claudeSideProcessEnvironment,
   everyClaudeAccountUsedUp,
@@ -157,6 +158,35 @@ describe("t4 claudeAccounts", () => {
     expect(claudeSideProcessEnvironment({ A: "1" }, 1_000, noLogin)).toEqual({ A: "1" });
     // Without t4 accounts nothing changes.
     expect(claudeSideProcessEnvironment({ A: "1" }, 1_000, { HOME: home })).toEqual({ A: "1" });
+  });
+
+  it("keeps Fable's own limit apart: only Fable moves on, and the dashboard's write keeps it", () => {
+    const { dir, env } = setup();
+    const home = NodeFS.mkdtempSync(NodePath.join(NodeOS.tmpdir(), "t4-home-"));
+    const noLogin = { ...env, HOME: home } as NodeJS.ProcessEnv;
+    const fable = "claude-fable-5-2";
+    // Account 1's Fable limit: Fable goes on now on account 2, Opus stays on 1.
+    expect(markClaudeAccountExhausted("1", 50_000, 1_000, noLogin, "fable")).toBe(1_000);
+    expect(pickClaudeAccount(1_000, noLogin, fable).key).toBe("2");
+    expect(pickClaudeAccount(1_000, noLogin, "claude-opus-5-5").key).toBe("1");
+    expect(pickClaudeAccount(1_000, noLogin).key).toBe("1");
+    expect(isClaudeAccountExhausted("1", 1_000, noLogin, fable)).toBe(true);
+    expect(isClaudeAccountExhausted("1", 1_000, noLogin, "claude-opus-5-5")).toBe(false);
+    expect(anotherClaudeAccountFree("1", 1_000, noLogin, fable)).toBe(true);
+    // Both out of Fable: Fable waits for the first Fable reset, Opus still runs.
+    expect(markClaudeAccountExhausted("2", 80_000, 2_000, noLogin, "fable")).toBe(50_000);
+    expect(everyClaudeAccountUsedUp(2_000, noLogin, fable)).toBe(true);
+    expect(everyClaudeAccountUsedUp(2_000, noLogin, "claude-opus-5-5")).toBe(false);
+    expect(anotherClaudeAccountFree("1", 2_000, noLogin, fable)).toBe(false);
+    // A weekly limit binds Fable too: account 2's ends after its Fable one.
+    markClaudeAccountExhausted("2", 90_000, 3_000, noLogin);
+    expect(pickClaudeAccount(60_000, noLogin, fable).key).toBe("1");
+    expect(pickClaudeAccount(85_000, noLogin, fable).key).toBe("1");
+    const saved = JSON.parse(NodeFS.readFileSync(NodePath.join(dir, "state.json"), "utf8"));
+    expect(saved).toEqual({
+      exhaustedUntil: { "2": 90_000 },
+      fableExhaustedUntil: { "1": 50_000, "2": 80_000 },
+    });
   });
 
   it("skips an account whose token file is missing", () => {
