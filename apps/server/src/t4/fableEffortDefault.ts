@@ -8,7 +8,7 @@ import type { ModelManifestData } from "../provider/ModelManifest.ts";
 import { isFableModel } from "./claudeAccounts.ts";
 
 const CLAUDE_PROVIDER = "claudeAgent";
-export const T4_FABLE_DEFAULT_EFFORT = "high";
+const T4_FABLE_DEFAULT_EFFORT = "high";
 
 type Profile = ModelManifestData["providers"] extends infer P
   ? P extends Readonly<Record<string, { readonly profiles: Readonly<Record<string, infer R>> }>>
