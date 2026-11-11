@@ -72,6 +72,11 @@ const encodeCommitWatches = Schema.encodeEffect(CommitWatches);
 const COMMIT_META_KEY = "workflow-commit-watches";
 /** With nothing running for this long after the last run ended, the chain is done. */
 const COMMIT_QUIET_MS = 20 * 60_000;
+/**
+ * `gh run list --commit` matches only a full SHA: a watch on a short one saw no
+ * runs, ended quiet and woke nobody (usa-rs USA-1948 waited 32 h, 2026-11-09).
+ */
+const FULL_SHA = /^[0-9a-f]{40}$/i;
 
 const RunListItem = Schema.Struct({
   databaseId: Schema.Number,
@@ -151,7 +156,15 @@ export interface T4RunWatchShape {
     readonly cwd: string | null;
     readonly note: string | null;
   }) => Effect.Effect<
-    ReadonlyArray<{ readonly runId: string; readonly name: string; readonly status: string }>,
+    {
+      /** The full SHA watched (a short one is resolved on GitHub). */
+      readonly commit: string;
+      readonly runs: ReadonlyArray<{
+        readonly runId: string;
+        readonly name: string;
+        readonly status: string;
+      }>;
+    },
     T4RunWatchError
   >;
   /** Posts finished runs into their threads; drops stale watches. */
@@ -279,8 +292,38 @@ const make = Effect.gen(function* () {
     );
   });
 
+  /** The full SHA for a short one (or a ref), from GitHub. */
+  const fullSha = Effect.fn("t4.T4RunWatch.fullSha")(function* (
+    commit: string,
+    repository: string | null,
+    cwd: string | null,
+  ) {
+    if (FULL_SHA.test(commit)) return commit.toLowerCase();
+    const result = yield* processes
+      .run({
+        command: "gh",
+        args: ["api", `repos/${repository ?? "{owner}/{repo}"}/commits/${commit}`, "--jq", ".sha"],
+        ...(cwd === null ? {} : { cwd }),
+        timeout: "30 seconds",
+        timeoutBehavior: "timedOutResult",
+      })
+      .pipe(Effect.mapError((cause) => new T4RunWatchError({ message: String(cause) })));
+    const sha = result.stdout.trim();
+    if (result.timedOut || result.code !== 0 || !FULL_SHA.test(sha)) {
+      const why = (result.stderr || result.stdout).trim().slice(0, 300);
+      return yield* new T4RunWatchError({
+        message: `GitHub found no commit ${commit}${why ? ` (${why})` : ""}; pass the full 40-character SHA`,
+      });
+    }
+    return sha.toLowerCase();
+  });
+
   const watchCommit: T4RunWatchShape["watchCommit"] = Effect.fn("t4.T4RunWatch.watchCommit")(
-    function* (input: Parameters<T4RunWatchShape["watchCommit"]>[0]) {
+    function* (given: Parameters<T4RunWatchShape["watchCommit"]>[0]) {
+      const input = {
+        ...given,
+        commit: yield* fullSha(given.commit, given.repository, given.cwd),
+      };
       const runs = yield* runsForCommit(input.commit, input.repository, input.cwd);
       const now = yield* Clock.currentTimeMillis;
       yield* lock.withPermits(1)(
@@ -298,11 +341,14 @@ const make = Effect.gen(function* () {
           ]);
         }),
       );
-      return runs.map((run) => ({
-        runId: String(run.databaseId),
-        name: run.displayTitle || run.name || run.workflowName || "run",
-        status: run.status === "completed" ? run.conclusion || "completed" : run.status || "",
-      }));
+      return {
+        commit: input.commit,
+        runs: runs.map((run) => ({
+          runId: String(run.databaseId),
+          name: run.displayTitle || run.name || run.workflowName || "run",
+          status: run.status === "completed" ? run.conclusion || "completed" : run.status || "",
+        })),
+      };
     },
   );
 
@@ -316,6 +362,16 @@ const make = Effect.gen(function* () {
         Effect.orElseSucceed(() => null),
       );
       if (runs === null) {
+        // An unreadable watch (its worktree gone, the token refused) still
+        // ends at six hours; usa-rs kept six for a week, each running gh every sweep.
+        if (now - w.since > MAX_AGE_MS) {
+          yield* post(
+            w.threadId,
+            `The watch on every run for commit ${w.commit.slice(0, 10)} ended after six hours: GitHub's run list for it could not be read. Check it with \`ci runs\` and watch again if it should still be followed.`,
+            { skipSettled: true },
+          );
+          continue;
+        }
         next.push(w);
         continue;
       }
@@ -370,6 +426,18 @@ const make = Effect.gen(function* () {
         quietRuns = 0;
       }
       const quiet = running.length === 0 && now - lastActivity > COMMIT_QUIET_MS;
+      if (quiet && runs.length === 0) {
+        yield* post(
+          w.threadId,
+          [
+            `No workflow run started for commit ${w.commit.slice(0, 10)} within 20 minutes, so the watch on it ended.`,
+            "Check the commit is the one CI runs on (a PR's checks run on its head commit; `ci` shows them) and watch again, or use watch_pull_request for a PR.",
+            w.note ? `Your note: ${w.note}` : null,
+          ]
+            .filter((line) => line !== null)
+            .join("\n"),
+        );
+      }
       if (quiet || expired) continue;
       next.push({
         ...w,
@@ -428,10 +496,15 @@ const make = Effect.gen(function* () {
     return { run, watching: true };
   });
 
-  const post = (threadId: string, text: string) =>
+  const post = (threadId: string, text: string, options?: { readonly skipSettled?: boolean }) =>
     threads.getThreadShell(ThreadId.make(threadId)).pipe(
       Effect.flatMap((target) =>
-        target === null || target.deletedAt !== null || target.archivedAt !== null
+        target === null ||
+        target.deletedAt !== null ||
+        target.archivedAt !== null ||
+        // A message reopens a settled thread; a stale watch's note isn't worth that.
+        (options?.skipSettled === true &&
+          (target.settledOverride === "settled" || target.settledAt != null))
           ? Effect.void
           : delivery
               .deliver({ target, text, force: true, createdBy: "system", creationSource: "server" })
