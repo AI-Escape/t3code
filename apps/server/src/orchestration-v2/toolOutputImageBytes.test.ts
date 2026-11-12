@@ -119,6 +119,12 @@ describe("stripUnservedToolOutputImageBytes", () => {
       { mimeType: "image/png", data: PNG_BASE64 },
       { mimeType: "image/jpeg", data: PADDED_BASE64 },
     ]);
+    // t4 fork: a Read of an image file previews from its path, so the copy goes.
+    const read = { ...item, viewedImagePath: "/home/max/artifacts/shot.png" };
+    expect(toolOutputImages(outputOf(stripUnservedToolOutputImageBytes(read)))).toEqual([
+      { mimeType: "image/png" },
+      { mimeType: "image/jpeg" },
+    ]);
   });
 
   it("strips only the images past the last one an asset can serve", () => {

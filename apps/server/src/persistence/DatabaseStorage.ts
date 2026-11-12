@@ -16,6 +16,8 @@ import { resolveHostCliCommand } from "../cli/invocation.ts";
 import * as ServerConfig from "../config.ts";
 import * as ProjectionMaintenance from "../orchestration-v2/ProjectionMaintenance.ts";
 import { forkParked } from "../serverActivation.ts";
+// t4 fork: stripViewedToolImageCopies.
+import { stripViewedToolImageCopies } from "../t4/toolImageDedupe.ts";
 
 // Bound each reclaim pass to one minute of churn.
 const RECLAIM_PAGES_PER_PASS = 1024;
@@ -98,6 +100,10 @@ const make = Effect.gen(function* () {
   // Even a pass that deletes nothing scans the event store. Persist completion
   // so restarting does not trigger another scan before the six-hour interval.
   const compactedAtPath = path.join(path.dirname(config.dbPath), "compacted-at");
+  const imageCopiesStrippedPath = path.join(
+    path.dirname(config.dbPath),
+    "t4-image-copies-stripped",
+  );
   const compact = Effect.gen(function* () {
     let sliceStarted = yield* Clock.monotonicTimeNanos;
     const betweenPages = Effect.gen(function* () {
@@ -112,6 +118,14 @@ const make = Effect.gen(function* () {
     yield* fs.writeFileString(compactedAtPath, String(completedAt)).pipe(Effect.ignore);
     if (result.deletedEventCount > 0 || result.deletedReceiptCount > 0) {
       yield* Effect.logInfo("Compacted orchestration history", result);
+    }
+    // t4 fork: one pass strips the Read image copies stored before ingest stopped keeping them.
+    if (!(yield* fs.exists(imageCopiesStrippedPath))) {
+      const images = yield* stripViewedToolImageCopies(betweenPages);
+      yield* fs
+        .writeFileString(imageCopiesStrippedPath, String(images.stripped))
+        .pipe(Effect.ignore);
+      if (images.stripped > 0) yield* Effect.logInfo("Stripped stored image copies", images);
     }
   }).pipe(
     Effect.catch((cause) =>
