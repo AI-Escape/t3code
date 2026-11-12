@@ -13,6 +13,8 @@ import * as SqlClient from "effect/sql/SqlClient";
 import * as DatabaseMaintenance from "./DatabaseMaintenance.ts";
 import * as Sqlite from "./Sqlite.ts";
 
+const IMAGE = Buffer.alloc(3_000, 7).toString("base64");
+
 it.layer(DatabaseMaintenance.layer.pipe(Layer.provideMerge(NodeServices.layer)))(
   "DatabaseMaintenance",
   (it) => {
@@ -133,6 +135,30 @@ it.layer(DatabaseMaintenance.layer.pipe(Layer.provideMerge(NodeServices.layer)))
             INSERT INTO orchestration_v2_message_search (orchestration_v2_message_search)
             VALUES ('delete-all')
           `;
+          // t4 fork: a Read row's image copy goes; a screenshot tool's served image stays.
+          yield* sql`
+            INSERT INTO orchestration_v2_projection_turn_items (
+              turn_item_id, thread_id, ordinal, type, status, updated_at, payload_json
+            ) VALUES
+              ('read-1', 'thread-1', 1, 'dynamic_tool', 'completed', '2026-09-01', ${JSON.stringify(
+                {
+                  type: "dynamic_tool",
+                  viewedImagePath: "/home/max/artifacts/shot.png",
+                  output: [
+                    {
+                      type: "image",
+                      source: { type: "base64", media_type: "image/png", data: IMAGE },
+                    },
+                  ],
+                },
+              )}),
+              ('shot-1', 'thread-1', 2, 'dynamic_tool', 'completed', '2026-09-01', ${JSON.stringify(
+                {
+                  type: "dynamic_tool",
+                  output: [{ type: "image", data: IMAGE, mimeType: "image/png" }],
+                },
+              )})
+          `;
           yield* sql`PRAGMA wal_checkpoint(TRUNCATE)`;
           yield* sql`INSERT INTO orchestration_v2_legacy_imports (
             thread_id, source_updated_at, shell_imported_at, transcript_imported_at, imported_message_count
@@ -183,6 +209,17 @@ it.layer(DatabaseMaintenance.layer.pipe(Layer.provideMerge(NodeServices.layer)))
               WHERE orchestration_v2_message_search MATCH '"needle"'
             `,
             [{ messageId: "message-1" }],
+          );
+          const items = yield* sql<{ readonly id: string; readonly payload: string }>`
+            SELECT turn_item_id AS id, payload_json AS payload
+            FROM orchestration_v2_projection_turn_items ORDER BY ordinal
+          `;
+          assert.deepEqual(
+            items.map((item) => [item.id, item.payload.includes(IMAGE)]),
+            [
+              ["read-1", false],
+              ["shot-1", true],
+            ],
           );
         }).pipe(Effect.provide(NodeSqliteClient.layer({ filename: dbPath, readonly: true })));
       }).pipe(Effect.scoped),

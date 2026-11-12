@@ -109,6 +109,8 @@ export function stripUnservedToolOutputImageBytes(
   if (item.type !== "dynamic_tool" || typeof item.output !== "object" || item.output === null) {
     return item;
   }
-  const output = strip(item.output, undefined, { output: item.output, served: undefined }, 0);
+  // t4 fork: a Read of an image file previews from viewedImagePath, so its copy is not served.
+  const served = item.viewedImagePath === undefined ? undefined : [];
+  const output = strip(item.output, undefined, { output: item.output, served }, 0);
   return output === item.output ? item : { ...item, output };
 }

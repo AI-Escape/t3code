@@ -11,6 +11,8 @@ import { isSqlError } from "effect/sql/SqlError";
 
 import * as ProjectionMaintenance from "../orchestration-v2/ProjectionMaintenance.ts";
 import { rebuildMessageSearch } from "../orchestration-v2/messageSearchIndex.ts";
+// t4 fork: stripViewedToolImageCopies.
+import { stripViewedToolImageCopies } from "../t4/toolImageDedupe.ts";
 
 export class DatabaseMissingError extends Schema.TaggedError<DatabaseMissingError>()(
   "DatabaseMissingError",
@@ -165,6 +167,8 @@ const make = Effect.gen(function* () {
         yield* lockExclusively(databasePath);
         const maintenance = yield* ProjectionMaintenance.ProjectionMaintenanceV2;
         const summary = yield* maintenance.pruneEventStore();
+        // t4 fork: stripViewedToolImageCopies, so the VACUUM below returns their space.
+        yield* stripViewedToolImageCopies();
         // VACUUM is required to enable incremental auto_vacuum on existing databases.
         yield* sql`PRAGMA auto_vacuum = INCREMENTAL`;
         yield* sql`VACUUM`;
