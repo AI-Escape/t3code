@@ -8,6 +8,7 @@ import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
 import { McpServer } from "effect/ai";
 
+import { AssetSigner } from "../assets/AssetSigner.ts";
 import { ServerSecretStore } from "../auth/ServerSecretStore.ts";
 import { ServerConfig } from "../config.ts";
 import { DeviceService } from "../device/DeviceService.ts";
@@ -54,6 +55,7 @@ import budget from "./agentContextBudget.json" with { type: "json" };
 
 // Registration only stores tool definitions, so the handlers' services are never called.
 const toolHandlerServices = Layer.mergeAll(
+  Layer.mock(AssetSigner)({}),
   Layer.mock(DeviceService)({}),
   Layer.mock(DocumentText)({}),
   Layer.mock(GitVcsDriver)({}),
@@ -123,6 +125,26 @@ const codexAdditionalContext = () =>
     .map((entry) => entry.value)
     .join("");
 
+const layerAdvertisedTools = McpHttpServer.layerTools.pipe(
+  Layer.provideMerge(McpHttpServer.layerInProcessMcpServer),
+  Layer.provide(toolHandlerServices),
+);
+
+// Claude Code loads these tools up front instead of behind ToolSearch, outside this budget.
+// t4 fork: t4's core thread tools load up front too (McpHttpServer's T4_ALWAYS_LOAD).
+it.effect("only t4's core tools ask Claude Code to load them up front", () =>
+  Effect.gen(function* () {
+    const mcp = yield* McpServer.McpServer;
+    const alwaysLoad = mcp.tools
+      .filter(({ tool }) => tool._meta?.["anthropic/alwaysLoad"] !== undefined)
+      .map(({ tool }) => [tool.name, tool._meta]);
+    expect(alwaysLoad.map(([name]) => name).toSorted()).toEqual(
+      [...McpHttpServer.T4_ALWAYS_LOAD].toSorted(),
+    );
+    for (const [, meta] of alwaysLoad) expect(meta).toEqual({ "anthropic/alwaysLoad": true });
+  }).pipe(Effect.provide(layerAdvertisedTools)),
+);
+
 // CI rejects a PR that raises any value above main's agentContextBudget.json, so growth
 // needs the agent-context-increase label. Lower the values when the text shrinks.
 it.effect("agent context matches the committed budget", () =>
@@ -147,12 +169,5 @@ it.effect("agent context matches the committed budget", () =>
       measured,
       "Set agentContextBudget.json to the measured values. Before you cut text to fit, run the evals that cover it (evals/README.md).",
     ).toEqual(budget);
-  }).pipe(
-    Effect.provide(
-      McpHttpServer.layerTools.pipe(
-        Layer.provideMerge(McpHttpServer.layerInProcessMcpServer),
-        Layer.provide(toolHandlerServices),
-      ),
-    ),
-  ),
+  }).pipe(Effect.provide(layerAdvertisedTools)),
 );

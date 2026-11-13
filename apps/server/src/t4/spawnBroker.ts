@@ -272,8 +272,7 @@ export const wrap = (
 
   const resolveCwd = (command: ChildProcess.StandardCommand) =>
     command.options.cwd === undefined
-      ? // @effect-diagnostics-next-line effectSucceedWithVoid:off - This optional result requires undefined, not the wider void type.
-        Effect.succeed(undefined)
+      ? Effect.undefined
       : Effect.tryPromise({
           try: () =>
             NodeFSP.access(command.options.cwd!).then(() => NodePath.resolve(command.options.cwd!)),
@@ -292,8 +291,7 @@ export const wrap = (
       PlatformError.PlatformError
     >((resume) => {
       if (helper.current() === undefined) {
-        // @effect-diagnostics-next-line effectSucceedWithVoid:off - This optional result requires undefined, not the wider void type.
-        resume(Effect.succeed(undefined));
+        resume(Effect.undefined);
         return;
       }
       const id = helper.nextId();
@@ -303,8 +301,7 @@ export const wrap = (
           "pid" in result
             ? resume(Effect.succeed({ id, entry }))
             : "helperGone" in result
-              ? // @effect-diagnostics-next-line effectSucceedWithVoid:off - This optional result requires undefined, not the wider void type.
-                resume(Effect.succeed(undefined))
+              ? resume(Effect.undefined)
               : resume(
                   Effect.fail(
                     errnoError("ChildProcess", "spawn", result.error, commandText(command)),
