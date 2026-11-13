@@ -820,7 +820,15 @@ export const make = Effect.gen(function* () {
             (run) =>
               run.status !== "queued" &&
               run.id !== continuationRun?.id &&
-              unstartedRun(run, projection.providerTurns),
+              unstartedRun(run, projection.providerTurns) &&
+              // A run cut while its own question is open keeps the question; its answer arrives as a message.
+              !projection.runtimeRequests.some(
+                (request) =>
+                  request.status === "pending" &&
+                  projection.nodes.some(
+                    (node) => node.id === request.nodeId && node.runId === run.id,
+                  ),
+              ),
           )
         : [];
       const effects: Array<EffectOutbox.PendingOrchestrationEffectV2> = [

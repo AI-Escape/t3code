@@ -642,10 +642,13 @@ it.effect.each([
       runEvent?.type === "run.updated" ? runEvent.payload.status : null,
       terminalized ? "cancelled" : "queued",
     );
-    // t4 fork (AI-88): a cancelled run the provider never took is sent again.
+    // t4 fork (AI-88): a cancelled run the provider never took is sent again, unless its own
+    // question is still open.
     assert.deepEqual(
       command.effects.map((effect) => effect.request),
-      terminalized ? [{ type: "provider-runtime.continue", sourceRunId: runId }] : [],
+      terminalized && scenario !== "starting-own-request"
+        ? [{ type: "provider-runtime.continue", sourceRunId: runId }]
+        : [],
     );
     if (terminalized) {
       assert.equal(
