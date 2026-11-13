@@ -5,6 +5,8 @@ import {
   isOrchestrationV2WorkActive,
   latestProviderTurnForAttempt,
   MessageId,
+  type OrchestrationV2ConversationMessage,
+  type OrchestrationV2ProviderTurn,
   type OrchestrationV2Run,
   type RunId,
   type ThreadId,
@@ -28,10 +30,35 @@ import {
   neverStarted,
   restartCancelledBackgroundWorkNote,
   restartContinuationNote,
+  unstartedRun,
 } from "./RestartBackgroundNote.ts";
 
 const CONTINUE_PROMPT =
   "Continue where you left off. Your last turn was cut short, so a command or other action it started may have finished or may still be running. Before you repeat one that changes state, confirm it did not take effect and is not still running; if you cannot tell, say so instead of repeating it.";
+
+const REDELIVERY_NOTE = "T3 Code restarted before this message reached you, so it is sent again:";
+
+/** t4 fork: an unstarted run's own message, sent again (once more if a restart cut that too). */
+function redeliversMessage(
+  source: OrchestrationV2Run,
+  message: OrchestrationV2ConversationMessage | undefined,
+  providerTurns: ReadonlyArray<Pick<OrchestrationV2ProviderTurn, "runAttemptId">>,
+): message is OrchestrationV2ConversationMessage {
+  return (
+    message !== undefined &&
+    unstartedRun(source, providerTurns) &&
+    (source.restartContinuationOfRunId === undefined || message.text.startsWith(REDELIVERY_NOTE))
+  );
+}
+
+/** t4 fork: a run that sends again the message of a run a restart cut before it started. */
+function resendsCutMessage(
+  run: OrchestrationV2Run,
+  runs: ReadonlyArray<OrchestrationV2Run>,
+): boolean {
+  const cut = runs.find((candidate) => candidate.id === run.restartContinuationOfRunId);
+  return cut !== undefined && cancelledBeforeStart(cut);
+}
 
 const MAX_CONTINUATION_CHAIN = 3;
 const CONTINUATION_LOOP_WINDOW_MS = 5 * 60 * 1_000;
@@ -221,6 +248,8 @@ export const continueRestartedRun = Effect.fn("RestartContinuation.continueResta
           run.id !== source.id &&
           run.status !== "queued" &&
           !cancelledBeforeStart(run) &&
+          // t4 fork: a re-sent message the same restart cut carries old work, not newer (AI-88).
+          !resendsCutMessage(run, projection.runs) &&
           runRanAfter(run, source),
       )
     )
@@ -291,6 +320,39 @@ export const continueRestartedRun = Effect.fn("RestartContinuation.continueResta
       (message) => message.id === source.userMessageId,
     );
     if (sourceMessage !== undefined && isNativeMaintenanceCommand(sourceMessage)) return;
+    // t4 fork: the provider never took this run's prompt, so "continue" would go on from the
+    // turn before and the message itself - a wake, a handoff - would be lost. Send it again (AI-88).
+    if (redeliversMessage(source, sourceMessage, projection.providerTurns)) {
+      yield* threads
+        .dispatch({
+          type: "message.dispatch",
+          commandId: CommandId.make(`command:restart-continuation:${input.sourceRunId}`),
+          threadId: input.threadId,
+          messageId,
+          text: sourceMessage.text.startsWith(REDELIVERY_NOTE)
+            ? sourceMessage.text
+            : `${REDELIVERY_NOTE}\n\n${sourceMessage.text}`,
+          notification: {
+            source: { kind: "system" },
+            outcome: "updated",
+            summary: "T3 Code restarted before this message was delivered, so it was sent again",
+            detail: sourceMessage.text,
+          },
+          attachments: sourceMessage.attachments,
+          modelSelection: source.modelSelection,
+          dispatchMode: { type: "start_immediately" },
+          createdBy: "agent",
+          creationSource: "server",
+          restartContinuationOfRunId: input.sourceRunId,
+        })
+        .pipe(
+          Effect.catchTags({
+            ThreadManagementProviderInstanceDisabledError: () => Effect.void,
+            OrchestratorRuntimeModeAboveCeilingError: () => Effect.void,
+          }),
+        );
+      return;
+    }
     const note = restartContinuationNote(
       source,
       projection.runs,

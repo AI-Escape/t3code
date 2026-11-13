@@ -120,15 +120,16 @@ Claude adapter switches (environment, set in t4's compose):
 
 ## 4. Server jobs
 
-| Job                    | From                          | Notes                                                                                                                                            |
-| ---------------------- | ----------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------ |
-| Wake delivery          | `tick_wakes`                  | T3's `Scheduler`.                                                                                                                                |
-| Settle cancel rule     | `tick_settles`                | On message dispatch.                                                                                                                             |
-| Release-manager model  | `deliver` (`RM_MODEL`)        | Every turn delivered to a release manager by these tools runs on `releaseManager.model` within its provider.                                     |
-| Stall recovery         | `tick_stalled_turns`          | 15 min silence (no output, no tool call executing, not waiting on the user) → interrupt + restart note; a second stall within 6 h → stop + push. |
-| Orphaned questions     | `tick_orphan_questions`       | Ported only where V2's own restart handling of pending requests doesn't already cover it (verified first).                                       |
-| Interrupted background | `tick_interrupted_background` | Same: V2 already reports background work killed by a restart; ours fills gaps only.                                                              |
-| Limited-thread resume  | `cmd_resume`                  | Operator action: probe one thread, then 3 at a time 60 s apart, release managers first, skipping threads already moving.                         |
+| Job                    | From                          | Notes                                                                                                                                                                                                                                 |
+| ---------------------- | ----------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Wake delivery          | `tick_wakes`                  | T3's `Scheduler`.                                                                                                                                                                                                                     |
+| Settle cancel rule     | `tick_settles`                | On message dispatch.                                                                                                                                                                                                                  |
+| Release-manager model  | `deliver` (`RM_MODEL`)        | Every turn delivered to a release manager by these tools runs on `releaseManager.model` within its provider.                                                                                                                          |
+| Stall recovery         | `tick_stalled_turns`          | 15 min silence (no output, no tool call executing, not waiting on the user) → interrupt + restart note; a second stall within 6 h → stop + push.                                                                                      |
+| Orphaned questions     | `tick_orphan_questions`       | Ported only where V2's own restart handling of pending requests doesn't already cover it (verified first).                                                                                                                            |
+| Interrupted background | `tick_interrupted_background` | Same: V2 already reports background work killed by a restart; ours fills gaps only.                                                                                                                                                   |
+| Unstarted runs         | (new, AI-88)                  | A run a restart catches before Claude took its prompt (no provider turn) gets `provider-runtime.continue`; it sends that run's own message again, not "continue". Upstream cancelled it and the message (a wake, a handoff) was lost. |
+| Limited-thread resume  | `cmd_resume`                  | Operator action: probe one thread, then 3 at a time 60 s apart, release managers first, skipping threads already moving.                                                                                                              |
 
 ## 5. State
 
