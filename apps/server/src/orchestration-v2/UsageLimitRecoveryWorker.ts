@@ -79,7 +79,7 @@ export function limitRecoveryCommand(
     text: "Continue where you left off.",
     attachments: [],
     dispatchMode: { type: "start_immediately" },
-    createdBy: "user",
+    createdBy: "agent",
     creationSource: "server",
   };
 }

@@ -1,3 +1,4 @@
+// @effect-diagnostics processEnvInEffect:off -- t4 settings come from the client container's env.
 /**
  * t4 fork: configuration for t4's session tooling, read once at startup from
  * the JSON file named by `T4_SERVER_CONFIG` (absent: defaults below). Kept

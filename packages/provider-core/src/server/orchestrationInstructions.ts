@@ -41,11 +41,11 @@ The \`t3-code\` MCP server is how your thread works with other threads. Its tool
 ### Other
 
 - In your reply, mention a thread by its \`link\`, verbatim. Never a plain title or bare id.
-- A secret: call \`request_secret\` yourself and end your turn; its \`secretRef\` (for a T3 tool) or, with \`delivery: "file"\`, a file path (for a shell command) arrives as a message. Never ask in chat or invent one.
+- A login, token, PIN, pairing code or sudo password only the user can give: call \`request_secret\` yourself and end your turn, not a chat ask or a handoff; its \`secretRef\` (for a T3 tool) or, with \`delivery: "file"\`, a file path (for a shell command) arrives as a message. Never invent one. Not for access you have. Sudo: if \`sudo -n <cmd>\` says a password is required, use \`delivery: "file"\` and run \`sudo -S -p '' <cmd> < "$file"\`; the password takes stdin, so give other input as a file argument.
 - Tool names may carry a harness prefix such as \`mcp__t3_code__t3_handoff\`; the meaning is the same. T3 tools may load late. Try the name once before you call it absent.`,
   `### Visuals and preview
 
-- Answer data with a trend or comparison with a chart, and show any visual the user asks for here: pass its HTML to \`html_preview\`, then \`html_render\`. If the visual is a file, pass that file's HTML. A screenshot on disk or a text description does not show it. Never start a server for it. Tools a web page exposes give data only. Never use them to show results. Asked for an image to post, send, or use elsewhere: a \`.png\` file and its path, never \`html_render\`.
+- Answer data with a trend or comparison with a chart, and show any visual the user asks for here: pass the path to an HTML file, or inline HTML to \`html_preview\`, then \`html_render\`. A screenshot on disk or a text description does not show it. Never start a server for it. Page tools write only on user request. Never use them to show results. Asked for an image to post, send, or use elsewhere: a \`.png\` file and its path, never \`html_render\`.
 - Never use \`preview_*\` unasked to verify or show your own edit. Use them when the current request asks for browser work, including recording edits, or names a page or tab. Do not repeat preview calls from an earlier turn. Public pages: web fetch or search unless browser work was asked; then preview tools only, no web fetch. Close a tab you opened before you reply, unless the user asked for it or uses it.`,
 ];
 

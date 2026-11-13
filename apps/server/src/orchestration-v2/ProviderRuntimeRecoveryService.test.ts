@@ -499,7 +499,19 @@ it.effect("recovery leaves secret and link cards open", () => {
   }).pipe(Effect.provide(layer));
 });
 
-it.effect.each(["queued", "preparing"] as const)("recovers $0 work after restart", (status) => {
+it.effect.each([
+  "queued",
+  "preparing",
+  "starting",
+  "starting-other-request",
+  "starting-own-request",
+  "starting-scheduled",
+] as const)("recovers $0 work after restart", (scenario) => {
+  const status = scenario.startsWith("starting") ? "starting" : scenario;
+  const terminalized =
+    status === "preparing" ||
+    scenario === "starting-own-request" ||
+    scenario === "starting-scheduled";
   const threadId = ThreadId.make("thread_queued_restart");
   const runId = RunId.make("run_queued_restart");
   const attemptId = RunAttemptId.make("attempt_queued_restart");
@@ -508,7 +520,18 @@ it.effect.each(["queued", "preparing"] as const)("recovers $0 work after restart
     null;
   const projection = {
     thread: { id: threadId },
-    runtimeRequests: [],
+    runtimeRequests: scenario.endsWith("request")
+      ? [
+          {
+            id: RuntimeRequestId.make("pending-recovery-request"),
+            nodeId:
+              scenario === "starting-own-request" ? rootNodeId : NodeId.make("other-run-request"),
+            kind: "user_input",
+            status: "pending",
+            responseCapability: { type: "message" },
+          },
+        ]
+      : [],
     providerSessions: [],
     providerThreads: [],
     providerTurns: [],
@@ -516,6 +539,9 @@ it.effect.each(["queued", "preparing"] as const)("recovers $0 work after restart
       {
         id: runId,
         status,
+        startedAt: null,
+        activeAttemptId: attemptId,
+        userMessageId: MessageId.make("message_queued_restart"),
         queuePosition: 1,
         providerInstanceId: ProviderInstanceId.make("codex"),
         ...(status === "preparing"
@@ -538,6 +564,15 @@ it.effect.each(["queued", "preparing"] as const)("recovers $0 work after restart
       },
     ],
     nodes: [
+      ...(scenario === "starting-other-request"
+        ? [
+            {
+              id: NodeId.make("other-run-request"),
+              runId: RunId.make("earlier-run"),
+              status: "waiting",
+            },
+          ]
+        : []),
       {
         id: rootNodeId,
         runId,
@@ -545,7 +580,16 @@ it.effect.each(["queued", "preparing"] as const)("recovers $0 work after restart
       },
     ],
     subagents: [],
-    messages: [],
+    messages:
+      status === "starting"
+        ? [
+            {
+              id: MessageId.make("message_queued_restart"),
+              createdBy: "user",
+              ...(scenario === "starting-scheduled" ? { scheduledTaskId: "scheduled-task" } : {}),
+            },
+          ]
+        : [],
     turnItems: [],
   } as unknown as OrchestrationV2ThreadProjection;
   const layer = ProviderRuntimeRecovery.layer.pipe(
@@ -555,6 +599,16 @@ it.effect.each(["queued", "preparing"] as const)("recovers $0 work after restart
         Layer.mock(ProjectionStore.ProjectionStoreV2)({
           getRecoveryThreadIds: () => Effect.succeed([threadId]),
           getRuntimeRecoveryProjection: () => Effect.succeed(projection),
+          getMessagesById: (requestedThreadId, messageIds) =>
+            Effect.succeed(
+              new Map(
+                projection.messages
+                  .filter(
+                    (message) => requestedThreadId === threadId && messageIds.includes(message.id),
+                  )
+                  .map((message) => [message.id, message]),
+              ),
+            ),
           getThreadRecords: () => Effect.succeed(projection),
         }),
         Layer.mock(EventSink.EventSinkV2)({
@@ -577,7 +631,7 @@ it.effect.each(["queued", "preparing"] as const)("recovers $0 work after restart
   return Effect.gen(function* () {
     const summary =
       yield* (yield* ProviderRuntimeRecovery.ProviderRuntimeRecoveryService).reconcile("startup");
-    assert.equal(summary.terminalizedRuns, status === "preparing" ? 1 : 0);
+    assert.equal(summary.terminalizedRuns, terminalized ? 1 : 0);
     const command = committedInput;
     assert.isNotNull(command);
     if (command === null) return;
@@ -586,17 +640,24 @@ it.effect.each(["queued", "preparing"] as const)("recovers $0 work after restart
     const nodeEvent = command.events.find((event) => event.type === "node.updated");
     assert.equal(
       runEvent?.type === "run.updated" ? runEvent.payload.status : null,
-      status === "preparing" ? "cancelled" : "queued",
+      terminalized ? "cancelled" : "queued",
     );
-    assert.isEmpty(command.effects);
-    if (status === "preparing") {
+    // t4 fork (AI-88): a cancelled run the provider never took is sent again, unless its own
+    // question is still open.
+    assert.deepEqual(
+      command.effects.map((effect) => effect.request),
+      terminalized && scenario !== "starting-own-request"
+        ? [{ type: "provider-runtime.continue", sourceRunId: runId }]
+        : [],
+    );
+    if (terminalized) {
       assert.equal(
         attemptEvent?.type === "run-attempt.updated" ? attemptEvent.payload.status : null,
         "cancelled",
       );
       assert.equal(
         nodeEvent?.type === "node.updated" ? nodeEvent.payload.status : null,
-        "cancelled",
+        scenario === "starting-own-request" ? null : "cancelled",
       );
     } else {
       assert.equal(runEvent?.type === "run.updated" ? runEvent.payload.queuePosition : null, 1);
@@ -628,6 +689,7 @@ it.effect(
           driver: ProviderDriverKind.make("codex"),
           providerInstanceId: ProviderInstanceId.make("codex"),
           status: "ready",
+          extensionStatuses: [{ key: "watch", text: "Watching" }],
         },
       ],
       providerThreads: [
@@ -742,6 +804,13 @@ it.effect(
       );
       const messageEvent = events.find((event) => event.type === "message.updated");
       assert.isFalse(messageEvent?.type === "message.updated" && messageEvent.payload.streaming);
+      const stoppedSession = events.find((event) => event.type === "provider-session.updated");
+      assert.deepEqual(
+        stoppedSession?.type === "provider-session.updated"
+          ? stoppedSession.payload.extensionStatuses
+          : undefined,
+        [],
+      );
       assert.deepEqual(
         events.flatMap((event) =>
           event.type === "turn-item.updated" && "streaming" in event.payload
@@ -1529,6 +1598,7 @@ it.effect("sends a run the restart caught before its provider took the prompt ag
           Layer.mock(ProjectionStore.ProjectionStoreV2)({
             getRecoveryThreadIds: () => Effect.succeed([threadId]),
             getRuntimeRecoveryProjection: () => Effect.succeed(projection),
+            getMessagesById: () => Effect.succeed(new Map()),
           }),
           Layer.mock(EventSink.EventSinkV2)({
             commitCommand: (input) => {

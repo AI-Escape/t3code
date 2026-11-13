@@ -1,3 +1,4 @@
+// @effect-diagnostics processEnvInEffect:off -- t4 settings come from the client container's env.
 /**
  * t4 fork: recover hung turns, like t4's `tick_stalled_turns`. A running turn silent for
  * `silenceMinutes` (no run item updated, not waiting on the user, no tool call still executing) is
