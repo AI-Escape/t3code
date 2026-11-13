@@ -7088,6 +7088,84 @@ describe("ClaudeAdapterV2 background wake turns", () => {
     ),
   );
 
+  // t4 fork (AI-96): AI-85 on 2026-11-12 typed two messages while a command ran, then pressed
+  // Stop; Claude still held them queued and the closed CLI dropped them.
+  it.effect("Stop marks steers Claude never started as dropped and the rest as read", () =>
+    Effect.gen(function* () {
+      const harness = yield* makeWakeHarnessWithOptions({
+        close: (sdkMessages) => Queue.shutdown(sdkMessages),
+        freshQueueOnReopen: true,
+      });
+      const now = yield* DateTime.now;
+      const input = makeClaudeTestTurnInput({
+        threadId: harness.threadId,
+        providerThread: harness.providerThread,
+        now,
+        attemptId: RunAttemptId.make("attempt-claude-stop-unread-steer"),
+        text: "Run the ARM build check.",
+        attachments: [],
+      });
+      yield* harness.runtime.startTurn(input);
+      const providerTurnId = (yield* IdAllocator.IdAllocatorV2).derive.providerTurn({
+        driver: ClaudeAdapterV2.CLAUDE_PROVIDER,
+        nativeTurnId: `turn:${input.attemptId}`,
+      });
+      const steer = (messageId: string, text: string) =>
+        harness.runtime.steerTurn({
+          threadId: harness.threadId,
+          runId: input.runId,
+          providerThread: harness.providerThread,
+          providerTurnId,
+          message: {
+            createdBy: "user",
+            creationSource: "web",
+            messageId: MessageId.make(messageId),
+            text,
+            attachments: [],
+          },
+        });
+      yield* steer("message-read-steer", "Commands that need files outside the worktree?");
+      yield* steer("message-unread-steer", "I've decided against arm if it's that heavy");
+      const [readUuid, unreadUuid] = harness.offeredMessages.slice(1).map((m) => m.uuid);
+      assert.isDefined(readUuid);
+      assert.isDefined(unreadUuid);
+      assert.notEqual(readUuid, unreadUuid);
+      const lifecycle = (commandUuid: string, state: string) =>
+        harness.offerAndWait({
+          type: "command_lifecycle",
+          command_uuid: commandUuid,
+          state,
+          uuid: `${commandUuid.slice(0, -4)}ffff`,
+          session_id: "session-claude-stop-unread-steer",
+        } as never);
+      yield* lifecycle(readUuid!, "queued");
+      yield* lifecycle(unreadUuid!, "queued");
+      yield* lifecycle(readUuid!, "started");
+
+      yield* harness.runtime.interruptTurn({
+        providerThread: harness.providerThread,
+        providerTurnId,
+      });
+      assert.equal((yield* Queue.take(harness.terminalReceipts)).status, "interrupted");
+
+      const steerStatuses = (messageId: string) =>
+        harness.events.flatMap((event) =>
+          event.type === "steer.updated" && event.messageId === messageId ? [event.status] : [],
+        );
+      assert.deepEqual(steerStatuses("message-read-steer"), ["pending", "completed"]);
+      assert.deepEqual(steerStatuses("message-unread-steer"), ["pending", "cancelled"]);
+    }).pipe(
+      Effect.provide(
+        Layer.mergeAll(
+          IdAllocator.layer,
+          McpProviderSessions.layer,
+          NodeServices.layer,
+          NodeCrypto.layer,
+        ),
+      ),
+    ),
+  );
+
   it.effect("an interrupted turn with no assistant output keeps the rolled-back head", () =>
     Effect.gen(function* () {
       const harness = yield* makeWakeHarnessWithOptions({

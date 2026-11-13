@@ -125,6 +125,7 @@ import {
   type ProviderInstanceId,
   type ProviderRequestKind,
   type ProviderUserInputAnswers,
+  type MessageId,
   type ProviderThreadId,
   type RunId,
   type ThreadId,
@@ -5203,6 +5204,17 @@ export const makeClaudeAdapterV2 = Effect.fn("makeClaudeAdapterV2")(function* (
         );
         const interruptedTurns = yield* Ref.make(new Set<OrchestrationV2ProviderTurn["id"]>());
         const steeredTurns = yield* Ref.make(new Set<OrchestrationV2ProviderTurn["id"]>());
+        // t4 fork (AI-96): steers Claude has queued and not started, by prompt uuid. Claude
+        // holds a steer until the command it runs returns; Stop closes the CLI and drops it.
+        const unreadSteers = new Map<
+          string,
+          {
+            readonly threadId: ThreadId;
+            readonly runId: RunId;
+            readonly messageId: MessageId;
+            readonly providerTurnId: OrchestrationV2ProviderTurn["id"];
+          }
+        >();
         const queryContext = yield* Ref.make<ClaudeLiveQueryContext | null>(null);
         // Wake buffers replay result frames, so ledger growth is measured once on arrival.
         const resultLedgerUsage = new WeakMap<SDKMessage, ClaudeLedgerUsage>();
@@ -8024,6 +8036,20 @@ export const makeClaudeAdapterV2 = Effect.fn("makeClaudeAdapterV2")(function* (
             });
           }
           input.context.compaction = null;
+          // t4 fork (AI-96): a turn that ends normally runs what Claude still holds; one that
+          // is stopped or fails drops it, and T4UnreadSteerReactor sends it again.
+          for (const [uuid, steer] of unreadSteers) {
+            if (steer.providerTurnId !== input.context.providerTurnId) continue;
+            unreadSteers.delete(uuid);
+            yield* emitProviderEvent({
+              type: "steer.updated",
+              driver: CLAUDE_PROVIDER,
+              threadId: steer.threadId,
+              runId: steer.runId,
+              messageId: steer.messageId,
+              status: input.status === "completed" ? "completed" : "cancelled",
+            });
+          }
           if (input.status !== "completed") {
             const liveQuery = yield* Ref.get(queryContext);
             for (const [taskId, subagent] of yield* Ref.get(sessionSubagentsByTaskId)) {
@@ -10319,6 +10345,30 @@ export const makeClaudeAdapterV2 = Effect.fn("makeClaudeAdapterV2")(function* (
           const message = input.message;
           const context = yield* Ref.get(activeTurn);
           const liveQuery = yield* Ref.get(queryContext);
+          // t4 fork (AI-96): Claude took a queued steer.
+          if (unreadSteers.size > 0) {
+            const lifecycle = claudePromptLifecycle(message);
+            const read = [
+              ...claudeEchoedPromptUuids(message),
+              ...(lifecycle !== null && lifecycle.state !== "queued" ? [lifecycle.uuid] : []),
+            ];
+            for (const uuid of read) {
+              const steer = unreadSteers.get(uuid);
+              if (steer === undefined) continue;
+              unreadSteers.delete(uuid);
+              yield* emitProviderEvent({
+                type: "steer.updated",
+                driver: CLAUDE_PROVIDER,
+                threadId: steer.threadId,
+                runId: steer.runId,
+                messageId: steer.messageId,
+                status:
+                  lifecycle?.uuid === uuid && lifecycle.state === "cancelled"
+                    ? "cancelled"
+                    : "completed",
+              });
+            }
+          }
           if (
             context?.promptUuid === null &&
             liveQuery?.query === input.query &&
@@ -11899,6 +11949,10 @@ export const makeClaudeAdapterV2 = Effect.fn("makeClaudeAdapterV2")(function* (
                 }),
               persistAttachmentBudget(existing.nativeThreadId),
             );
+            // t4 fork (AI-96): a uuid lets Claude's lifecycle frames say when it reads the steer.
+            const steerUuid = yield* random
+              .uuidV4()
+              .pipe(Effect.filterOrFail(isClaudePromptUuid), Effect.option);
             const userMessage = yield* makeClaudeUserMessageWithAttachments({
               text: applyClaudePromptEffortPrefix(
                 turnInput.message.text,
@@ -11907,6 +11961,7 @@ export const makeClaudeAdapterV2 = Effect.fn("makeClaudeAdapterV2")(function* (
               ),
               attachments: turnInput.message.attachments,
               priority: "now",
+              ...(Option.isSome(steerUuid) ? { uuid: steerUuid.value } : {}),
               attachmentsDir,
               fileSystem,
               pdfReservation,
@@ -11933,6 +11988,15 @@ export const makeClaudeAdapterV2 = Effect.fn("makeClaudeAdapterV2")(function* (
               next.add(turnInput.providerTurnId);
               return next;
             });
+            // Recorded before the offer: Claude can report reading it before the offer returns.
+            if (Option.isSome(steerUuid)) {
+              unreadSteers.set(steerUuid.value, {
+                threadId: turnInput.threadId,
+                runId: turnInput.runId,
+                messageId: turnInput.message.messageId,
+                providerTurnId: turnInput.providerTurnId,
+              });
+            }
             yield* Effect.uninterruptibleMask((restore) =>
               restore(
                 existing.query.offer(userMessage, () => {
@@ -11945,7 +12009,23 @@ export const makeClaudeAdapterV2 = Effect.fn("makeClaudeAdapterV2")(function* (
                   }),
                 ),
               ),
+            ).pipe(
+              Effect.onError(() =>
+                Effect.sync(() => {
+                  if (Option.isSome(steerUuid)) unreadSteers.delete(steerUuid.value);
+                }),
+              ),
             );
+            if (Option.isSome(steerUuid) && unreadSteers.has(steerUuid.value)) {
+              yield* emitProviderEvent({
+                type: "steer.updated",
+                driver: CLAUDE_PROVIDER,
+                threadId: turnInput.threadId,
+                runId: turnInput.runId,
+                messageId: turnInput.message.messageId,
+                status: "pending",
+              });
+            }
           },
           (effect, turnInput) =>
             effect.pipe(
