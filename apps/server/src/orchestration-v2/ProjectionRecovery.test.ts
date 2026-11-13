@@ -1096,7 +1096,7 @@ it.effect("wakes the run whose subagent lost its shell, past a wake cut before i
       },
     });
     const settledRun = yield* createRun(threadId, "completed", { providerThreadId });
-    yield* createRun(threadId, "starting", {
+    const cutWake = yield* createRun(threadId, "starting", {
       ordinal: 2,
       providerThreadId,
       startedAt: null,
@@ -1135,8 +1135,16 @@ it.effect("wakes the run whose subagent lost its shell, past a wake cut before i
 
     const effects = yield* sql<{ readonly effect_id: string }>`
       SELECT effect_id FROM orchestration_v2_effect_outbox WHERE thread_id = ${threadId}
+      ORDER BY effect_id
     `;
-    assert.deepEqual(effects, [{ effect_id: `effect:restart-continuation:${settledRun}` }]);
+    // t4 fork (AI-88): the cut wake is sent again too; upstream lost it.
+    assert.deepEqual(
+      effects.map((effect) => effect.effect_id).toSorted(),
+      [
+        `effect:restart-continuation:${settledRun}`,
+        `effect:restart-continuation:${cutWake}`,
+      ].toSorted(),
+    );
     const projection = yield* projections.getThreadProjection(threadId);
     assert.deepEqual(projection.runs[0]?.restartCancelledBackgroundWork, [
       { kind: "subagent", label: "sleep 150 (subagent agent)", id: "agent" },

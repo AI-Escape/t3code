@@ -51,6 +51,15 @@ function redeliversMessage(
   );
 }
 
+/** t4 fork: a run that sends again the message of a run a restart cut before it started. */
+function resendsCutMessage(
+  run: OrchestrationV2Run,
+  runs: ReadonlyArray<OrchestrationV2Run>,
+): boolean {
+  const cut = runs.find((candidate) => candidate.id === run.restartContinuationOfRunId);
+  return cut !== undefined && cancelledBeforeStart(cut);
+}
+
 const MAX_CONTINUATION_CHAIN = 3;
 const CONTINUATION_LOOP_WINDOW_MS = 5 * 60 * 1_000;
 
@@ -239,6 +248,8 @@ export const continueRestartedRun = Effect.fn("RestartContinuation.continueResta
           run.id !== source.id &&
           run.status !== "queued" &&
           !cancelledBeforeStart(run) &&
+          // t4 fork: a re-sent message the same restart cut carries old work, not newer (AI-88).
+          !resendsCutMessage(run, projection.runs) &&
           runRanAfter(run, source),
       )
     )

@@ -1305,3 +1305,27 @@ it.effect("sends an unstarted run's own message again instead of continuing", ()
     assert.match(started ?? "", /^Continue where you left off/);
   }),
 );
+
+it.effect("still continues a cut run when the same restart's re-sent message ran first", () =>
+  Effect.gen(function* () {
+    const cut = cutMidTurn();
+    const wakeRunId = RunId.make("run:cut-wake");
+    const texts = yield* continuationTexts({
+      ...cut,
+      runs: [
+        ...cut.runs,
+        { ...cut.runs[0]!, id: wakeRunId, ordinal: 2, startedAt: null, activeAttemptId: null },
+        {
+          ...cut.runs[0]!,
+          id: RunId.make("run:resent-wake"),
+          ordinal: 3,
+          status: "running",
+          completedAt: null,
+          restartContinuationOfRunId: wakeRunId,
+        },
+      ],
+    } as unknown as OrchestrationV2ThreadProjection);
+    assert.lengthOf(texts, 1);
+    assert.match(texts[0]!, /^Continue where you left off/);
+  }),
+);
