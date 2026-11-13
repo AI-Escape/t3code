@@ -1264,3 +1264,44 @@ it.effect.each(["completed", "failed", "interrupted"] as const)(
       );
     }),
 );
+
+// t4 fork (AI-88): a restart cancelled usa-rs USA-2029's wake before Claude took it.
+it.effect("sends an unstarted run's own message again instead of continuing", () =>
+  Effect.gen(function* () {
+    const wake = "WAKE: check the nightly sync, then close USA-2029.";
+    const unstarted = (extra: Record<string, unknown> = {}, text = wake) => {
+      const base = makeProjection();
+      return {
+        ...base,
+        runs: [
+          {
+            ...base.runs[0]!,
+            status: "cancelled",
+            startedAt: null,
+            completedAt: now,
+            userMessageId: MessageId.make("message:wake"),
+            ...extra,
+          },
+        ],
+        providerTurns: [],
+        messages: [{ id: MessageId.make("message:wake"), text, attachments: [] }],
+      } as unknown as OrchestrationV2ThreadProjection;
+    };
+    const [first] = yield* continuationDispatches(unstarted());
+    assert.isDefined(first);
+    assert.match(first!.text, /^T3 Code restarted before this message reached you/);
+    assert.isTrue(first!.text.endsWith(`\n\n${wake}`));
+    assert.deepEqual(first!.attachments, []);
+    assert.equal(first!.restartContinuationOfRunId, runId);
+
+    // A restart that cut the re-sent message too sends it once more, with one note.
+    const [again] = yield* continuationDispatches(
+      unstarted({ restartContinuationOfRunId: RunId.make("run:earlier") }, first!.text),
+    );
+    assert.equal(again?.text, first!.text);
+
+    // A run whose provider turn began keeps upstream's "continue".
+    const [started] = yield* continuationTexts(cutMidTurn());
+    assert.match(started ?? "", /^Continue where you left off/);
+  }),
+);

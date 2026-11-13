@@ -181,6 +181,22 @@ export function neverStarted(
   return run.startedAt === null && run.restartContinuationOfRunId === undefined;
 }
 
+/**
+ * t4 fork: the provider never took this run's prompt - no provider turn, never started -
+ * so sending its message again after a restart repeats nothing (AI-88).
+ */
+export function unstartedRun(
+  run: Pick<OrchestrationV2Run, "startedAt" | "activeAttemptId">,
+  providerTurns: ReadonlyArray<Pick<ProviderTurnState, "runAttemptId">>,
+): boolean {
+  return (
+    run.startedAt === null &&
+    !providerTurns.some(
+      (turn) => run.activeAttemptId !== null && turn.runAttemptId === run.activeAttemptId,
+    )
+  );
+}
+
 /** Restart-cancelled unstarted runs supersede nothing; user-stopped unstarted runs do. */
 export function cancelledBeforeStart(
   run: Pick<OrchestrationV2Run, "status" | "startedAt" | "restartContinuationOfRunId">,

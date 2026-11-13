@@ -35,6 +35,7 @@ import {
   cancelledTurnItemWork,
   mergeRestartCancelledBackgroundWork,
   neverStarted,
+  unstartedRun,
 } from "./RestartBackgroundNote.ts";
 
 export class ProviderRuntimeRecoveryError extends Schema.TaggedError<ProviderRuntimeRecoveryError>()(
@@ -664,16 +665,26 @@ export const make = Effect.gen(function* () {
               now,
             )
           : undefined;
-      const effects: Array<EffectOutbox.PendingOrchestrationEffectV2> = continuationRun
-        ? [
-            {
-              id: `effect:restart-continuation:${continuationRun.id}`,
-              commandId,
-              threadId: projection.thread.id,
-              request: { type: "provider-runtime.continue", sourceRunId: continuationRun.id },
-            },
-          ]
+      // t4 fork: a run the restart caught before its provider took the prompt - a wake, a
+      // handoff or a message seconds old - is sent again once the server is back. Upstream
+      // cancelled it, and the message was lost (usa-rs USA-2029's wake, 2026-11-12, AI-88).
+      const redeliveredRuns = continueAfterRestart
+        ? runs.filter(
+            (run) =>
+              run.status !== "queued" &&
+              run.id !== continuationRun?.id &&
+              unstartedRun(run, projection.providerTurns),
+          )
         : [];
+      const effects: Array<EffectOutbox.PendingOrchestrationEffectV2> = [
+        ...(continuationRun ? [continuationRun] : []),
+        ...redeliveredRuns,
+      ].map((run) => ({
+        id: `effect:restart-continuation:${run.id}`,
+        commandId,
+        threadId: projection.thread.id,
+        request: { type: "provider-runtime.continue", sourceRunId: run.id },
+      }));
       const stoppedSessions = projection.providerSessions.filter(
         (candidate) => candidate.status !== "stopped" && candidate.status !== "error",
       ).length;
