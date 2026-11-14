@@ -22,6 +22,17 @@ export type PullRequestWatchChange =
   | { readonly kind: "no-checks"; readonly minutes: number }
   | { readonly kind: "conflicting" };
 
+/** `outdated`: a review comment whose thread no longer matches the diff. */
+export type PullRequestWatchRemark = PullRequestComment & { readonly outdated?: boolean };
+
+// Bot conversation comments (issue trackers, CI summaries) are chatter; bot reviews and review
+// comments are findings the agent acts on, so they still wake.
+const isQuietRemark = (remark: PullRequestWatchRemark) =>
+  remark.outdated === true ||
+  (remark.kind === "issue-comment" &&
+    (remark.author?.isBot === true ||
+      remark.author?.login.toLowerCase().endsWith("[bot]") === true));
+
 export interface PullRequestWatchReport {
   readonly changes: ReadonlyArray<PullRequestWatchChange>;
   readonly next: ThreadPullRequestWatch;
@@ -41,7 +52,7 @@ export function evaluatePullRequestWatch(
     PullRequestDetail,
     "capabilities" | "headSha" | "checks" | "mergeability" | "viewer" | "author"
   >,
-  remarks: ReadonlyArray<PullRequestComment> | null,
+  remarks: ReadonlyArray<PullRequestWatchRemark> | null,
   now: number,
 ): PullRequestWatchReport {
   const changes: Array<PullRequestWatchChange> = [];
@@ -161,16 +172,18 @@ export function evaluatePullRequestWatch(
   const through = Date.parse(watch.remarksThrough);
   const activeAt = (remark: PullRequestComment) => remark.editedAt ?? remark.createdAt;
   // Hosts can stamp remarks to the second, so remarks at the boundary time are told apart by ID.
-  const fresh = (remarks ?? []).filter((remark) => {
+  const unseen = (remarks ?? []).filter((remark) => {
     const at = Date.parse(activeAt(remark));
     return (
       (at > through || (at === through && !watch.remarkIds.includes(remark.id))) &&
       remark.author?.login.toLowerCase() !== own
     );
   });
+  // Quiet remarks never wake, but still move the watermark so they never wake later either.
+  const fresh = unseen.filter((remark) => !isQuietRemark(remark));
   if (fresh.length > 0) changes.push({ kind: "remarks", remarks: fresh });
-  const latest = Math.max(through, ...fresh.map((remark) => Date.parse(activeAt(remark))));
-  const atLatest = fresh.filter((remark) => Date.parse(activeAt(remark)) === latest);
+  const latest = Math.max(through, ...unseen.map((remark) => Date.parse(activeAt(remark))));
+  const atLatest = unseen.filter((remark) => Date.parse(activeAt(remark)) === latest);
   const remarksThrough = latest === through ? watch.remarksThrough : activeAt(atLatest[0]!);
   const remarkIds = [
     ...(latest === through ? watch.remarkIds : []),

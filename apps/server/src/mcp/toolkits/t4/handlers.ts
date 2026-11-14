@@ -16,6 +16,8 @@ import * as DateTime from "effect/DateTime";
 import * as Effect from "effect/Effect";
 import * as Option from "effect/Option";
 import * as Result from "effect/Result";
+import * as Schema from "effect/Schema";
+import type { Tool } from "effect/ai";
 
 import * as ThreadLaunch from "../../../orchestration-v2/ThreadLaunchService.ts";
 import * as Project from "../../../project/ProjectService.ts";
@@ -25,8 +27,10 @@ import * as T4Decisions from "../../../t4/T4Decisions.ts";
 import * as T4Delivery from "../../../t4/T4Delivery.ts";
 import * as FyiDigest from "../../../t4/fyiDigest.ts";
 import * as T4Ledger from "../../../t4/T4Ledger.ts";
+import * as T4Releases from "../../../t4/T4Releases.ts";
 import * as T4RunWatch from "../../../t4/T4RunWatch.ts";
 import * as T4Store from "../../../t4/T4Store.ts";
+import * as ToolCallLog from "../../../t4/toolCallLog.ts";
 import {
   ago,
   issueIdIn,
@@ -39,7 +43,7 @@ import {
 } from "../../../t4/T4Threads.ts";
 import * as McpToolAccess from "../../McpToolAccess.ts";
 import { readCaller, unavailable } from "../../threadAccess.ts";
-import { T4Toolkit } from "./tools.ts";
+import { HandoffTool, T4Toolkit } from "./tools.ts";
 
 type Shell = OrchestrationV2ThreadShell;
 
@@ -201,23 +205,35 @@ export const prOfHandoff = (body: string): number | undefined => {
   return Number.isInteger(pr) && pr > 0 ? pr : undefined;
 };
 
-/** One release notice per owner and state (release_queue). */
-export const releaseNotice = (
-  state: "staging" | "shipped" | "failed",
-  prs: ReadonlyArray<number>,
-  note: string | null,
-) => {
-  const list = prs.map((pr) => `#${pr}`).join(", ");
-  const plural = prs.length === 1 ? "PR" : "PRs";
-  switch (state) {
-    case "staging":
-      return `staging: ${plural} ${list} ${prs.length === 1 ? "is" : "are"} on staging. Verify there.${note ? ` ${note}` : ""}`;
-    case "shipped":
-      return `shipped: ${plural} ${list} live in production. Verify, close your Linear.${note ? ` ${note}` : ""}`;
-    case "failed":
-      return `release failed on your ${plural} ${list}: ${note ?? "see the release manager's thread"}`;
+export const releaseNotice = T4Releases.releaseNotice;
+
+/** When each thread last read release_queue, for its rows' `changed` flag. */
+const lastReads = new Map<string, string>();
+
+/** A project by id or title (case-insensitive, unique partial), default the caller's. */
+const projectOf = Effect.fn("t4.projectOf")(function* (ref: string | undefined, fallback: string) {
+  const projects = yield* Project.ProjectService;
+  if (ref === undefined || ref.trim() === "") {
+    const own = Option.getOrUndefined(
+      yield* projects.getById(fallback as never).pipe(Effect.mapError(unavailable)),
+    );
+    if (own === undefined) return yield* invalid("Your thread's project was not found.");
+    return { id: own.id as string, title: own.title };
   }
-};
+  const shells = yield* projects.listShells().pipe(Effect.mapError(unavailable));
+  const needle = ref.trim().toLowerCase();
+  const exact = shells.filter(
+    (shell) => shell.id === ref.trim() || shell.title.toLowerCase() === needle,
+  );
+  const matches =
+    exact.length > 0 ? exact : shells.filter((shell) => shell.title.toLowerCase().includes(needle));
+  if (matches.length === 1) return { id: matches[0]!.id as string, title: matches[0]!.title };
+  return yield* invalid(
+    matches.length === 0
+      ? `no project matches '${ref}'`
+      : `'${ref}' matches several projects: ${matches.map((shell) => shell.title).join(", ")}`,
+  );
+});
 
 const releaseEntryOf = (row: T4Store.T4ReleaseRow, world: T4Ledger.T4World, now: number) => {
   const owner = row.ownerThreadId === null ? undefined : world.byId.get(row.ownerThreadId);
@@ -276,283 +292,358 @@ const queueHandedOffPr = Effect.fn("t4.queueHandedOffPr")(function* (me: Shell, 
   return pr;
 });
 
-export const layer = McpToolAccess.toLayer(T4Toolkit, {
-  t3_handoff: McpToolAccess.actsAsCaller((input) =>
-    Effect.gen(function* () {
-      const ledger = yield* T4Ledger.T4Ledger;
-      const store = yield* T4Store.T4Store;
-      const delivery = yield* T4Delivery.T4Delivery;
-      const config = yield* T4Config.T4ServerConfig;
-      const projects = yield* Project.ProjectService;
-      const now = yield* nowMs;
-      const me = yield* callerThread;
-      const world = yield* ledger.world().pipe(Effect.mapError(ledgerUnavailable));
-      const project = Option.getOrUndefined(
-        yield* projects.getById(me.projectId).pipe(Effect.mapError(unavailable)),
+type HandoffInput = Tool.Parameters<typeof HandoffTool>;
+const HandoffResultJson = Schema.fromJsonString(HandoffTool.successSchema);
+const decodeHandoffResult = Schema.decodeUnknownOption(HandoffResultJson);
+const encodeHandoffResult = Schema.encodeSync(HandoffResultJson);
+
+/** A short stable hash for a handoff's retry key. */
+const fnv1a = (text: string) => {
+  let hash = 0x811c9dc5;
+  for (let index = 0; index < text.length; index += 1) {
+    hash ^= text.charCodeAt(index);
+    hash = Math.imul(hash, 0x01000193);
+  }
+  return (hash >>> 0).toString(16);
+};
+
+const SAME_MESSAGE_WINDOW_MS = 60 * 60_000;
+
+/**
+ * t4 fork: a handoff runs once per retry key (AI-93). A T3 restart cut handoffs mid-call and the
+ * agent could not tell whether it had gone out; repeating it now returns the first result.
+ */
+const handoffOnce = Effect.fn("t4.handoffOnce")(function* (input: HandoffInput) {
+  const body = input.message?.trim() ?? "";
+  if (input.check === true || body.length === 0) return yield* handoff(input);
+  const store = yield* T4Store.T4Store;
+  const me = yield* callerThread;
+  const now = yield* nowMs;
+  const explicit = input.clientRequestId?.trim() || undefined;
+  const key = `handoff:${me.id}:${
+    explicit ??
+    `m${fnv1a([input.to ?? "", input.done, input.ask, input.fyi, input.interrupt, body].join("\u0000"))}`
+  }`;
+  const earlier = yield* store.toolCall(key).pipe(Effect.orElseSucceed(() => undefined));
+  const recent =
+    earlier !== undefined &&
+    (explicit !== undefined || now - Date.parse(earlier.startedAt) < SAME_MESSAGE_WINDOW_MS);
+  if (recent && earlier.finishedAt === null && earlier.current) {
+    return yield* invalid("this same handoff is being sent right now - don't send it again");
+  }
+  const first =
+    recent && earlier.result !== null
+      ? Option.getOrUndefined(decodeHandoffResult(earlier.result))
+      : undefined;
+  if (first !== undefined && earlier !== undefined) {
+    return {
+      ...first,
+      notes: [
+        `already handed over ${ago(Date.parse(earlier.startedAt), now)} ago with this same ${explicit === undefined ? "message" : "clientRequestId"} - not sent again`,
+        ...first.notes,
+      ],
+    };
+  }
+  yield* store
+    .startToolCall({
+      id: key,
+      threadId: me.id,
+      tool: "t3_handoff",
+      summary: ToolCallLog.callSummary("t3_handoff", input),
+    })
+    .pipe(Effect.ignoreCause({ log: true }));
+  return yield* handoff(input).pipe(
+    Effect.onExit((exit) =>
+      store
+        .finishToolCall(key, exit._tag === "Success" ? encodeHandoffResult(exit.value) : "failed")
+        .pipe(Effect.ignoreCause({ log: true })),
+    ),
+  );
+});
+
+const handoff = Effect.fn("t4.handoff")(function* (input: HandoffInput) {
+  const ledger = yield* T4Ledger.T4Ledger;
+  const store = yield* T4Store.T4Store;
+  const delivery = yield* T4Delivery.T4Delivery;
+  const config = yield* T4Config.T4ServerConfig;
+  const projects = yield* Project.ProjectService;
+  const now = yield* nowMs;
+  const me = yield* callerThread;
+  const world = yield* ledger.world().pipe(Effect.mapError(ledgerUnavailable));
+  const project = Option.getOrUndefined(
+    yield* projects.getById(me.projectId).pipe(Effect.mapError(unavailable)),
+  );
+  if (project === undefined) return yield* invalid("Your thread's project was not found.");
+  const includeRetired = input.includeRetired === true;
+
+  if (input.check === true) {
+    const rm = yield* ledger
+      .findReleaseManager(world, project.id, includeRetired)
+      .pipe(Effect.mapError(ledgerUnavailable));
+    return {
+      to: rm === undefined ? null : summaryOf(rm, now),
+      isReleaseManager: rm !== undefined,
+      createdReleaseManager: false,
+      delivery: null,
+      settled: 0,
+      nowOwesYou: false,
+      youStillOweThem: false,
+      notes: [
+        rm === undefined ? "no release manager for this project" : `release manager: ${rm.title}`,
+      ],
+    };
+  }
+
+  let done = input.done === true;
+  let ask = input.ask === true;
+  let fyi = input.fyi === true;
+  if (fyi && ask)
+    return yield* invalid("`fyi` asks for nothing; `ask` asks for a reply - pick one");
+  if (input.to !== undefined && !(done || ask || fyi)) {
+    return yield* invalid(
+      "say what this handoff does to the ledger:\n" +
+        "  done   it answers what you owe them (settles their handoff to you)\n" +
+        "  ask    they owe you a reply (`t3_owed` shows it on their side)\n" +
+        "  fyi    neither - nothing settled, nothing asked\n" +
+        "`done` combines with `ask` (finished, and now asking something new) or `fyi` (finished, nothing more).",
+    );
+  }
+  if (input.to === undefined && fyi) {
+    return yield* invalid(
+      "a handoff to the release manager asks it to release - for information only, use `t3_thread_send`",
+    );
+  }
+  const body = input.message?.trim() ?? "";
+  if (body.length === 0) return yield* invalid("empty handoff: pass `message`");
+
+  const notes: Array<string> = [];
+  const meIsRm = ledger.isReleaseManager(world, me);
+  let target: Shell | undefined;
+  if (input.to !== undefined) {
+    target = yield* resolveRef(input.to, world);
+    if (target.id === me.id) return yield* invalid("that is this thread");
+    if (ledger.isReleaseManager(world, target) && !meIsRm && !ask) {
+      // Anything an owner hands the release manager is a release request.
+      notes.push(
+        "a handoff to the release manager always asks it to release - recorded as a request",
       );
-      if (project === undefined) return yield* invalid("Your thread's project was not found.");
-      const includeRetired = input.includeRetired === true;
+      ask = true;
+      fyi = false;
+    }
+  } else {
+    if (meIsRm) {
+      return yield* invalid(
+        "you are the release manager - answer owners with `t3_handoff` and `to`",
+      );
+    }
+    target = yield* ledger
+      .findReleaseManager(world, project.id, includeRetired)
+      .pipe(Effect.mapError(ledgerUnavailable));
+    ask = true;
+  }
 
-      if (input.check === true) {
-        const rm = yield* ledger
-          .findReleaseManager(world, project.id, includeRetired)
-          .pipe(Effect.mapError(ledgerUnavailable));
-        return {
-          to: rm === undefined ? null : summaryOf(rm, now),
-          isReleaseManager: rm !== undefined,
-          createdReleaseManager: false,
-          delivery: null,
-          settled: 0,
-          nowOwesYou: false,
-          youStillOweThem: false,
-          notes: [
-            rm === undefined
-              ? "no release manager for this project"
-              : `release manager: ${rm.title}`,
-          ],
-        };
-      }
+  const labels = [
+    ...(done ? ["answers your handoff"] : []),
+    ask ? "reply expected" : "no reply needed",
+  ];
+  const toReleaseManager =
+    !meIsRm && (target === undefined || ledger.isReleaseManager(world, target));
+  const userWord = toReleaseManager ? yield* latestUserWord(me, now) : "";
+  // t4 fork: a release manager's queue and debts ride on the handoff, and it answers through
+  // release_queue, so it gets no footer (AI-93: 984 queue reads and 514 t3_owed in 98 h).
+  // Queued first, so the brief the release manager reads already lists it.
+  const queuedPr =
+    toReleaseManager && target !== undefined ? yield* queueHandedOffPr(me, body) : undefined;
+  if (queuedPr !== undefined) notes.push(`PR #${queuedPr} is in the release manager's queue`);
+  const rmBrief =
+    toReleaseManager && target !== undefined
+      ? yield* T4Releases.releaseManagerBriefFor(target, world, ask ? me : undefined)
+      : "";
+  const header = rmBrief + handoffHeader(me, labels) + userWord;
+  const footer =
+    ask && !toReleaseManager
+      ? `\n\n---\nAnswer with \`t3_handoff\` (to: "${shortId(me.id)}", done: true; add fyi: true if you ask nothing back). \`t3_owed\` lists what you still owe.`
+      : "";
+  const summary = (body.split("\n")[0] ?? "").slice(0, 160);
 
-      let done = input.done === true;
-      let ask = input.ask === true;
-      let fyi = input.fyi === true;
-      if (fyi && ask)
-        return yield* invalid("`fyi` asks for nothing; `ask` asks for a reply - pick one");
-      if (input.to !== undefined && !(done || ask || fyi)) {
-        return yield* invalid(
-          "say what this handoff does to the ledger:\n" +
-            "  done   it answers what you owe them (settles their handoff to you)\n" +
-            "  ask    they owe you a reply (`t3_owed` shows it on their side)\n" +
-            "  fyi    neither - nothing settled, nothing asked\n" +
-            "`done` combines with `ask` (finished, and now asking something new) or `fyi` (finished, nothing more).",
-        );
-      }
-      if (input.to === undefined && fyi) {
-        return yield* invalid(
-          "a handoff to the release manager asks it to release - for information only, use `t3_thread_send`",
-        );
-      }
-      const body = input.message?.trim() ?? "";
-      if (body.length === 0) return yield* invalid("empty handoff: pass `message`");
-
-      const notes: Array<string> = [];
-      const meIsRm = ledger.isReleaseManager(world, me);
-      let target: Shell | undefined;
-      if (input.to !== undefined) {
-        target = yield* resolveRef(input.to, world);
-        if (target.id === me.id) return yield* invalid("that is this thread");
-        if (ledger.isReleaseManager(world, target) && !meIsRm && !ask) {
-          // Anything an owner hands the release manager is a release request.
-          notes.push(
-            "a handoff to the release manager always asks it to release - recorded as a request",
-          );
-          ask = true;
-          fyi = false;
-        }
-      } else {
-        if (meIsRm) {
-          return yield* invalid(
-            "you are the release manager - answer owners with `t3_handoff` and `to`",
-          );
-        }
-        target = yield* ledger
-          .findReleaseManager(world, project.id, includeRetired)
-          .pipe(Effect.mapError(ledgerUnavailable));
-        ask = true;
-      }
-
-      const labels = [
-        ...(done ? ["answers your handoff"] : []),
-        ask ? "reply expected" : "no reply needed",
-      ];
-      const toReleaseManager =
-        !meIsRm && (target === undefined || ledger.isReleaseManager(world, target));
-      const userWord = toReleaseManager ? yield* latestUserWord(me, now) : "";
-      const header = handoffHeader(me, labels) + userWord;
-      const footer = ask
-        ? `\n\n---\nAnswer with \`t3_handoff\` (to: "${shortId(me.id)}", done: true; add fyi: true if you ask nothing back). \`t3_owed\` lists what you still owe.`
-        : "";
-      const summary = (body.split("\n")[0] ?? "").slice(0, 160);
-
-      if (target === undefined) {
-        // No release manager yet: start one with this handoff as its first turn.
-        const crypto = yield* SecureRandom.SecureRandom;
-        const launches = yield* ThreadLaunch.ThreadLaunchService;
-        const id = yield* crypto.uuidV4().pipe(Effect.orDie);
-        const title = `${config.releaseManagerTitlePrefix}: ${project.title}`;
-        const repo = project.workspaceRoot.split("/").filter(Boolean).at(-1) ?? project.title;
-        const intro =
-          `You are the release manager for ${project.title}: this project's one persistent release thread. ` +
-          `Load the \`release-manager\` skill, and the repo's \`${repo}-release-manager\` skill if there is one, and ` +
-          `follow them. You run in the main checkout and never archive or settle this thread.\n\n`;
-        const modelSelection =
-          config.releaseManagerModel ?? project.defaultModelSelection ?? me.modelSelection;
-        const launched = yield* launches
-          .launch({
-            commandId: CommandId.make(`t4:rm:${id}`),
-            threadId: ThreadId.make(`t4-rm-${id}`),
-            projectId: project.id,
-            title,
-            modelSelection,
-            runtimeMode: "full-access",
-            interactionMode: "default",
-            workspaceStrategy: { type: "root" },
-            initialMessage: {
-              messageId: MessageId.make(`t4:rm:${id}`),
-              senderThreadId: me.id,
-              text: intro + header + body + footer,
-              attachments: [],
-            },
-            createdBy: "agent",
-            creationSource: "mcp",
-          })
-          .pipe(Effect.mapError(unavailable));
-        const rmId = launched.projection.thread.id;
-        const threads = (yield* readCaller()).threads;
-        yield* threads
-          .dispatch({
-            type: "thread.pin",
-            commandId: CommandId.make(`t4:rm-pin:${id}`),
-            threadId: rmId,
-          })
-          .pipe(Effect.ignore);
-        yield* store.setReleaseManager(project.id, rmId).pipe(Effect.mapError(ledgerUnavailable));
-        yield* store
-          .recordHandoff({
-            kind: "handoff",
-            fromThreadId: me.id,
-            fromTitle: me.title,
-            toThreadId: rmId,
-            projectId: project.id,
-            summary,
-          })
-          .pipe(Effect.mapError(ledgerUnavailable));
-        yield* queueHandedOffPr(me, body);
-        notes.push(
-          `no release manager for ${project.title} - started "${title}", pinned, and handed it this`,
-        );
-        const rmShell = yield* threads.getThreadShell(rmId).pipe(Effect.mapError(unavailable));
-        return {
-          to:
-            rmShell === null
-              ? { threadId: rmId, shortId: shortId(rmId), title, state: "running" }
-              : summaryOf(rmShell, now),
-          isReleaseManager: true,
-          createdReleaseManager: true,
-          delivery: "started",
-          settled: 0,
-          nowOwesYou: true,
-          youStillOweThem: false,
-          notes,
-        };
-      }
-
-      const settled = done
-        ? yield* store
-            .settleHandoffs({ fromThreadId: target.id, toThreadId: me.id })
-            .pipe(Effect.mapError(ledgerUnavailable))
-        : 0;
-      // An answer to a thread whose work is closed has no one to read it: the debt is void.
-      if (done && !ask && isRetired(target)) {
-        return {
-          to: summaryOf(target, now),
-          isReleaseManager: ledger.isReleaseManager(world, target),
-          createdReleaseManager: false,
-          delivery: null,
-          settled,
-          nowOwesYou: false,
-          youStillOweThem: false,
-          notes: [
-            `"${target.title}" is ${target.archivedAt === null ? "settled" : "archived"} - its work is closed, so nothing was delivered and anything you owed it is void`,
-          ],
-        };
-      }
-      // t4 fork: a pure fyi soon after the last one to this thread is bundled (fyiDigest).
-      const pureFyi = !done && !ask && input.interrupt !== true;
-      if (
-        pureFyi &&
-        (yield* FyiDigest.queueIfRecent({
-          from: me.id,
-          fromTitle: me.title,
-          to: target.id,
-          body,
-        }))
-      ) {
-        return {
-          to: summaryOf(target, now),
-          isReleaseManager: ledger.isReleaseManager(world, target),
-          createdReleaseManager: false,
-          delivery: "bundled",
-          settled: 0,
-          nowOwesYou: false,
-          youStillOweThem: false,
-          notes: [
-            `bundled: "${target.title}" gets your no-reply-needed updates at most every 10 minutes, as one message - send fyi only for changes it acts on`,
-          ],
-        };
-      }
-      // t4 fork: owners schedule a check for `shipped:`; 31 of 59 such wakes
-      // fired after it had arrived (usa-rs, 2026-10-30). Name them so the owner
-      // deletes the ones that were only for this release.
-      const wakesNote =
-        meIsRm && done && !ledger.isReleaseManager(world, target)
-          ? yield* pendingWakesNote(target.id, now)
-          : "";
-      const delivered = yield* delivery
-        .deliver({
-          target,
-          text: header + body + footer + wakesNote,
+  if (target === undefined) {
+    // No release manager yet: start one with this handoff as its first turn.
+    const crypto = yield* SecureRandom.SecureRandom;
+    const launches = yield* ThreadLaunch.ThreadLaunchService;
+    const id = yield* crypto.uuidV4().pipe(Effect.orDie);
+    const title = `${config.releaseManagerTitlePrefix}: ${project.title}`;
+    const repo = project.workspaceRoot.split("/").filter(Boolean).at(-1) ?? project.title;
+    const intro =
+      `You are the release manager for ${project.title}: this project's one persistent release thread. ` +
+      `Load the \`release-manager\` skill, and the repo's \`${repo}-release-manager\` skill if there is one, and ` +
+      `follow them. You run in the main checkout and never archive or settle this thread.\n\n`;
+    const modelSelection =
+      config.releaseManagerModel ?? project.defaultModelSelection ?? me.modelSelection;
+    const launched = yield* launches
+      .launch({
+        commandId: CommandId.make(`t4:rm:${id}`),
+        threadId: ThreadId.make(`t4-rm-${id}`),
+        projectId: project.id,
+        title,
+        modelSelection,
+        runtimeMode: "full-access",
+        interactionMode: "default",
+        workspaceStrategy: { type: "root" },
+        initialMessage: {
+          messageId: MessageId.make(`t4:rm:${id}`),
           senderThreadId: me.id,
-          interrupt: input.interrupt === true,
-          notice: !ask,
-        })
-        .pipe(Effect.mapError((error) => invalid(error.message)));
-      if (pureFyi) yield* FyiDigest.noteDelivered(me.id, target.id);
-      if (ask) {
-        yield* store
-          .recordHandoff({
-            kind: "handoff",
-            fromThreadId: me.id,
-            fromTitle: me.title,
-            toThreadId: target.id,
-            projectId: target.projectId,
-            summary,
-          })
-          .pipe(Effect.mapError(ledgerUnavailable));
-      }
-      const targetIsRm = ledger.isReleaseManager(world, target);
-      if (targetIsRm && !meIsRm) {
-        const pr = yield* queueHandedOffPr(me, body);
-        if (pr !== undefined) notes.push(`PR #${pr} is in the release manager's queue`);
-      }
-      if (done) {
-        notes.push(
-          settled > 0
-            ? `settled ${settled} open handoff(s) from "${target.title}"`
-            : `"${target.title}" had no open handoff to you - done settled nothing`,
-        );
-      }
-      if (ask) notes.push(`"${target.title}" now owes you a reply (\`t3_owed\` with all)`);
-      const youStillOweThem =
-        !done &&
-        world.live.some((entry) => entry.fromThreadId === target.id && entry.toThreadId === me.id);
-      if (youStillOweThem) {
-        notes.push(
-          `you still owe "${target.title}" an answer - pass done on the handoff that finishes it`,
-        );
-      }
-      return {
-        to: summaryOf(target, now),
-        isReleaseManager: targetIsRm,
-        createdReleaseManager: false,
-        delivery: delivered.how,
-        settled,
-        nowOwesYou: ask,
-        youStillOweThem,
-        notes,
-      };
-    }),
-  ),
+          text: intro + header + body + footer,
+          attachments: [],
+        },
+        createdBy: "agent",
+        creationSource: "mcp",
+      })
+      .pipe(Effect.mapError(unavailable));
+    const rmId = launched.projection.thread.id;
+    const threads = (yield* readCaller()).threads;
+    yield* threads
+      .dispatch({
+        type: "thread.pin",
+        commandId: CommandId.make(`t4:rm-pin:${id}`),
+        threadId: rmId,
+      })
+      .pipe(Effect.ignore);
+    yield* store.setReleaseManager(project.id, rmId).pipe(Effect.mapError(ledgerUnavailable));
+    yield* store
+      .recordHandoff({
+        kind: "handoff",
+        fromThreadId: me.id,
+        fromTitle: me.title,
+        toThreadId: rmId,
+        projectId: project.id,
+        summary,
+      })
+      .pipe(Effect.mapError(ledgerUnavailable));
+    yield* queueHandedOffPr(me, body);
+    notes.push(
+      `no release manager for ${project.title} - started "${title}", pinned, and handed it this`,
+    );
+    const rmShell = yield* threads.getThreadShell(rmId).pipe(Effect.mapError(unavailable));
+    return {
+      to:
+        rmShell === null
+          ? { threadId: rmId, shortId: shortId(rmId), title, state: "running" }
+          : summaryOf(rmShell, now),
+      isReleaseManager: true,
+      createdReleaseManager: true,
+      delivery: "started",
+      settled: 0,
+      nowOwesYou: true,
+      youStillOweThem: false,
+      notes,
+    };
+  }
+
+  const settled = done
+    ? yield* store
+        .settleHandoffs({ fromThreadId: target.id, toThreadId: me.id })
+        .pipe(Effect.mapError(ledgerUnavailable))
+    : 0;
+  // An answer to a thread whose work is closed has no one to read it: the debt is void.
+  if (done && !ask && isRetired(target)) {
+    return {
+      to: summaryOf(target, now),
+      isReleaseManager: ledger.isReleaseManager(world, target),
+      createdReleaseManager: false,
+      delivery: null,
+      settled,
+      nowOwesYou: false,
+      youStillOweThem: false,
+      notes: [
+        `"${target.title}" is ${target.archivedAt === null ? "settled" : "archived"} - its work is closed, so nothing was delivered and anything you owed it is void`,
+      ],
+    };
+  }
+  // t4 fork: a pure fyi soon after the last one to this thread is bundled (fyiDigest).
+  const pureFyi = !done && !ask && input.interrupt !== true;
+  if (
+    pureFyi &&
+    (yield* FyiDigest.queueIfRecent({
+      from: me.id,
+      fromTitle: me.title,
+      to: target.id,
+      body,
+    }))
+  ) {
+    return {
+      to: summaryOf(target, now),
+      isReleaseManager: ledger.isReleaseManager(world, target),
+      createdReleaseManager: false,
+      delivery: "bundled",
+      settled: 0,
+      nowOwesYou: false,
+      youStillOweThem: false,
+      notes: [
+        `bundled: "${target.title}" gets your no-reply-needed updates at most every 10 minutes, as one message - send fyi only for changes it acts on`,
+      ],
+    };
+  }
+  // t4 fork: owners schedule a check for `shipped:`; 31 of 59 such wakes
+  // fired after it had arrived (usa-rs, 2026-10-30). Name them so the owner
+  // deletes the ones that were only for this release.
+  const wakesNote =
+    meIsRm && done && !ledger.isReleaseManager(world, target)
+      ? yield* pendingWakesNote(target.id, now)
+      : "";
+  const delivered = yield* delivery
+    .deliver({
+      target,
+      text: header + body + footer + wakesNote,
+      senderThreadId: me.id,
+      interrupt: input.interrupt === true,
+      patient: pureFyi,
+      notice: !ask,
+    })
+    .pipe(Effect.mapError((error) => invalid(error.message)));
+  if (pureFyi) yield* FyiDigest.noteDelivered(me.id, target.id);
+  if (ask) {
+    yield* store
+      .recordHandoff({
+        kind: "handoff",
+        fromThreadId: me.id,
+        fromTitle: me.title,
+        toThreadId: target.id,
+        projectId: target.projectId,
+        summary,
+      })
+      .pipe(Effect.mapError(ledgerUnavailable));
+  }
+  const targetIsRm = ledger.isReleaseManager(world, target);
+  if (done) {
+    notes.push(
+      settled > 0
+        ? `settled ${settled} open handoff(s) from "${target.title}"`
+        : `"${target.title}" had no open handoff to you - done settled nothing`,
+    );
+  }
+  if (ask) notes.push(`"${target.title}" now owes you a reply (\`t3_owed\` with all)`);
+  const youStillOweThem =
+    !done &&
+    world.live.some((entry) => entry.fromThreadId === target.id && entry.toThreadId === me.id);
+  if (youStillOweThem) {
+    notes.push(
+      `you still owe "${target.title}" an answer - pass done on the handoff that finishes it`,
+    );
+  }
+  return {
+    to: summaryOf(target, now),
+    isReleaseManager: targetIsRm,
+    createdReleaseManager: false,
+    delivery: delivered.how,
+    settled,
+    nowOwesYou: ask,
+    youStillOweThem,
+    notes,
+  };
+});
+
+export const layer = McpToolAccess.toLayer(T4Toolkit, {
+  t3_handoff: McpToolAccess.actsAsCaller(handoffOnce),
 
   t3_owed: McpToolAccess.reads((input) =>
     Effect.gen(function* () {
@@ -861,11 +952,36 @@ export const layer = McpToolAccess.toLayer(T4Toolkit, {
       const now = yield* nowMs;
       const me = yield* callerThread;
       const world = yield* ledger.world().pipe(Effect.mapError(ledgerUnavailable));
+      const meIsRm = ledger.isReleaseManager(world, me);
       const notes: Array<string> = [];
       const notified: Array<string> = [];
+
+      // Waiting on a PR this thread doesn't own (AI-93): it hears staging and shipped too.
+      for (const [ref, stop] of [
+        [input.waitFor, false],
+        [input.stopWaiting, true],
+      ] as const) {
+        if (ref === undefined) continue;
+        if (!Number.isInteger(ref.pr) || ref.pr <= 0) {
+          return yield* invalid(`'${ref.pr}' is not a PR number`);
+        }
+        const project = yield* projectOf(ref.project, me.projectId);
+        const waiter = { projectId: project.id, pr: ref.pr, threadId: me.id };
+        const changed = yield* (
+          stop ? store.removeReleaseWaiter(waiter) : store.addReleaseWaiter(waiter)
+        ).pipe(Effect.mapError(ledgerUnavailable));
+        notes.push(
+          stop
+            ? changed
+              ? `no longer waiting on PR #${ref.pr} in ${project.title}`
+              : `you weren't waiting on PR #${ref.pr} in ${project.title}`
+            : `waiting on PR #${ref.pr} in ${project.title}: you get its staging and shipped notices as they happen - end your turn, no wake needed`,
+        );
+      }
+
       const updates = input.prs ?? [];
       if (updates.length > 0) {
-        if (!ledger.isReleaseManager(world, me)) {
+        if (!meIsRm) {
           return yield* invalid(
             "only this project's release manager records releases - hand your PR over with `t3_handoff` (no `to`)",
           );
@@ -958,6 +1074,7 @@ export const layer = McpToolAccess.toLayer(T4Toolkit, {
                 target,
                 text: header + body + footer + wakesNote,
                 senderThreadId: me.id,
+                patient: !done,
                 notice: !ask,
               })
               .pipe(Effect.result);
@@ -979,22 +1096,101 @@ export const layer = McpToolAccess.toLayer(T4Toolkit, {
             }
             notified.push(`${state}: "${target.title}" (${prs.map((pr) => `#${pr}`).join(", ")})`);
           }
+          // Threads waiting on these PRs hear it too, never twice with their owner's notice.
+          const projectTitle =
+            Option.getOrUndefined(
+              yield* Project.ProjectService.pipe(
+                Effect.flatMap((projects) => projects.getById(me.projectId)),
+                Effect.orElseSucceed(() => Option.none()),
+              ),
+            )?.title ?? "this project";
+          for (const row of changed) {
+            if (row.state !== "staging" && row.state !== "shipped" && row.state !== "failed")
+              continue;
+            const waiters = yield* store
+              .releaseWaiters({ projectId: row.projectId, pr: row.pr })
+              .pipe(Effect.orElseSucceed(() => []));
+            for (const waiter of waiters) {
+              if (row.state === "shipped") {
+                yield* store.removeReleaseWaiter(waiter).pipe(Effect.ignore);
+              }
+              const target = world.byId.get(waiter.threadId);
+              if (target === undefined || isRetired(target) || target.id === row.ownerThreadId)
+                continue;
+              const sent = yield* delivery
+                .deliver({
+                  target,
+                  text: T4Releases.waiterNotice(row.state, row, projectTitle),
+                  senderThreadId: me.id,
+                  patient: true,
+                  notice: true,
+                })
+                .pipe(Effect.result);
+              if (Result.isSuccess(sent)) {
+                notified.push(`${row.state} (waiting): "${target.title}" (#${row.pr})`);
+              }
+            }
+          }
         }
       }
-      const rows = yield* store
-        .releaseQueue({
-          projectId: me.projectId,
-          shippedSince:
-            input.all === true
-              ? DateTime.formatIso(DateTime.makeUnsafe(now - 7 * 86_400_000))
-              : undefined,
-        })
+
+      // Reads: a release manager sees its whole queue; anyone else its own PRs and the ones it
+      // waits on, unless `all`. Rows are compact unless `detail` (AI-93: reads were 84 KB).
+      const shippedSince =
+        input.all === true
+          ? DateTime.formatIso(DateTime.makeUnsafe(now - 7 * 86_400_000))
+          : undefined;
+      const projectRows = yield* store
+        .releaseQueue({ projectId: me.projectId, shippedSince })
         .pipe(Effect.mapError(ledgerUnavailable));
-      return {
-        entries: rows.map((row) => releaseEntryOf(row, world, now)),
-        notified,
-        notes,
-      };
+      const waited = yield* store
+        .releaseWaiters({ threadId: me.id })
+        .pipe(Effect.mapError(ledgerUnavailable));
+      const waitedElsewhere = waited.filter((waiter) => waiter.projectId !== me.projectId);
+      const otherRows =
+        waitedElsewhere.length === 0
+          ? []
+          : (yield* store
+              .releaseQueue({
+                shippedSince:
+                  shippedSince ?? DateTime.formatIso(DateTime.makeUnsafe(now - 86_400_000)),
+              })
+              .pipe(Effect.mapError(ledgerUnavailable))).filter((row) =>
+              waitedElsewhere.some(
+                (waiter) => waiter.projectId === row.projectId && waiter.pr === row.pr,
+              ),
+            );
+      const isWaited = (row: T4Store.T4ReleaseRow) =>
+        waited.some((waiter) => waiter.projectId === row.projectId && waiter.pr === row.pr);
+      const scoped =
+        meIsRm || input.all === true
+          ? projectRows
+          : projectRows.filter((row) => row.ownerThreadId === me.id || isWaited(row));
+      const rows = [...scoped, ...otherRows];
+      const hidden = projectRows.length - scoped.length;
+      if (hidden > 0) {
+        notes.push(
+          `${hidden} other PR${hidden === 1 ? "" : "s"} in this project's queue not shown - pass \`all\` to see the whole queue`,
+        );
+      }
+      const lastReadAt = lastReads.get(me.id);
+      lastReads.set(me.id, DateTime.formatIso(DateTime.makeUnsafe(now)));
+      if (input.detail === true) {
+        return {
+          entries: rows.map((row) => releaseEntryOf(row, world, now)),
+          notified,
+          notes,
+        };
+      }
+      const entries = rows.map((row) => T4Releases.compactEntry(row, world, now, lastReadAt));
+      if (
+        lastReadAt !== undefined &&
+        entries.length > 0 &&
+        entries.every((entry) => !entry.changed)
+      ) {
+        notes.push(`nothing changed since your last read ${ago(Date.parse(lastReadAt), now)} ago`);
+      }
+      return { entries, notified, notes };
     }),
   ),
 });

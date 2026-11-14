@@ -39,6 +39,7 @@ import * as Orchestrator from "./Orchestrator.ts";
 import * as ProjectionStore from "./ProjectionStore.ts";
 import {
   evaluatePullRequestWatch,
+  type PullRequestWatchRemark,
   PULL_REQUEST_WATCH_NO_CHECKS_MS,
   pullRequestWatchMessage,
 } from "./pullRequestWatch.ts";
@@ -352,7 +353,14 @@ export const make = Effect.gen(function* () {
         string,
         { count: number; comments: ReadonlyArray<PullRequestComment> }
       >();
-      const remarks = [...activity.comments];
+      const outdated = new Set(
+        activity.reviewThreads
+          .filter((thread) => thread.isOutdated)
+          .flatMap((thread) => thread.comments.map((comment) => comment.id)),
+      );
+      const remarks: Array<PullRequestWatchRemark> = activity.comments.map((comment) =>
+        outdated.has(comment.id) ? { ...comment, outdated: true } : comment,
+      );
       for (const thread of paginated) {
         let cursor = thread.nextCommentsCursor ?? null;
         const count = thread.commentCount ?? 0;
@@ -384,7 +392,11 @@ export const make = Effect.gen(function* () {
           tail = { count, comments: [...comments.values()] };
         }
         tails.set(thread.id, tail);
-        remarks.push(...tail.comments);
+        remarks.push(
+          ...(thread.isOutdated
+            ? tail.comments.map((comment) => ({ ...comment, outdated: true }))
+            : tail.comments),
+        );
       }
       threadTails.set(key, {
         fetchedAt: reuse ? cached.fetchedAt : now,

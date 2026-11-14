@@ -4,6 +4,7 @@
  * contract: `create_worktree()` in t4's `t3agents.py`.
  */
 import * as Effect from "effect/Effect";
+import * as Semaphore from "effect/Semaphore";
 
 import { issueIdIn, slugOf } from "./T4Threads.ts";
 
@@ -28,3 +29,29 @@ export const uniqueWorktreePath = Effect.fn("t4.uniqueWorktreePath")(function* (
   for (let n = 2; yield* exists(candidate); n++) candidate = join(parentDir, `${name}-${n}`);
   return candidate;
 });
+
+/**
+ * Worktree creation, one at a time per repository: two launches into one repo picked the same free
+ * directory or collided on git's own locks. An attempt the `retryable` check clears runs once more.
+ */
+export const makeWorktreeCreationLock = () => {
+  const locks = new Map<string, Semaphore.Semaphore>();
+  return <A, E, R>(
+    repository: string,
+    attempt: Effect.Effect<A, E, R>,
+    retryable: (error: E) => Effect.Effect<boolean, never, R>,
+  ): Effect.Effect<A, E, R> => {
+    let lock = locks.get(repository);
+    if (lock === undefined) {
+      lock = Semaphore.makeUnsafe(1);
+      locks.set(repository, lock);
+    }
+    return lock.withPermit(
+      attempt.pipe(
+        Effect.catch((error) =>
+          retryable(error).pipe(Effect.flatMap((again) => (again ? attempt : Effect.fail(error)))),
+        ),
+      ),
+    );
+  };
+};

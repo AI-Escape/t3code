@@ -34,7 +34,7 @@ describe("t4 release queue helpers", () => {
 
   it("writes one notice per owner and state", () => {
     expect(releaseNotice("staging", [12], null)).toBe(
-      "staging: PR #12 is on staging. Verify there.",
+      "staging: PR #12 is on staging. Verify there. Don't settle yet: `shipped:` comes when it is live.",
     );
     expect(releaseNotice("shipped", [12, 14], null)).toBe(
       "shipped: PRs #12, #14 live in production. Verify, close your Linear.",
@@ -46,9 +46,13 @@ describe("t4 release queue helpers", () => {
 });
 
 const OWNER = ThreadId.make("t4-owner-0001");
+const OTHER = ThreadId.make("t4-owner-0002");
+const WAITER = ThreadId.make("t4-waiter-0001");
 const RM = ThreadId.make("t4-rm-0001");
 const shells = new Map([
   [OWNER, { ...McpToolAccessTestkit.liveThreadShell(OWNER), title: "USA-9 Fix" }],
+  [OTHER, { ...McpToolAccessTestkit.liveThreadShell(OTHER), title: "USA-10 Other" }],
+  [WAITER, { ...McpToolAccessTestkit.liveThreadShell(WAITER), title: "USA-455 Waits" }],
   [
     RM,
     {
@@ -84,7 +88,7 @@ const scopeOf = (threadId: ThreadId): McpInvocationContext.McpInvocationScope =>
   capabilities: new Set(["orchestration"]),
 });
 
-const delivered: Array<{ to: string; text: string; notice: boolean }> = [];
+const delivered: Array<{ to: string; text: string; notice: boolean; patient: boolean }> = [];
 
 const ledgerLayer = Layer.effect(
   T4Ledger.T4Ledger,
@@ -127,6 +131,7 @@ const layer = McpHttpServer.layerT4Toolkit.pipe(
               to: input.target.id,
               text: input.text,
               notice: input.notice === true,
+              patient: input.patient === true,
             });
             return { delivery: "started", how: "started a turn" } as never;
           }),
@@ -134,6 +139,10 @@ const layer = McpHttpServer.layerT4Toolkit.pipe(
       Layer.mock(Project.ProjectService)({
         getById: (id) =>
           Effect.succeedSome({ id, title: "app", workspaceRoot: "/srv/Code/app" } as never),
+        listShells: () =>
+          Effect.succeed([
+            { id: McpToolAccessTestkit.liveThreadShell(OWNER).projectId, title: "app" },
+          ] as never),
       }),
       Layer.mock(ThreadLaunch.ThreadLaunchService)({}),
       Layer.mock(T4RunWatch.T4RunWatch)({}),
@@ -173,8 +182,29 @@ it.effect(
 
       const queued = yield* call(RM, "release_queue", {});
       expect(queued.body.entries).toMatchObject([
-        { pr: 2340, state: "queued", issue: "USA-9", owner: { title: "USA-9 Fix" } },
+        { pr: 2340, state: "queued", issue: "USA-9", owner: "USA-9 Fix (owner-00)", changed: true },
       ]);
+      const detail = yield* call(RM, "release_queue", { detail: true });
+      expect(detail.body.entries[0]).toMatchObject({ owner: { title: "USA-9 Fix" } });
+      // Read again with nothing moved: the rows say so.
+      const again = yield* call(RM, "release_queue", {});
+      expect(again.body.entries[0].changed).toBe(false);
+      expect(again.body.notes[0]).toMatch(/^nothing changed since your last read/);
+
+      // Another owner's PR, and a thread waiting on a PR it doesn't own.
+      yield* call(OTHER, "t3_handoff", { message: "PR #2399 ready, merge word given" });
+      const waiting = yield* call(WAITER, "release_queue", { waitFor: { pr: 2340 } });
+      expect(waiting.body.notes[0]).toMatch(/^waiting on PR #2340 in app/);
+      // Owners see their own PRs (and the ones they wait on), not the whole queue.
+      const mine = yield* call(OWNER, "release_queue", {});
+      expect(mine.body.entries.map((e: { pr: number }) => e.pr)).toEqual([2340]);
+      expect(mine.body.notes).toContain(
+        "1 other PR in this project's queue not shown - pass `all` to see the whole queue",
+      );
+      const theirs = yield* call(WAITER, "release_queue", {});
+      expect(theirs.body.entries.map((e: { pr: number }) => e.pr)).toEqual([2340]);
+      const everything = yield* call(OWNER, "release_queue", { all: true });
+      expect(everything.body.entries.map((e: { pr: number }) => e.pr)).toEqual([2340, 2399]);
 
       // Owners can read the queue but not move it.
       const refused = yield* call(OWNER, "release_queue", {
@@ -195,18 +225,25 @@ it.effect(
           { pr: 2341, state: "staging", owner: "USA-9 Fix" },
         ],
       });
-      expect(staged.body.notified).toEqual(['staging: "USA-9 Fix" (#2340, #2341)']);
-      expect(delivered).toHaveLength(1);
-      expect(delivered[0]).toMatchObject({ to: OWNER, notice: true });
+      expect(staged.body.notified).toEqual([
+        'staging: "USA-9 Fix" (#2340, #2341)',
+        'staging (waiting): "USA-455 Waits" (#2340)',
+      ]);
+      expect(delivered).toHaveLength(2);
+      // staging asks nothing: it waits for a running turn instead of cutting its command.
+      expect(delivered[0]).toMatchObject({ to: OWNER, notice: true, patient: true });
+      expect(delivered[1]).toMatchObject({ to: WAITER, notice: true, patient: true });
+      expect(delivered[1]!.text).toContain("PR #2340");
+      expect(delivered[1]!.text).toContain("which you are waiting on, is on staging");
       expect(delivered[0]!.text).toContain(
         "staging: PRs #2340, #2341 are on staging. Verify there.",
       );
       // staging is fyi: the owner's handoff stays open.
-      expect((yield* store.openHandoffs()).map((h) => h.fromThreadId)).toEqual([OWNER]);
+      expect((yield* store.openHandoffs()).map((h) => h.fromThreadId)).toEqual([OWNER, OTHER]);
 
       // The same state again sends nothing.
       yield* call(RM, "release_queue", { prs: [{ pr: 2340, state: "staging" }] });
-      expect(delivered).toHaveLength(1);
+      expect(delivered).toHaveLength(2);
 
       const failedWithoutNote = yield* call(RM, "release_queue", {
         prs: [{ pr: 2341, state: "failed" }],
@@ -219,13 +256,53 @@ it.effect(
           { pr: 2341, state: "shipped" },
         ],
       });
-      expect(shipped.body.notified).toEqual(['shipped: "USA-9 Fix" (#2340, #2341)']);
-      expect(delivered[1]!.text).toContain("answers your handoff");
-      expect(delivered[1]!.text).toContain("shipped: PRs #2340, #2341 live in production");
-      expect(yield* store.openHandoffs()).toEqual([]);
-      expect(shipped.body.entries).toEqual([]);
+      expect(shipped.body.notified).toEqual([
+        'shipped: "USA-9 Fix" (#2340, #2341)',
+        'shipped (waiting): "USA-455 Waits" (#2340)',
+      ]);
+      // shipped answers the owner's handoff, so it reaches a running turn at once.
+      expect(delivered[2]).toMatchObject({ to: OWNER, patient: false });
+      expect(delivered[2]!.text).toContain("answers your handoff");
+      expect(delivered[2]!.text).toContain("shipped: PRs #2340, #2341 live in production");
+      expect(delivered[3]!.text).toContain("You are no longer waiting on it");
+      expect((yield* store.openHandoffs()).map((h) => h.fromThreadId)).toEqual([OTHER]);
+      expect(shipped.body.entries.map((e: { pr: number }) => e.pr)).toEqual([2399]);
+      expect(yield* store.releaseWaiters({ threadId: WAITER })).toEqual([]);
       const recent = yield* call(RM, "release_queue", { all: true });
-      expect(recent.body.entries.map((e: { pr: number }) => e.pr)).toEqual([2340, 2341]);
+      expect(recent.body.entries.map((e: { pr: number }) => e.pr)).toEqual([2340, 2341, 2399]);
       expect(recent.body.entries[0]).toMatchObject({ commit: "abc1234", state: "shipped" });
+    }).pipe(Effect.provide(layer)),
+);
+
+it.effect(
+  "a handoff to the release manager carries its queue and no footer, and runs once per key",
+  () =>
+    Effect.gen(function* () {
+      delivered.length = 0;
+      const message = "PR #77 is green - merge word given (USA-9)";
+      const first = yield* call(OWNER, "t3_handoff", { message });
+      expect(first.isError).toBe(false);
+      expect(delivered).toHaveLength(1);
+      const text = delivered[0]!.text;
+      expect(text).toMatch(/^\(t4: Your queue: \d+ open - .*#77 queued/);
+      expect(text).toContain("You owe 1 thread an answer");
+      expect(text).not.toContain("t3_owed` lists what you still owe");
+
+      // The same handoff again (a retry after a cut connection) is not sent twice.
+      const repeat = yield* call(OWNER, "t3_handoff", { message });
+      expect(repeat.isError).toBe(false);
+      expect(repeat.body.notes[0]).toMatch(/^already handed over .* with this same message/);
+      expect(delivered).toHaveLength(1);
+      const keyed = yield* call(OWNER, "t3_handoff", {
+        message: "PR #78 too",
+        clientRequestId: "k1",
+      });
+      const keyedAgain = yield* call(OWNER, "t3_handoff", {
+        message: "PR #78 too (retry)",
+        clientRequestId: "k1",
+      });
+      expect(keyed.isError).toBe(false);
+      expect(keyedAgain.body.notes[0]).toMatch(/clientRequestId - not sent again$/);
+      expect(delivered).toHaveLength(2);
     }).pipe(Effect.provide(layer)),
 );

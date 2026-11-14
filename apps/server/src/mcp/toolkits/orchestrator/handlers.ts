@@ -181,14 +181,16 @@ const handlers = {
       const scope = yield* McpInvocationContext.McpInvocationContext;
       const service = yield* OrchestratorMcpService.OrchestratorMcpService;
       const result = yield* service.listScheduledTasks(scope, input);
+      // t4 fork (AI-93): one task in full by id; list rows are compact.
+      if (input.scheduledTaskId !== undefined) return { tasks: [], task: result.tasks[0] };
       // t4 fork: a thread sees its own pending tasks unless it asks for all.
       const { caller } = yield* readCaller();
-      if (all === true || caller === undefined || input.projectId !== undefined) return result;
-      return {
-        tasks: result.tasks.filter(
-          (task) => task.boundThreadId === caller.id && task.nextRunAt !== null,
-        ),
-      };
+      if (all === true || caller === undefined || input.projectId !== undefined) {
+        return OrchestratorMcpService.scheduledTaskRows(result.tasks);
+      }
+      return OrchestratorMcpService.scheduledTaskRows(
+        result.tasks.filter((task) => task.boundThreadId === caller.id && task.nextRunAt !== null),
+      );
     }),
   ),
   delete_scheduled_task: McpToolAccess.writes((input) =>
@@ -225,7 +227,13 @@ const handlers = {
         ...result,
         threads: result.threads.map((thread) => {
           const t4 = facts.get(thread.threadId);
-          return t4 === undefined ? thread : { ...thread, t4 };
+          if (t4 === undefined) return thread;
+          // t4 fork (AI-93): a compact row leaves out a parent it does not have.
+          const { parentThreadId, ...rest } = t4;
+          return {
+            ...thread,
+            t4: input.detail === true || parentThreadId !== null ? t4 : rest,
+          };
         }),
       };
     }),
@@ -266,8 +274,11 @@ const handlers = {
             .getThreadShell(input.threadId)
             .pipe(Effect.mapError(unavailable));
           if (target !== null) {
+            // t4 fork: a plain message from another thread waits for a running turn
+            // to end instead of cutting the command it runs; `steer`/`restart` cut in (AI-93).
+            const mode = (input.mode ?? "auto") === "auto" ? ("queue" as const) : input.mode;
             const message = yield* t4.value
-              .decorate({ sender: caller, target, text: input.message })
+              .decorate({ sender: caller, target, text: input.message, queued: mode === "queue" })
               .pipe(
                 Effect.mapError(
                   (error) =>
@@ -277,7 +288,7 @@ const handlers = {
                     }),
                 ),
               );
-            return yield* service.sendToThread(scope, { ...input, message });
+            return yield* service.sendToThread(scope, { ...input, message, mode });
           }
         }
         return yield* service.sendToThread(scope, input);

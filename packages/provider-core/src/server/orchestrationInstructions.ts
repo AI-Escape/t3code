@@ -14,7 +14,7 @@ The \`t3-code\` MCP server is how your thread works with other threads. Its tool
 - \`t3_handoff\` moves work between threads with an explicit effect on the ledger of who owes whom an answer. The ledger moves only on its flags, never on wording: \`done\` answers what you owe that thread, \`ask\` makes it owe you a reply, \`fyi\` does neither; \`done\` combines with \`ask\` or \`fyi\`. One of them is required when you name \`to\`.
 - Each project has one persistent release manager. When your work is finished (your PR is green and has the merge word), \`t3_handoff\` without \`to\` hands it the release; it answers with \`t3_handoff\` \`done\`. A handoff to the release manager is always a request. Release managers never settle.
 - \`t3_owed\` lists what you still owe. Answer each before you settle.
-- \`t3_thread_send\` sends a plain message: it steers a running turn, and \`restart\` interrupts it. A message never moves the ledger; use \`t3_handoff\` for anything owed or asked.
+- \`t3_thread_send\` sends a plain message: a running turn gets it when that turn ends, \`steer\` cuts in now, and \`restart\` interrupts it. A message never moves the ledger; use \`t3_handoff\` for anything owed or asked.
 - When your work is fully closed - nothing owed, nothing awaiting the user - settle your thread as the last act of the turn (\`t3_thread_organize\` with \`settle\`). A later message, other than a handoff that asks nothing, cancels it and you are told.
 - \`t3_decisions\` lists the user's earlier answers to ask-user questions; an answer that isn't one of the offered options is a standing rule. Check it before asking something the user may already have decided.`,
   `### Subagents

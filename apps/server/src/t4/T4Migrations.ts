@@ -140,10 +140,40 @@ const Migration0003 = Effect.gen(function* () {
   `;
 });
 
+// Threads waiting on a PR they don't own hear its staging and shipped notices.
+// Write tool calls are logged so a restart note can say which ones went through.
+const Migration0004 = Effect.gen(function* () {
+  const sql = yield* SqlClient.SqlClient;
+  yield* sql`
+    CREATE TABLE IF NOT EXISTS t4_release_waiters (
+      project_id TEXT NOT NULL,
+      pr INTEGER NOT NULL,
+      thread_id TEXT NOT NULL,
+      created_at TEXT NOT NULL,
+      PRIMARY KEY (project_id, pr, thread_id)
+    ) WITHOUT ROWID
+  `;
+  yield* sql`CREATE INDEX IF NOT EXISTS t4_release_waiters_thread ON t4_release_waiters (thread_id)`;
+  yield* sql`
+    CREATE TABLE IF NOT EXISTS t4_tool_calls (
+      id TEXT PRIMARY KEY,
+      thread_id TEXT NOT NULL,
+      tool TEXT NOT NULL,
+      summary TEXT NOT NULL,
+      boot TEXT NOT NULL,
+      started_at TEXT NOT NULL,
+      finished_at TEXT,
+      result TEXT
+    ) WITHOUT ROWID
+  `;
+  yield* sql`CREATE INDEX IF NOT EXISTS t4_tool_calls_thread ON t4_tool_calls (thread_id)`;
+});
+
 const t4MigrationEntries = [
   [1, "T4SessionTooling", Migration0001],
   [2, "T4ThreadRoles", Migration0002],
   [3, "T4ReleaseQueue", Migration0003],
+  [4, "T4WaitersAndToolCalls", Migration0004],
 ] as const;
 
 const run = Migrator.make({});

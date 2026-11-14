@@ -1056,6 +1056,42 @@ it.effect("only the caller that prepared a pending upload can discard it", () =>
   ),
 );
 
+const layerOrchestratorToolkitWith = (mocks: {
+  readonly threads?: Partial<ThreadManagement.ThreadManagementService["Service"]>;
+  readonly scheduledTasks?: Partial<ScheduledTaskService.ScheduledTaskService["Service"]>;
+}) =>
+  layerOrchestratorToolkit.pipe(
+    Layer.provideMerge(McpHttpServer.layerInProcessMcpServer),
+    Layer.provide(NodeCrypto.layer),
+    Layer.provide(Layer.mock(ThreadManagement.ThreadManagementService)(mocks.threads ?? {})),
+    Layer.provide(ServerSettings.layerTest()),
+    Layer.provide(Layer.mock(ProviderRegistry.ProviderRegistry)({})),
+    Layer.provide(Layer.mock(ProviderAdapterRegistry.ProviderAdapterRegistryV2)({})),
+    Layer.provide(
+      Layer.mock(ScheduledTaskService.ScheduledTaskService)(mocks.scheduledTasks ?? {}),
+    ),
+    Layer.provide(Layer.mock(ProjectService.ProjectService)({})),
+    Layer.provide(Layer.mock(SecretRequests.SecretRequests)({})),
+    Layer.provide(Layer.mock(PeerForwarding.PeerForwarding)({})),
+    Layer.provide(Layer.mock(PeerLinkRequests.PeerLinkRequests)({})),
+    Layer.provide(Layer.mock(PeerLinks.PeerLinks)({})),
+    Layer.provide(Layer.mock(RemoteDelegation.RemoteDelegation)({})),
+  );
+
+const callAsClient = (name: string, args: Record<string, unknown>) =>
+  Effect.gen(function* () {
+    const server = yield* McpServer.McpServer;
+    return yield* server
+      .callTool({ name, arguments: args })
+      .pipe(
+        Effect.provideService(
+          McpInvocationContext.McpInvocationContext,
+          clientScope("full-access"),
+        ),
+        Effect.provideService(McpSchema.McpServerClient, client),
+      );
+  });
+
 it.effect(
   "t3_thread_list settled:false with an empty statuses list lists the unsettled threads",
   () => {
@@ -1065,46 +1101,100 @@ it.effect(
       settledOverride: "settled",
     } as const;
     return Effect.gen(function* () {
-      const server = yield* McpServer.McpServer;
-      const result = yield* server
-        .callTool({
-          name: "t3_thread_list",
-          arguments: { projectId: unsettled.projectId, settled: false, statuses: [] },
-        })
-        .pipe(
-          Effect.provideService(
-            McpInvocationContext.McpInvocationContext,
-            clientScope("full-access"),
-          ),
-          Effect.provideService(McpSchema.McpServerClient, client),
-        );
+      const args = { projectId: unsettled.projectId, settled: false, statuses: [] };
+      const result = yield* callAsClient("t3_thread_list", args);
       expect(result.isError).toBe(false);
-      expect(result.structuredContent).toMatchObject({
-        threads: [{ threadId: unsettled.id, settled: false }],
+      // Compact rows: what agents pick a thread by, and where the rest is.
+      expect(result.structuredContent).toEqual({
+        projectId: unsettled.projectId,
+        currentThreadId: null,
+        threads: [
+          {
+            threadId: unsettled.id,
+            title: unsettled.title,
+            link: expect.any(String),
+            status: "running",
+            updatedAt: expect.any(String),
+          },
+        ],
+        nextCursor: null,
+        total: 1,
+        more: expect.stringContaining("`detail: true`"),
+      });
+
+      const detailed = yield* callAsClient("t3_thread_list", { ...args, detail: true });
+      expect(detailed.structuredContent).toMatchObject({
+        threads: [
+          {
+            threadId: unsettled.id,
+            projectId: unsettled.projectId,
+            model: "gpt-5",
+            runtimeMode: "full-access",
+            settled: false,
+            createdAt: expect.any(String),
+          },
+        ],
         total: 1,
       });
+      expect(detailed.structuredContent).not.toHaveProperty("more");
     }).pipe(
       Effect.provide(
-        layerOrchestratorToolkit.pipe(
-          Layer.provideMerge(McpHttpServer.layerInProcessMcpServer),
-          Layer.provide(NodeCrypto.layer),
-          Layer.provide(
-            Layer.mock(ThreadManagement.ThreadManagementService)({
-              listProjectThreads: () => Effect.succeed([unsettled, settled]),
-            }),
-          ),
-          Layer.provide(ServerSettings.layerTest()),
-          Layer.provide(Layer.mock(ProviderRegistry.ProviderRegistry)({})),
-          Layer.provide(Layer.mock(ProviderAdapterRegistry.ProviderAdapterRegistryV2)({})),
-          Layer.provide(Layer.mock(ScheduledTaskService.ScheduledTaskService)({})),
-          Layer.provide(Layer.mock(ProjectService.ProjectService)({})),
-          Layer.provide(Layer.mock(SecretRequests.SecretRequests)({})),
-          Layer.provide(Layer.mock(PeerForwarding.PeerForwarding)({})),
-          Layer.provide(Layer.mock(PeerLinkRequests.PeerLinkRequests)({})),
-          Layer.provide(Layer.mock(PeerLinks.PeerLinks)({})),
-          Layer.provide(Layer.mock(RemoteDelegation.RemoteDelegation)({})),
-        ),
+        layerOrchestratorToolkitWith({
+          threads: { listProjectThreads: () => Effect.succeed([unsettled, settled]) },
+        }),
       ),
     );
   },
 );
+
+it.effect("list_scheduled_tasks rows preview each prompt and read one task in full by id", () => {
+  const longPrompt = `WAKE note: ${"check the deploy and report. ".repeat(40)}`;
+  const tasks = [
+    {
+      ...(scheduledTask("task-long", "auto") as object),
+      prompt: longPrompt,
+      webhook: { path: "/hooks/x", url: "https://t3.example/hooks/x", hasSecret: false },
+    },
+    scheduledTask("task-short", "auto"),
+  ] as never;
+  return Effect.gen(function* () {
+    const listed = yield* callAsClient("list_scheduled_tasks", {});
+    expect(listed.isError).toBe(false);
+    expect(listed.structuredContent).toEqual({
+      tasks: [
+        {
+          scheduledTaskId: "task-long",
+          title: "task-long",
+          enabled: true,
+          boundThreadId: null,
+          schedule: { type: "interval", everyMs: 3_600_000 },
+          nextRunAt: null,
+          lastRunStatus: "never",
+          promptPreview: longPrompt.slice(0, 120),
+          promptLength: longPrompt.length,
+        },
+        expect.objectContaining({ promptPreview: "Check the build", promptLength: 15 }),
+      ],
+      more: expect.stringContaining("`scheduledTaskId`"),
+    });
+
+    const full = yield* callAsClient("list_scheduled_tasks", { scheduledTaskId: "task-long" });
+    expect(full.structuredContent).toEqual({
+      tasks: [],
+      task: expect.objectContaining({
+        scheduledTaskId: "task-long",
+        prompt: longPrompt,
+        webhookUrl: "https://t3.example/hooks/x",
+      }),
+    });
+
+    const missing = yield* callAsClient("list_scheduled_tasks", { scheduledTaskId: "task-gone" });
+    expect(declaredFailure(missing)).toMatchObject({ code: "task_not_found" });
+  }).pipe(
+    Effect.provide(
+      layerOrchestratorToolkitWith({
+        scheduledTasks: { list: () => Effect.succeed({ tasks }) },
+      }),
+    ),
+  );
+});

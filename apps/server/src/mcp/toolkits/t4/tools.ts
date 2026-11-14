@@ -50,18 +50,24 @@ const ThreadSummary = Schema.Struct({
   state: Schema.String,
 });
 
-const HandoffTool = Tool.make("t3_handoff", {
+export const HandoffTool = Tool.make("t3_handoff", {
   ...common,
   description: [
     "Hand work to another thread with an explicit effect on the handoff ledger (who owes whom an answer). The ledger moves only on these flags, never on wording.",
     "Without `to`: hand your finished work to this project's release manager. That always asks it to release (it then owes you an answer); a release manager is created and pinned if the project has none. The release manager itself must name `to`.",
     "With `to`: say what the handoff does - `done` answers what you owe that thread (settles its handoff to you), `ask` makes it owe you a reply, `fyi` does neither. `done` combines with `ask` (finished, and asking something new) or `fyi` (finished, nothing more). A handoff to a release manager from any other thread is always a request.",
-    "`interrupt` stops the recipient's running turn and restarts it with your message; otherwise a running turn gets it steered in.",
+    "A running recipient gets `done`/`ask` steered into its turn at once; a pure `fyi` waits until that turn ends, so the command it runs is never cut. `interrupt` stops its running turn and restarts it with your message.",
     "`check` returns the project's release manager without sending anything.",
   ].join(" "),
   parameters: Schema.Struct({
     message: Schema.optional(
       Schema.String.annotate({ description: "What you hand over. Required unless `check`." }),
+    ),
+    clientRequestId: Schema.optional(
+      Schema.String.annotate({
+        description:
+          "Retry key: a handoff repeated with it (or with the same message within an hour) is sent once; the repeat returns the first result.",
+      }),
     ),
     to: Schema.optional(ThreadRef),
     done: Schema.optional(Schema.Boolean),
@@ -273,12 +279,32 @@ const ReleaseEntry = Schema.Struct({
   shippedAt: Schema.NullOr(Schema.String),
 });
 
+const CompactReleaseEntry = Schema.Struct({
+  pr: Schema.Number,
+  state: ReleaseState,
+  since: Schema.String.annotate({ description: "How long it has been in this state." }),
+  title: Schema.NullOr(Schema.String),
+  issue: Schema.NullOr(Schema.String),
+  owner: Schema.NullOr(Schema.String),
+  note: Schema.NullOr(Schema.String),
+  commit: Schema.NullOr(Schema.String),
+  changed: Schema.Boolean.annotate({ description: "Changed since your last read." }),
+});
+
+const PrRef = Schema.Struct({
+  pr: Schema.Number,
+  project: Schema.optional(
+    Schema.String.annotate({ description: "Its project's title or id. Default: yours." }),
+  ),
+});
+
 const ReleaseQueueTool = Tool.make("release_queue", {
   ...common,
   description: [
-    "The release manager's queue, kept by t4 (the dashboard shows it as what is on staging). Without `prs`: this project's PRs not yet shipped, oldest first - read it instead of keeping a queue file.",
+    "The release manager's queue, kept by t4 (the dashboard shows it as what is on staging). Without `prs`: the PRs not yet shipped, oldest first, as compact rows (`changed` marks rows changed since your last read; `detail` for full rows). A release manager sees its whole queue; any other thread sees its own PRs and those it waits on (`all`: the whole project, plus PRs shipped in the last 7 days). Owners hear `staging:` and `shipped:` without reading it, and a PR sitting 2 h in one state gets its owner a note - no wakes to check.",
+    "`waitFor` (a PR, of any project, that blocks your work): you get its staging and shipped notices too; `stopWaiting` undoes it.",
     "With `prs` (release manager only): record each PR's state - queued (handed off, not merged), merged (on the release branch, not deployed), staging (deployed to staging), held (waiting on the user, e.g. a production promotion they gate), shipped (live in production), failed (its release failed). An owner's handoff that names its PR queues it for you.",
-    "Moving a PR to staging, shipped or failed also sends its owner the notice (staging: fyi; shipped: done + fyi; failed: done + ask, with `note` as the cause) - one message per owner per call; `notify: false` records only.",
+    "Moving a PR to staging, shipped or failed also sends its owner the notice (staging: fyi; shipped: done + fyi; failed: done + ask, with `note` as the cause), and threads waiting on it theirs - one message per owner per call; `notify: false` records only.",
   ].join(" "),
   parameters: Schema.Struct({
     prs: Schema.optional(
@@ -304,11 +330,18 @@ const ReleaseQueueTool = Tool.make("release_queue", {
     ),
     notify: Schema.optional(Schema.Boolean),
     all: Schema.optional(
-      Schema.Boolean.annotate({ description: "Also list PRs shipped in the last 7 days." }),
+      Schema.Boolean.annotate({
+        description: "The whole project's queue, plus PRs shipped in the last 7 days.",
+      }),
     ),
+    detail: Schema.optional(
+      Schema.Boolean.annotate({ description: "Full rows (owner ids, every timestamp)." }),
+    ),
+    waitFor: Schema.optional(PrRef),
+    stopWaiting: Schema.optional(PrRef),
   }),
   success: Schema.Struct({
-    entries: Schema.Array(ReleaseEntry),
+    entries: Schema.Array(Schema.Union([CompactReleaseEntry, ReleaseEntry])),
     notified: Schema.Array(Schema.String),
     notes: Schema.Array(Schema.String),
   }),

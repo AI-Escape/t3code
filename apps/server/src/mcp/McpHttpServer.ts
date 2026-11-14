@@ -71,6 +71,8 @@ import * as WorktreeMcpService from "./WorktreeMcpService.ts";
 import * as PullRequestsHandlers from "./toolkits/pullRequests/handlers.ts";
 import * as T4Handlers from "./toolkits/t4/handlers.ts";
 import { T4Toolkit } from "./toolkits/t4/tools.ts";
+import * as ToolCallLog from "../t4/toolCallLog.ts";
+import * as T4Store from "../t4/T4Store.ts";
 import { PullRequestsToolkit } from "./toolkits/pullRequests/tools.ts";
 import * as DeviceHandlers from "./toolkits/device/handlers.ts";
 import {
@@ -1136,6 +1138,50 @@ const withAdvertisedSchemas = Effect.fn("McpHttpServer.withAdvertisedSchemas")(f
   return yield* registration.pipe(Effect.provideService(McpServer.McpServer, advertisingServer));
 });
 
+/**
+ * t4 fork: write calls a restart can cut are logged as they start and end, so the restart note
+ * tells the agent which went through (t4/toolCallLog.ts, AI-93).
+ */
+const withT4CallLog = Effect.fn("McpHttpServer.withT4CallLog")(function* <A, E, R>(
+  registration: Effect.Effect<A, E, R>,
+) {
+  const server = yield* McpServer.McpServer;
+  const store = Option.getOrUndefined(yield* Effect.serviceOption(T4Store.T4Store));
+  if (store === undefined) return yield* registration;
+  const loggingServer = McpServer.McpServer.of({
+    ...server,
+    addTool: Effect.fn("McpServer.addTool")(function (options) {
+      if (!ToolCallLog.LOGGED_TOOLS.has(options.tool.name)) return server.addTool(options);
+      return server.addTool({
+        ...options,
+        handle: (payload) =>
+          Effect.serviceOption(McpInvocationContext.McpInvocationContext).pipe(
+            Effect.flatMap((invocation) => {
+              const threadId = Option.getOrUndefined(invocation)?.thread?.threadId;
+              return threadId === undefined
+                ? options.handle(payload)
+                : ToolCallLog.logged(
+                    store,
+                    { threadId, tool: options.tool.name, args: payload },
+                    options.handle(payload),
+                    (result) =>
+                      result instanceof McpSchema.InputRequired
+                        ? "asked for input"
+                        : toolOutcome(result).outcome === "ok"
+                          ? "done"
+                          : `failed: ${String(
+                              (result.content[0] as { readonly text?: unknown } | undefined)
+                                ?.text ?? "",
+                            ).slice(0, 120)}`,
+                  );
+            }),
+          ),
+      });
+    }),
+  });
+  return yield* registration.pipe(Effect.provideService(McpServer.McpServer, loggingServer));
+});
+
 /** Hands each call the services its registration was built with; the request's own still win. */
 const provideRegistrationServices = <Services>() =>
   McpServer.middleware<{ provides: Services }>()(
@@ -1160,7 +1206,9 @@ export const toolkitRegistration = <Tools extends Record<string, Tool.Any>, EX, 
   Layer.effectDiscard(
     withToolAnalytics(
       withToolSpans(
-        withAdvertisedSchemas(toolkit, McpServer.registerToolkit(decodeAsAdvertised(toolkit))),
+        withT4CallLog(
+          withAdvertisedSchemas(toolkit, McpServer.registerToolkit(decodeAsAdvertised(toolkit))),
+        ),
       ),
     ),
   ).pipe(

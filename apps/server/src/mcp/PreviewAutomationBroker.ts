@@ -197,6 +197,10 @@ function remoteDetailKind(detail: unknown): RemoteDetailKind {
   }
 }
 
+// t4 fork: most of these timeouts were a host that had gone away (the desktop app closed).
+const NO_HOST_ANSWER_REASON =
+  "The browser never answered: no T3 browser may be attached (the T3 desktop app is closed or asleep). Use headless playwright instead (the `playwright` skill).";
+
 const readRemoteTimeoutMs = (detail: unknown): number | undefined => {
   if (typeof detail !== "object" || detail === null || !("timeoutMs" in detail)) return undefined;
   const timeoutMs = detail.timeoutMs;
@@ -665,7 +669,10 @@ export const make = Effect.gen(function* PreviewAutomationBrokerMake() {
           if (input.updateCurrentTab !== false) {
             yield* disconnect(connection.clientId, connection.queue, true);
           }
-          return yield* new PreviewAutomationTimeoutError(requestContext);
+          return yield* new PreviewAutomationTimeoutError({
+            ...requestContext,
+            reason: NO_HOST_ANSWER_REASON,
+          });
         }),
         onSome: (value) => Effect.succeed(value as A),
       });

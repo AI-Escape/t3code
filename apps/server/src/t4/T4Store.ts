@@ -150,6 +150,32 @@ export const applyReleaseUpdate = (
   };
 };
 
+export interface T4ReleaseWaiter {
+  readonly projectId: string;
+  readonly pr: number;
+  readonly threadId: string;
+}
+
+export interface T4ToolCall {
+  readonly id: string;
+  readonly threadId: string;
+  readonly tool: string;
+  readonly summary: string;
+  readonly startedAt: string;
+  readonly finishedAt: string | null;
+  readonly result: string | null;
+  /** Started by this server process (not one a restart ended). */
+  readonly current: boolean;
+}
+
+/** This server process: a call left unfinished by an earlier one was cut by a restart. */
+const BOOT_ID = `${process.pid}-${process.hrtime.bigint().toString(36)}`;
+let callSeq = 0;
+/** A unique id for a logged tool call. */
+export const newToolCallId = () => `call:${BOOT_ID}:${(callSeq += 1)}`;
+/** The result a call cut by a restart is left with. */
+export const CUT_RESULT = "cut by a restart";
+
 const MAX_NOTICES = 500;
 
 type StoreError = SqlError.SqlError;
@@ -235,6 +261,33 @@ export interface T4StoreShape {
    * already has it in flight (then only a missing owner is filled in).
    */
   readonly queueRelease: (update: T4ReleaseUpdate) => Effect.Effect<T4ReleaseRow, StoreError>;
+
+  /** Threads waiting on a PR they don't own (AI-93). */
+  readonly addReleaseWaiter: (waiter: T4ReleaseWaiter) => Effect.Effect<boolean, StoreError>;
+  readonly removeReleaseWaiter: (waiter: T4ReleaseWaiter) => Effect.Effect<boolean, StoreError>;
+  /** Waiters on one PR (`threadId` unset), or the PRs one thread waits on. */
+  readonly releaseWaiters: (filter: {
+    readonly projectId?: string;
+    readonly pr?: number;
+    readonly threadId?: string;
+  }) => Effect.Effect<ReadonlyArray<T4ReleaseWaiter>, StoreError>;
+
+  /** A write tool call starting (AI-93): its row stays unfinished if a restart cuts it. */
+  readonly startToolCall: (call: {
+    readonly id: string;
+    readonly threadId: string;
+    readonly tool: string;
+    readonly summary: string;
+  }) => Effect.Effect<void, StoreError>;
+  readonly finishToolCall: (id: string, result: string) => Effect.Effect<void, StoreError>;
+  readonly toolCall: (id: string) => Effect.Effect<T4ToolCall | undefined, StoreError>;
+  /**
+   * A thread's calls from before the last restart (30 min), oldest first: unfinished ones were
+   * cut. Each is returned once.
+   */
+  readonly takeRestartToolCalls: (
+    threadId: string,
+  ) => Effect.Effect<ReadonlyArray<T4ToolCall>, StoreError>;
 
   readonly meta: (key: string) => Effect.Effect<string | undefined, StoreError>;
   readonly setMeta: (key: string, value: string) => Effect.Effect<void, StoreError>;
@@ -646,6 +699,113 @@ const make = Effect.gen(function* () {
           ),
     );
 
+  const addReleaseWaiter: T4StoreShape["addReleaseWaiter"] = Effect.fn("T4Store.addReleaseWaiter")(
+    function* (waiter) {
+      const at = yield* nowIso;
+      const rows = yield* sql<{ readonly pr: number }>`
+        INSERT OR IGNORE INTO t4_release_waiters (project_id, pr, thread_id, created_at)
+        VALUES (${waiter.projectId}, ${waiter.pr}, ${waiter.threadId}, ${at})
+        RETURNING pr
+      `;
+      return rows.length > 0;
+    },
+  );
+
+  const removeReleaseWaiter: T4StoreShape["removeReleaseWaiter"] = (waiter) =>
+    sql<{ readonly pr: number }>`
+      DELETE FROM t4_release_waiters
+      WHERE project_id = ${waiter.projectId} AND pr = ${waiter.pr} AND thread_id = ${waiter.threadId}
+      RETURNING pr
+    `.pipe(Effect.map((rows) => rows.length > 0));
+
+  const releaseWaiters: T4StoreShape["releaseWaiters"] = (filter) =>
+    sql<{ readonly project_id: string; readonly pr: number; readonly thread_id: string }>`
+      SELECT project_id, pr, thread_id FROM t4_release_waiters
+      WHERE (${filter.projectId ?? null} IS NULL OR project_id = ${filter.projectId ?? null})
+        AND (${filter.pr ?? null} IS NULL OR pr = ${filter.pr ?? null})
+        AND (${filter.threadId ?? null} IS NULL OR thread_id = ${filter.threadId ?? null})
+      ORDER BY created_at
+    `.pipe(
+      Effect.map((rows) =>
+        rows.map((row) => ({
+          projectId: row.project_id,
+          pr: Number(row.pr),
+          threadId: row.thread_id,
+        })),
+      ),
+    );
+
+  interface ToolCallRow {
+    readonly id: string;
+    readonly thread_id: string;
+    readonly tool: string;
+    readonly summary: string;
+    readonly started_at: string;
+    readonly finished_at: string | null;
+    readonly result: string | null;
+    readonly boot: string;
+  }
+  const toolCallOf = (row: ToolCallRow): T4ToolCall => ({
+    id: row.id,
+    threadId: row.thread_id,
+    tool: row.tool,
+    summary: row.summary,
+    startedAt: row.started_at,
+    finishedAt: row.finished_at,
+    result: row.result,
+    current: row.boot === BOOT_ID,
+  });
+
+  const startToolCall: T4StoreShape["startToolCall"] = Effect.fn("T4Store.startToolCall")(
+    function* (call) {
+      const now = yield* DateTime.now;
+      const at = DateTime.formatIso(now);
+      yield* sql`
+        INSERT OR REPLACE INTO t4_tool_calls (id, thread_id, tool, summary, boot, started_at)
+        VALUES (${call.id}, ${call.threadId}, ${call.tool}, ${call.summary}, ${BOOT_ID}, ${at})
+      `;
+      // Kept a day: long enough for a retry with the same clientRequestId.
+      const dayAgo = DateTime.formatIso(DateTime.subtract(now, { days: 1 }));
+      yield* sql`DELETE FROM t4_tool_calls WHERE started_at < ${dayAgo}`;
+    },
+  );
+
+  const finishToolCall: T4StoreShape["finishToolCall"] = Effect.fn("T4Store.finishToolCall")(
+    function* (id, result) {
+      const at = yield* nowIso;
+      yield* sql`UPDATE t4_tool_calls SET finished_at = ${at}, result = ${result} WHERE id = ${id}`;
+    },
+  );
+
+  const toolCall: T4StoreShape["toolCall"] = (id) =>
+    sql<ToolCallRow>`SELECT * FROM t4_tool_calls WHERE id = ${id}`.pipe(
+      Effect.map((rows) => (rows[0] === undefined ? undefined : toolCallOf(rows[0]))),
+    );
+
+  const takeRestartToolCalls: T4StoreShape["takeRestartToolCalls"] = (threadId) =>
+    sql.withTransaction(
+      Effect.gen(function* () {
+        const now = yield* DateTime.now;
+        const at = DateTime.formatIso(now);
+        const since = DateTime.formatIso(DateTime.subtract(now, { minutes: 30 }));
+        const rows = yield* sql<ToolCallRow>`
+          SELECT * FROM t4_tool_calls
+          WHERE thread_id = ${threadId} AND boot != ${BOOT_ID}
+            AND started_at >= ${since}
+          ORDER BY started_at
+        `;
+        // Re-owned by this process: told once, still found by a retry's key.
+        yield* sql`
+          UPDATE t4_tool_calls
+          SET finished_at = COALESCE(finished_at, ${at}),
+              result = COALESCE(result, ${CUT_RESULT}),
+              boot = ${BOOT_ID}
+          WHERE thread_id = ${threadId} AND boot != ${BOOT_ID}
+        `;
+        return rows.map(toolCallOf);
+      }),
+    );
+
   const setMeta: T4StoreShape["setMeta"] = (key, value) =>
     sql`
       INSERT INTO t4_meta (key, value) VALUES (${key}, ${value})
@@ -682,6 +842,13 @@ const make = Effect.gen(function* () {
     releaseQueue,
     updateRelease,
     queueRelease,
+    addReleaseWaiter,
+    removeReleaseWaiter,
+    releaseWaiters,
+    startToolCall,
+    finishToolCall,
+    toolCall,
+    takeRestartToolCalls,
     meta,
     setMeta,
   });

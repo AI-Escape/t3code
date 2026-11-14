@@ -3591,10 +3591,14 @@ describe("OrchestratorMcpService thread list", () => {
         allProjects: true,
         projectId: ProjectId.make("project:a"),
         snoozed: true,
+        detail: true,
       });
       assert.equal(listed.projectId, null);
       assert.deepStrictEqual(
-        listed.threads.map((thread) => [thread.threadId, thread.projectId]),
+        listed.threads.map((thread): ReadonlyArray<string | undefined> => [
+          thread.threadId,
+          thread.projectId,
+        ]),
         [
           ["thread:a-snoozed", "project:a"],
           ["thread:b-snoozed", "project:b"],

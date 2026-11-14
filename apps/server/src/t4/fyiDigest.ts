@@ -130,6 +130,7 @@ export const sweep = Effect.gen(function* () {
         text: digestText(pair.fromTitle, pair.from, items),
         senderThreadId: ThreadId.make(pair.from),
         notice: true,
+        patient: true,
       })
       .pipe(Effect.ignore);
     yield* store.setMeta(lastKey(pair.from, pair.to), String(now));
