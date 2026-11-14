@@ -17,6 +17,7 @@ import type { ProjectionRuntimeRecoveryState } from "./ProjectionStore.ts";
 
 import * as ServerSettings from "../serverSettings.ts";
 import { isNativeMaintenanceCommand } from "./CommandPolicy.ts";
+import { restartToolCallsNote } from "../t4/toolCallLog.ts";
 import * as ThreadManagementService from "./ThreadManagementService.ts";
 import {
   awaitingProviderThreadId,
@@ -320,6 +321,8 @@ export const continueRestartedRun = Effect.fn("RestartContinuation.continueResta
       (message) => message.id === source.userMessageId,
     );
     if (sourceMessage !== undefined && isNativeMaintenanceCommand(sourceMessage)) return;
+    // t4 fork: the T3 tool calls the restart cut, and those that finished unseen (AI-93).
+    const t4Calls = yield* restartToolCallsNote(input.threadId);
     // t4 fork: the provider never took this run's prompt, so "continue" would go on from the
     // turn before and the message itself - a wake, a handoff - would be lost. Send it again (AI-88).
     if (redeliversMessage(source, sourceMessage, projection.providerTurns)) {
@@ -329,9 +332,11 @@ export const continueRestartedRun = Effect.fn("RestartContinuation.continueResta
           commandId: CommandId.make(`command:restart-continuation:${input.sourceRunId}`),
           threadId: input.threadId,
           messageId,
-          text: sourceMessage.text.startsWith(REDELIVERY_NOTE)
-            ? sourceMessage.text
-            : `${REDELIVERY_NOTE}\n\n${sourceMessage.text}`,
+          text: [
+            ...(sourceMessage.text.startsWith(REDELIVERY_NOTE) ? [] : [REDELIVERY_NOTE]),
+            ...(t4Calls === "" ? [] : [t4Calls]),
+            sourceMessage.text,
+          ].join("\n\n"),
           notification: {
             source: { kind: "system" },
             outcome: "updated",
@@ -359,8 +364,10 @@ export const continueRestartedRun = Effect.fn("RestartContinuation.continueResta
       projection.providerTurns,
       projection.attempts,
     );
-    const noteText =
+    const workNote =
       note.work.length === 0 ? undefined : restartCancelledBackgroundWorkNote(note.work);
+    const noteText =
+      t4Calls === "" ? workNote : workNote === undefined ? t4Calls : `${workNote}\n\n${t4Calls}`;
     const text =
       noteText === undefined
         ? CONTINUE_PROMPT

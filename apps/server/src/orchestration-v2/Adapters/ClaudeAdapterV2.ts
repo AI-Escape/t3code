@@ -10690,7 +10690,10 @@ export const makeClaudeAdapterV2 = Effect.fn("makeClaudeAdapterV2")(function* (
             yield* Effect.logInfo("t4.claude-safety-check-declined", { toolName, reason });
             return {
               behavior: "deny",
-              message: safetyCheckDeclinedNote(reason),
+              message: safetyCheckDeclinedNote(
+                reason,
+                typeof command === "string" ? command : undefined,
+              ),
               toolUseID: callbackOptions.toolUseID,
             } satisfies PermissionResult;
           }

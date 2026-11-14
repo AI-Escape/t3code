@@ -10,6 +10,7 @@ import {
   type ModelSelection,
   OrchestratorMcpDelegateTaskResult,
   OrchestratorMcpThreadInterruptResult,
+  type OrchestratorMcpThreadReadResult,
   OrchestratorMcpThreadSendResult,
   ProjectId,
   ProviderDriverKind,
@@ -196,10 +197,22 @@ const layerUnusedScheduledTaskStub = Layer.succeed(
 
 describe("orchestrator MCP toolkit", () => {
   it.live.each([
-    { label: "distinct", result: queuedFollowupResult, latestSummary: queuedFollowupResult },
-    { label: "identical", result: delegatedResult, latestSummary: null },
-    { label: "emoji", result: "😀", latestSummary: "😀" },
-  ])("reports $label child results", ({ result, latestSummary }) =>
+    {
+      label: "distinct",
+      result: queuedFollowupResult,
+      latestSummary: queuedFollowupResult,
+      pageChars: 20_000,
+    },
+    { label: "identical", result: delegatedResult, latestSummary: null, pageChars: 20_000 },
+    { label: "emoji", result: "😀", latestSummary: "😀", pageChars: 1 },
+    // A result cut across pages is delivered once a read reaches its end.
+    {
+      label: "paged",
+      result: queuedFollowupResult,
+      latestSummary: queuedFollowupResult,
+      pageChars: 10,
+    },
+  ])("reports $label child results", ({ label, result, latestSummary, pageChars }) =>
     Effect.scoped(
       Effect.gen(function* () {
         const cwd = yield* checkpointWorkspace("delegated-task-status");
@@ -709,7 +722,7 @@ describe("orchestrator MCP toolkit", () => {
             {
               threadId: delegated.childThreadId,
               limit: 100,
-              maxCharsPerItem: result === "😀" ? 1 : 20_000,
+              maxCharsPerItem: pageChars,
             },
             { ...invocation, thread: undefined },
           ).pipe(Effect.withTracer(tracer));
@@ -724,11 +737,36 @@ describe("orchestrator MCP toolkit", () => {
           const read = yield* invoke("t3_thread_read", {
             threadId: delegated.childThreadId,
             limit: 100,
-            maxCharsPerItem: result === "😀" ? 1 : 20_000,
+            maxCharsPerItem: pageChars,
           }).pipe(Effect.withTracer(tracer));
           expect(read.isError).not.toBe(true);
           expect(transferReads.length).toBeGreaterThan(0);
           expect(read.structuredContent).toEqual(parentlessRead.structuredContent);
+          let cut = (
+            read.structuredContent as OrchestratorMcpThreadReadResult | undefined
+          )?.items.find((item) => item.textTruncated && item.text === result.slice(0, pageChars));
+          if (label === "paged") {
+            expect(cut).toMatchObject({
+              remainingChars: result.length - pageChars,
+              nextTextOffset: pageChars,
+            });
+          }
+          while (cut !== undefined) {
+            const afterCut = yield* orchestrator.getThreadProjection(parentThreadId);
+            expect(
+              afterCut.subagents.find((task) => task.id === queuedFollowup.taskId)
+                ?.completionDelivery?.state,
+            ).toBe("claimed");
+            const next = yield* invoke("t3_thread_read", {
+              threadId: delegated.childThreadId,
+              itemId: cut.itemId,
+              textOffset: cut.nextTextOffset,
+              maxCharsPerItem: pageChars,
+            }).pipe(Effect.withTracer(tracer));
+            cut = (next.structuredContent as OrchestratorMcpThreadReadResult).items.find(
+              (item) => item.textTruncated,
+            );
+          }
           // The acknowledgement reads the task and its spawning run by id, not the parent's history.
           expect(acknowledgementReads.length).toBeGreaterThan(0);
           expect(

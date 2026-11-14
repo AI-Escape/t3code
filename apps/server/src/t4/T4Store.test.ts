@@ -3,9 +3,11 @@ import * as NodeServices from "@effect/platform-node/NodeServices";
 import { assert, describe, it } from "@effect/vitest";
 import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
+import * as SqlClient from "effect/sql/SqlClient";
 
 import * as T4Sql from "./T4Sql.ts";
 import * as T4Store from "./T4Store.ts";
+import { restartToolCallsNote } from "./toolCallLog.ts";
 
 const layer = T4Store.layer.pipe(
   Layer.provideMerge(T4Sql.layerMemory),
@@ -159,6 +161,57 @@ describe("T4Store", () => {
       assert.equal(requeued.state, "queued");
       assert.isNull(requeued.mergedAt);
       assert.isNull(requeued.shippedAt);
+    }).pipe(Effect.provide(layer)),
+  );
+
+  it.effect("keeps release waiters per PR and per thread", () =>
+    Effect.gen(function* () {
+      const store = yield* T4Store.T4Store;
+      const waiter = { projectId: "theme", pr: 306, threadId: "usa-455" };
+      assert.isTrue(yield* store.addReleaseWaiter(waiter));
+      assert.isFalse(yield* store.addReleaseWaiter(waiter));
+      yield* store.addReleaseWaiter({ ...waiter, threadId: "usa-756" });
+      assert.deepEqual(
+        (yield* store.releaseWaiters({ projectId: "theme", pr: 306 })).map((w) => w.threadId),
+        ["usa-455", "usa-756"],
+      );
+      assert.deepEqual(yield* store.releaseWaiters({ threadId: "usa-455" }), [waiter]);
+      assert.isTrue(yield* store.removeReleaseWaiter(waiter));
+      assert.isFalse(yield* store.removeReleaseWaiter(waiter));
+      assert.deepEqual(yield* store.releaseWaiters({ threadId: "usa-455" }), []);
+    }).pipe(Effect.provide(layer)),
+  );
+
+  it.effect("tells a thread once which tool calls a restart cut and which finished", () =>
+    Effect.gen(function* () {
+      const store = yield* T4Store.T4Store;
+      const sql = yield* SqlClient.SqlClient;
+      const at = "2026-11-13T22:00:00.000Z";
+      // Rows an earlier server process left: one never finished, one finished unseen.
+      yield* sql`
+        INSERT INTO t4_tool_calls (id, thread_id, tool, summary, boot, started_at, finished_at, result)
+        VALUES
+          ('a', 'owner', 't3_thread_launch', 't3_thread_launch (title: USA-2086 fix)', 'old', ${at}, NULL, NULL),
+          ('b', 'owner', 'schedule_task', 'schedule_task (title: check CI)', 'old', ${at}, ${at}, 'done'),
+          ('c', 'other', 'schedule_task', 'schedule_task (title: theirs)', 'old', ${at}, NULL, NULL)
+      `;
+      // A call this process is running is not cut.
+      yield* store.startToolCall({
+        id: "d",
+        threadId: "owner",
+        tool: "release_queue",
+        summary: "now",
+      });
+      const note = yield* restartToolCallsNote("owner");
+      assert.include(note, "still running when T3 restarted");
+      assert.include(note, "- t3_thread_launch (title: USA-2086 fix)");
+      assert.include(note, "finished before the restart");
+      assert.include(note, "- schedule_task (title: check CI): done");
+      assert.notInclude(note, "now");
+      assert.notInclude(note, "theirs");
+      assert.equal(yield* restartToolCallsNote("owner"), "");
+      // Still found by its key afterwards (a retried handoff), marked cut.
+      assert.equal((yield* store.toolCall("a"))?.result, T4Store.CUT_RESULT);
     }).pipe(Effect.provide(layer)),
   );
 

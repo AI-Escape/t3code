@@ -175,7 +175,7 @@ const ScheduleTaskTool = Tool.make("schedule_task", {
 const ListScheduledTasksTool = Tool.make("list_scheduled_tasks", {
   parameters: OrchestratorMcpListScheduledTasksInput,
   description:
-    "List scheduled tasks. Omit `projectId` for this thread's project. Pass a `scheduledTaskId` to `schedule_task` or `delete_scheduled_task`. In a scheduled run, do not call this to find your task. Do the prompt.",
+    "List scheduled tasks. Omit `projectId` for this thread's project. Rows show the first 120 chars of each prompt and its `promptLength`; pass `scheduledTaskId` here to read one task in full (`task`, with its webhook URL). Pass a `scheduledTaskId` to `schedule_task` or `delete_scheduled_task`. In a scheduled run, do not call this to find your task. Do the prompt.",
   success: OrchestratorMcpListScheduledTasksResult,
   failure: OrchestratorMcpFailure,
   failureMode: "return",
@@ -227,7 +227,7 @@ const CreateThreadsTool = Tool.make("create_threads", {
 
 const ThreadListTool = Tool.make("t3_thread_list", {
   description:
-    "List threads newest first, in one project or with `allProjects`. Page with `cursor`. Each thread's `t4` gives its state (running, waiting-you, settled, snoozed, idle), whether it is the release manager, the handoffs it owes and is owed (t3_owed), and its linked issues.",
+    "List threads newest first, in one project or with `allProjects`. Page with `cursor`. Rows are compact; `detail: true` adds model, modes, creator and timestamps, and `t3_thread_read` shows one thread in full. Each thread's `t4` gives its state (running, waiting-you, settled, snoozed, idle), whether it is the release manager, the handoffs it owes and is owed (t3_owed), and its linked issues.",
   parameters: OrchestratorMcpThreadListInput,
   success: OrchestratorMcpThreadListResult,
   failure: OrchestratorMcpFailure,
@@ -241,7 +241,7 @@ const ThreadListTool = Tool.make("t3_thread_list", {
 
 const ThreadReadTool = Tool.make("t3_thread_read", {
   description:
-    "Read any thread by id. `messages` (default): user and assistant messages and plans. `activity`: all timeline items. Keep reads small: low `limit` and `maxCharsPerItem`. Page with `afterPosition=nextPosition`. Cut-off text: `itemId` with `textOffset=nextTextOffset`. Reading a child's final result marks it delivered. In your reply, name it as its `link` verbatim.",
+    "Read any thread by id. `messages` (default): user and assistant messages and plans. `activity`: all timeline items. Keep reads small: low `limit`. Page with `afterPosition=nextPosition`. Item text past `maxCharsPerItem` (default 1500) is cut: the item has `textTruncated`, `remainingChars` and `nextTextOffset`; read on with `itemId` and `textOffset=nextTextOffset`. Reading a child's final result marks it delivered. In your reply, name it as its `link` verbatim.",
   parameters: OrchestratorMcpThreadReadInput,
   success: OrchestratorMcpThreadReadResult,
   failure: OrchestratorMcpFailure,
@@ -273,7 +273,7 @@ const ThreadUpdateTool = Tool.make("t3_thread_update", {
 
 const ThreadSendTool = Tool.make("t3_thread_send", {
   description:
-    "Send a message to any thread. The target cannot run with broader modes than yours. `mode:'auto'` starts an idle thread, steers a running turn, or queues. `queue`: new turn. `steer`: mid-turn update. `restart`: interrupt and restart. A send to a finished child thread starts a fresh task and returns its `taskId`. In your reply, name it as its `link` verbatim.",
+    "Send a message to any thread. The target cannot run with broader modes than yours. `mode:'auto'` starts an idle thread; a running one gets it when its turn ends, so the command it runs is never cut. `queue`: new turn. `steer`: into the running turn now, which can cancel its running tool call - only when it must change course. `restart`: interrupt and restart. A send to a finished child thread starts a fresh task and returns its `taskId`. In your reply, name it as its `link` verbatim.",
   parameters: OrchestratorMcpThreadSendInput,
   success: OrchestratorMcpThreadSendResult,
   failure: OrchestratorMcpFailure,

@@ -46,7 +46,11 @@ import { explicitBareRepositoryEnv, gitConfigEnv } from "./VcsProcess.ts";
 import { makeWorktreeCheckoutCache } from "./worktreeCheckoutCache.ts";
 import { removeLinkedWorktree } from "./worktreeRemoval.ts";
 import { resolveWorktreesDirectory } from "../worktreesDirectory.ts";
-import { uniqueWorktreePath, worktreeNamingMode } from "../t4/worktreeNaming.ts";
+import {
+  makeWorktreeCreationLock,
+  uniqueWorktreePath,
+  worktreeNamingMode,
+} from "../t4/worktreeNaming.ts";
 import {
   parseRemoteNames,
   parseRemoteNamesInGitOrder,
@@ -4248,129 +4252,154 @@ export const makeGitVcsDriverCore = Effect.fn("makeGitVcsDriverCore")(function* 
     },
   );
 
+  const withWorktreeCreationLock = makeWorktreeCreationLock();
   const createWorktree: GitVcsDriver.GitVcsDriver["Service"]["createWorktree"] = Effect.fn(
     "createWorktree",
   )(function* (input, options) {
     yield* refuseOptionLikeRefName("GitVcsDriver.createWorktree", input.cwd, input.refName);
     yield* refuseOptionLikeRefName("GitVcsDriver.createWorktree", input.cwd, input.newRefName);
     const targetBranch = input.newRefName ?? input.refName;
-    // Resolve sub/.. before taking the basename.
-    const repoName = path.basename(path.resolve(input.cwd));
-    let worktreePath = input.path;
-    if (worktreePath == null) {
-      const parentDir = resolveWorktreesDirectory(
-        options?.worktreesDirectory ?? "",
-        worktreesDir,
-        path,
-        yield* HostProcess.HomeDirectory,
-      );
-      if (parentDir === null) {
-        return yield* new GitCommandError({
-          operation: "GitVcsDriver.createWorktree",
-          command: "git worktree add",
-          cwd: input.cwd,
-          detail: `The worktree location "${options?.worktreesDirectory}" must be an absolute folder on this machine, not a drive root. Change it in Settings → Worktrees.`,
-        });
-      }
-      // t4 fork: short, flat worktree directories (T4_WORKTREE_NAMING=issueId).
-      if (worktreeNamingMode() === "issueId") {
-        worktreePath = yield* uniqueWorktreePath(
-          parentDir,
-          targetBranch,
-          (...parts) => path.join(...parts),
-          (candidate) => fileSystem.exists(candidate).pipe(Effect.orElseSucceed(() => false)),
-        );
-      } else {
-        const identity = `${yield* readGitCommonDir(input.cwd)}\0${targetBranch}`;
-        const hash = yield* digest.digest(Digest.sha256, new TextEncoder().encode(identity));
-        // UTF-8 bytes bound UTF-16 length too, leaving room for files on Windows.
-        let prefix = "";
-        for (const character of targetBranch.replace(/\//g, "-")) {
-          if (Buffer.byteLength(prefix + character) > 23) break;
-          prefix += character;
-        }
-        const directoryName = `${prefix}-${Hex.encode(hash).slice(0, 16)}`;
-        worktreePath = path.join(parentDir, repoName, directoryName);
-      }
-    }
-    const newRefName = input.newRefName;
-    if (newRefName) {
-      // Kept apart from the checkout so the shared-config lock only covers the tracking write.
-      yield* createBranchAt(
-        "GitVcsDriver.createWorktree.createBranch",
-        { cwd: input.cwd, branch: newRefName, startPoint: input.refName },
-        "git worktree add failed",
-      );
-    }
-    const checkoutRef = newRefName ?? input.refName;
     const progress = options?.progress;
-    const onCheckoutProgress = progress?.onCheckoutProgress;
+    // t4 fork: one worktree creation at a time per repository, retried once (t4/worktreeNaming.ts).
+    let attemptedPath: string | null = null;
+    const addWorktree = Effect.gen(function* () {
+      attemptedPath = null;
+      // Resolve sub/.. before taking the basename.
+      const repoName = path.basename(path.resolve(input.cwd));
+      let worktreePath = input.path;
+      if (worktreePath == null) {
+        const parentDir = resolveWorktreesDirectory(
+          options?.worktreesDirectory ?? "",
+          worktreesDir,
+          path,
+          yield* HostProcess.HomeDirectory,
+        );
+        if (parentDir === null) {
+          return yield* new GitCommandError({
+            operation: "GitVcsDriver.createWorktree",
+            command: "git worktree add",
+            cwd: input.cwd,
+            detail: `The worktree location "${options?.worktreesDirectory}" must be an absolute folder on this machine, not a drive root. Change it in Settings → Worktrees.`,
+          });
+        }
+        // t4 fork: short, flat worktree directories (T4_WORKTREE_NAMING=issueId).
+        if (worktreeNamingMode() === "issueId") {
+          worktreePath = yield* uniqueWorktreePath(
+            parentDir,
+            targetBranch,
+            (...parts) => path.join(...parts),
+            (candidate) => fileSystem.exists(candidate).pipe(Effect.orElseSucceed(() => false)),
+          );
+        } else {
+          const identity = `${yield* readGitCommonDir(input.cwd)}\0${targetBranch}`;
+          const hash = yield* digest.digest(Digest.sha256, new TextEncoder().encode(identity));
+          // UTF-8 bytes bound UTF-16 length too, leaving room for files on Windows.
+          let prefix = "";
+          for (const character of targetBranch.replace(/\//g, "-")) {
+            if (Buffer.byteLength(prefix + character) > 23) break;
+            prefix += character;
+          }
+          const directoryName = `${prefix}-${Hex.encode(hash).slice(0, 16)}`;
+          worktreePath = path.join(parentDir, repoName, directoryName);
+        }
+      }
+      const newRefName = input.newRefName;
+      if (newRefName) {
+        // Kept apart from the checkout so the shared-config lock only covers the tracking write.
+        yield* createBranchAt(
+          "GitVcsDriver.createWorktree.createBranch",
+          { cwd: input.cwd, branch: newRefName, startPoint: input.refName },
+          "git worktree add failed",
+        );
+      }
+      const checkoutRef = newRefName ?? input.refName;
+      const onCheckoutProgress = progress?.onCheckoutProgress;
 
-    // Both reads leave the repository alone, so they share one round trip before the checkout.
-    const [configuredCheckoutWorkers, base] = yield* Effect.all(
-      [
-        readConfigValue(input.cwd, "checkout.workers"),
-        input.newRefName && input.baseRefName
-          ? resolveBranchBase(input.cwd, input.baseRefName)
-          : Effect.succeed(null),
-      ],
-      { concurrency: "unbounded" },
-    );
-    const checkoutWorkers = configuredCheckoutWorkers ?? "0";
-    const fastCheckout = checkoutCache !== undefined && options?.fastCheckout === true;
-    const cacheGeneration = fastCheckout ? yield* checkoutCache.currentGeneration : 0;
-    const stockCheckout = executeGitWithStableDiagnostics(
-      "GitVcsDriver.createWorktree",
-      input.cwd,
-      [
-        "-c",
-        `checkout.workers=${checkoutWorkers}`,
-        "worktree",
-        "add",
-        "--",
-        worktreePath,
-        checkoutRef,
-      ],
-      {
-        fallbackErrorDetail: "git worktree add failed",
-        // Large checkouts and post-checkout hooks can legitimately run for many
-        // minutes; a fixed deadline kills them and leaves an orphaned worktree.
-        timeoutMs: null,
-        ...(onCheckoutProgress
-          ? {
-              // Git only prints checkout progress when stderr is a tty or the
-              // delay elapsed. GIT_PROGRESS_DELAY=0 forces it through the pipe.
-              env: { GIT_PROGRESS_DELAY: "0" },
-              progress: {
-                onStderrLine: (line) => {
-                  const parsed = parseGitCheckoutProgressLine(line);
-                  return parsed ? onCheckoutProgress(parsed) : Effect.void;
+      // Both reads leave the repository alone, so they share one round trip before the checkout.
+      const [configuredCheckoutWorkers, base] = yield* Effect.all(
+        [
+          readConfigValue(input.cwd, "checkout.workers"),
+          input.newRefName && input.baseRefName
+            ? resolveBranchBase(input.cwd, input.baseRefName)
+            : Effect.succeed(null),
+        ],
+        { concurrency: "unbounded" },
+      );
+      const checkoutWorkers = configuredCheckoutWorkers ?? "0";
+      const fastCheckout = checkoutCache !== undefined && options?.fastCheckout === true;
+      const cacheGeneration = fastCheckout ? yield* checkoutCache.currentGeneration : 0;
+      attemptedPath = worktreePath;
+      const stockCheckout = executeGitWithStableDiagnostics(
+        "GitVcsDriver.createWorktree",
+        input.cwd,
+        [
+          "-c",
+          `checkout.workers=${checkoutWorkers}`,
+          "worktree",
+          "add",
+          "--",
+          worktreePath,
+          checkoutRef,
+        ],
+        {
+          fallbackErrorDetail: "git worktree add failed",
+          // Large checkouts and post-checkout hooks can legitimately run for many
+          // minutes; a fixed deadline kills them and leaves an orphaned worktree.
+          timeoutMs: null,
+          ...(onCheckoutProgress
+            ? {
+                // Git only prints checkout progress when stderr is a tty or the
+                // delay elapsed. GIT_PROGRESS_DELAY=0 forces it through the pipe.
+                env: { GIT_PROGRESS_DELAY: "0" },
+                progress: {
+                  onStderrLine: (line) => {
+                    const parsed = parseGitCheckoutProgressLine(line);
+                    return parsed ? onCheckoutProgress(parsed) : Effect.void;
+                  },
                 },
-              },
-            }
-          : {}),
-      },
-    );
-    yield* (
-      fastCheckout
-        ? checkoutCache
-            .create({ cwd: input.cwd, worktreePath, refName: checkoutRef, checkoutWorkers })
-            .pipe(Effect.flatMap((cloned) => (cloned ? Effect.void : stockCheckout)))
-        : stockCheckout
-    ).pipe(
-      Effect.onError(() =>
-        newRefName
-          ? deleteLocalBranch({ cwd: input.cwd, refName: newRefName, force: true }).pipe(
-              Effect.catch((cause) =>
-                Effect.logWarning("could not remove the branch of a failed worktree", { cause }),
+              }
+            : {}),
+        },
+      );
+      yield* (
+        fastCheckout
+          ? checkoutCache
+              .create({ cwd: input.cwd, worktreePath, refName: checkoutRef, checkoutWorkers })
+              .pipe(Effect.flatMap((cloned) => (cloned ? Effect.void : stockCheckout)))
+          : stockCheckout
+      ).pipe(
+        Effect.onError(() =>
+          newRefName
+            ? deleteLocalBranch({ cwd: input.cwd, refName: newRefName, force: true }).pipe(
+                Effect.catch((cause) =>
+                  Effect.logWarning("could not remove the branch of a failed worktree", { cause }),
+                ),
+              )
+            : Effect.void,
+        ),
+      );
+      if (fastCheckout) {
+        yield* checkoutCache.schedule(worktreePath, cacheGeneration);
+      }
+
+      return { worktreePath, base };
+    });
+    const { worktreePath, base } = yield* withWorktreeCreationLock(
+      path.resolve(input.cwd),
+      addWorktree,
+      // Retry only a failure git did not explain as lasting (an existing branch or path) and that
+      // left no checkout behind, so no checkout hook ran.
+      (error) =>
+        error.reason !== undefined && error.reason !== "config_locked"
+          ? Effect.succeed(false)
+          : attemptedPath === null
+            ? Effect.succeed(true)
+            : fileSystem.exists(attemptedPath).pipe(
+                Effect.map((exists) => !exists),
+                Effect.orElseSucceed(() => false),
               ),
-            )
-          : Effect.void,
-      ),
     );
-    if (fastCheckout) {
-      yield* checkoutCache.schedule(worktreePath, cacheGeneration);
-    }
+    const newRefName = input.newRefName;
 
     if (progress?.onWorktreeClaimed) {
       yield* progress.onWorktreeClaimed(worktreePath);

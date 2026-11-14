@@ -27,7 +27,7 @@ import {
   type OrchestratorMcpRequestSecretInput,
   type OrchestratorMcpRequestSecretResult,
   type OrchestratorMcpDeleteScheduledTaskResult,
-  type OrchestratorMcpListScheduledTasksResult,
+  type OrchestratorMcpScheduledTaskRow,
   type OrchestratorMcpScheduledTask,
   type OrchestratorMcpScheduleTaskInput,
   type OrchestratorMcpScheduleTaskResult,
@@ -164,7 +164,9 @@ const secretRequestResult = (
 const DEFAULT_THREAD_LIST_LIMIT = 50;
 const DEFAULT_THREAD_READ_LIMIT = 50;
 const DEFAULT_THREAD_RUN_LIMIT = 10;
-const DEFAULT_THREAD_ITEM_MAX_CHARS = 20_000;
+// t4 fork (AI-93): long items cost agents their context; a cut item says how to read on.
+const DEFAULT_THREAD_ITEM_MAX_CHARS = 1_500;
+const SCHEDULED_TASK_PROMPT_PREVIEW_CHARS = 120;
 
 interface ResolvedTarget {
   readonly modelSelection: ModelSelection;
@@ -204,7 +206,10 @@ export interface OrchestratorMcpServiceShape {
   readonly listScheduledTasks: (
     scope: McpInvocationScope,
     input: OrchestratorMcpListScheduledTasksInput,
-  ) => Effect.Effect<OrchestratorMcpListScheduledTasksResult, OrchestratorMcpFailure>;
+  ) => Effect.Effect<
+    { readonly tasks: ReadonlyArray<OrchestratorMcpScheduledTask> },
+    OrchestratorMcpFailure
+  >;
   readonly updateScheduledTask: (
     scope: McpInvocationScope,
     input: OrchestratorMcpUpdateScheduledTaskInput,
@@ -640,6 +645,7 @@ function pageIncludesTerminalTaskResult(input: {
     "thread" | "runs" | "contextTransfers" | "messages" | "turnItems" | "providerTurns"
   >;
   readonly maxChars: number;
+  readonly textOffset: number;
 }): boolean {
   const transfer = taskResultTransfer(input.parentThreadId, input.target, input.task);
   if (transfer === undefined) return false;
@@ -662,7 +668,7 @@ function pageIncludesTerminalTaskResult(input: {
     if (!matchesResult) return false;
 
     const text = turnItemText(row.item);
-    return text !== null && text.length <= textPageEnd(text, 0, input.maxChars);
+    return text !== null && text.length <= textPageEnd(text, input.textOffset, input.maxChars);
   });
 }
 
@@ -785,7 +791,7 @@ function threadTitle(input: {
 
 function threadSettlement(
   thread: Pick<OrchestrationV2ThreadShell, "settledOverride" | "settledAt">,
-): Pick<OrchestratorMcpThreadListItem, "settled" | "settledAt"> {
+): Pick<OrchestratorMcpThreadDetail, "settled" | "settledAt"> {
   const settled = thread.settledOverride === "settled";
   return {
     settled,
@@ -796,7 +802,7 @@ function threadSettlement(
 function threadSnooze(
   thread: Parameters<typeof isSnoozed>[0],
   nowMs: number,
-): Pick<OrchestratorMcpThreadListItem, "snoozed" | "snoozedUntil"> {
+): Pick<OrchestratorMcpThreadDetail, "snoozed" | "snoozedUntil"> {
   const snoozed = isSnoozed(thread, nowMs);
   return {
     snoozed,
@@ -829,6 +835,62 @@ function threadPullRequest(
     source: link.source,
     state: link.snapshot?.state ?? null,
   };
+}
+
+/** t4 fork (AI-93): what agents pick a thread by; `detail: true` gives the full row. */
+function compactListItemFromShell(
+  scope: McpInvocationScope,
+  shell: OrchestrationV2ThreadShell,
+  nowMs: number,
+): OrchestratorMcpThreadListItem {
+  return {
+    threadId: shell.id,
+    title: shell.title,
+    link: threadLinkFor(scope, shell.id),
+    status: shell.activityRunStatus ?? shell.status,
+    updatedAt: DateTime.formatIso(shell.updatedAt),
+    ...(shell.linkedPullRequest == null ? {} : { linkedPullRequest: shell.linkedPullRequest }),
+    ...(threadSettlement(shell).settled ? { settled: true } : {}),
+    ...(isSnoozed(shell, nowMs) ? { snoozed: true } : {}),
+    ...(shell.lineage.parentThreadId === null
+      ? {}
+      : { parentThreadId: shell.lineage.parentThreadId }),
+  };
+}
+
+const COMPACT_THREAD_LIST_MORE =
+  "Compact rows. `detail: true` gives full rows; t3_thread_read gives one thread in full.";
+
+/** t4 fork (AI-93): list rows cut the prompt to a preview; `scheduledTaskId` reads one in full. */
+export function scheduledTaskRows(tasks: ReadonlyArray<OrchestratorMcpScheduledTask>): {
+  readonly tasks: ReadonlyArray<OrchestratorMcpScheduledTaskRow>;
+  readonly more?: string;
+} {
+  const rows = tasks.map((task): OrchestratorMcpScheduledTaskRow => ({
+    scheduledTaskId: task.scheduledTaskId,
+    title: task.title,
+    enabled: task.enabled,
+    boundThreadId: task.boundThreadId,
+    schedule: task.schedule,
+    nextRunAt: task.nextRunAt,
+    lastRunStatus: task.lastRunStatus,
+    promptPreview: task.prompt.slice(
+      0,
+      textPageEnd(task.prompt, 0, SCHEDULED_TASK_PROMPT_PREVIEW_CHARS),
+    ),
+    promptLength: task.prompt.length,
+    ...(task.blockedByPolicy === undefined ? {} : { blockedByPolicy: task.blockedByPolicy }),
+  }));
+  const cut = tasks.some(
+    (task) =>
+      task.prompt.length > SCHEDULED_TASK_PROMPT_PREVIEW_CHARS || task.webhookUrl !== undefined,
+  );
+  return cut
+    ? {
+        tasks: rows,
+        more: `Prompts are cut to ${SCHEDULED_TASK_PROMPT_PREVIEW_CHARS} chars (promptLength is the whole). Pass \`scheduledTaskId\` for one task in full, with its webhook URL.`,
+      }
+    : { tasks: rows };
 }
 
 function listItemFromShell(
@@ -1057,6 +1119,7 @@ function timelineItem(input: {
     text: text === null ? null : text.slice(offset, end),
     textTruncated,
     nextTextOffset: textTruncated ? end : null,
+    ...(textTruncated ? { remainingChars: text.length - end } : {}),
     updatedAt: DateTime.formatIso(input.row.item.updatedAt),
   };
 }
@@ -2089,10 +2152,20 @@ const make = Effect.gen(function* () {
               failure("orchestration_error", `Could not list scheduled tasks: ${error.message}`),
             ),
           );
+        const wanted = tasks.filter((task) =>
+          input.scheduledTaskId !== undefined
+            ? task.id === input.scheduledTaskId
+            : projectId === undefined || task.projectId === projectId,
+        );
+        if (input.scheduledTaskId !== undefined && wanted.length === 0) {
+          return yield* failure(
+            "task_not_found",
+            `Scheduled task ${input.scheduledTaskId} was not found.`,
+          );
+        }
         return {
-          tasks: yield* Effect.forEach(
-            tasks.filter((task) => projectId === undefined || task.projectId === projectId),
-            (task) => summarizeScheduledTask(scope, { parent, limits }, task),
+          tasks: yield* Effect.forEach(wanted, (task) =>
+            summarizeScheduledTask(scope, { parent, limits }, task),
           ),
         };
       },
@@ -3054,9 +3127,14 @@ const make = Effect.gen(function* () {
       return {
         projectId,
         currentThreadId: parent?.thread.id ?? null,
-        threads: page.map((shell) => listItemFromShell(scope, shell, nowMs)),
+        threads: page.map((shell) =>
+          input.detail === true
+            ? listItemFromShell(scope, shell, nowMs)
+            : compactListItemFromShell(scope, shell, nowMs),
+        ),
         nextCursor,
         total: filtered.length,
+        ...(input.detail === true || page.length === 0 ? {} : { more: COMPACT_THREAD_LIST_MORE }),
       } satisfies OrchestratorMcpThreadListResult;
     }),
     readThread: Effect.fn("OrchestratorMcpService.readThread")(function* (scope, input) {
@@ -3108,12 +3186,9 @@ const make = Effect.gen(function* () {
               target,
               returnedRunIds,
             );
-      if (
-        parent !== undefined &&
-        scope.thread !== undefined &&
-        tasks.length > 0 &&
-        (input.textOffset ?? 0) === 0
-      ) {
+      // A cut result is delivered once a read reaches its end (itemId + textOffset).
+      const textOffset = input.itemId === undefined ? 0 : (input.textOffset ?? 0);
+      if (parent !== undefined && scope.thread !== undefined && tasks.length > 0) {
         for (const task of tasks) {
           const transfer = taskResultTransfer(parent.thread.id, target, task);
           const resultRunId = transfer?.sourcePoint.runId ?? delegatedTaskRun(target, task)?.id;
@@ -3133,6 +3208,7 @@ const make = Effect.gen(function* () {
               task,
               target: { ...target, ...resultRecords },
               maxChars,
+              textOffset,
             })
           ) {
             yield* readTask(

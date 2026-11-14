@@ -463,16 +463,28 @@ describe("evaluatePullRequestWatch", () => {
     assert.deepEqual(evaluatePullRequestWatch(watch(), noViewer, [reply]).changes, []);
   });
 
-  it("reports remarks from others once and never the agent's own", () => {
+  it("reports remarks from others once and never the agent's own, bot chatter or outdated ones", () => {
     const comments = [
       remark("agent-user", "2026-10-02T12:05:00Z", "Fixed in the latest push."),
       remark("macroscope-app[bot]", "2026-10-02T12:06:00Z"),
       remark("reviewer", "2026-10-02T11:00:00Z", "Older than the watch."),
+      { ...remark("Linear-Code[bot]", "2026-10-02T12:07:00Z"), kind: "issue-comment" as const },
+      {
+        ...remark("blacksmith-sh", "2026-10-02T12:07:00Z"),
+        kind: "issue-comment" as const,
+        author: { login: "blacksmith-sh", name: null, avatarUrl: null, isBot: true },
+      },
+      { ...remark("reviewer", "2026-10-02T12:08:00Z"), outdated: true },
     ];
     const report = evaluatePullRequestWatch(watch(), detail(), comments);
     assert.deepEqual(report.changes, [{ kind: "remarks", remarks: [comments[1]!] }]);
-    assert.equal(report.next.remarksThrough, "2026-10-02T12:06:00Z");
+    assert.equal(report.next.remarksThrough, "2026-10-02T12:08:00Z");
+    assert.deepEqual(report.next.remarkIds, [comments[5]!.id]);
     assert.deepEqual(evaluatePullRequestWatch(report.next, detail(), comments).changes, []);
+    const quiet = evaluatePullRequestWatch(watch(), detail(), comments.slice(3));
+    assert.deepEqual(quiet.changes, []);
+    assert.equal(quiet.next.remarksThrough, "2026-10-02T12:08:00Z");
+    assert.equal(quiet.next.wakes, 0);
   });
 
   it("cuts a long remark in the wake message without splitting an emoji", () => {

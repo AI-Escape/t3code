@@ -581,7 +581,13 @@ const threadListCommand = Command.make("list", {
         while (cursor !== null) {
           const page: OrchestratorMcpThreadListResult = yield* tools.call(
             "t3_thread_list",
-            { projectId: project.id, includeSubagents: false, limit: 100, cursor },
+            {
+              projectId: project.id,
+              includeSubagents: false,
+              limit: 100,
+              cursor,
+              detail: flags.json,
+            },
             OrchestratorMcpThreadListResult,
           );
           threads.push(...page.threads);

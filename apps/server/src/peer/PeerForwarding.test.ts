@@ -381,6 +381,7 @@ it.effect("an agent here works on a linked environment's threads within its own 
       const threads = yield* a.call("thread:laptop-full", "t3_thread_list", {
         environmentId: box.environmentId,
         projectId: boxProject,
+        detail: true,
       });
       expect(threads.isError).toBe(false);
       expect(threads.structuredContent).toMatchObject({

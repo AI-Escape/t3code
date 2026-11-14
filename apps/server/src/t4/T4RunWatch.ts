@@ -4,18 +4,21 @@
  * Each watched run is checked every 30 s and one message posted when it completes. Watches live in
  * t4_meta (a handful at a time); one older than six hours is dropped with a note.
  */
-import { ThreadId } from "@t3tools/contracts";
+import { type OrchestrationV2ThreadShell, ThreadId } from "@t3tools/contracts";
 import * as Clock from "effect/Clock";
 import * as Context from "effect/Context";
 import * as DateTime from "effect/DateTime";
 import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
+import * as Option from "effect/Option";
 import * as Schema from "effect/Schema";
 import * as Semaphore from "effect/Semaphore";
 
 import * as ThreadManagementService from "../orchestration-v2/ThreadManagementService.ts";
 import * as ProcessRunner from "../processRunner.ts";
 import * as T4Delivery from "./T4Delivery.ts";
+import * as T4Ledger from "./T4Ledger.ts";
+import * as T4Releases from "./T4Releases.ts";
 import * as T4Store from "./T4Store.ts";
 
 const META_KEY = "workflow-run-watches";
@@ -496,6 +499,21 @@ const make = Effect.gen(function* () {
     return { run, watching: true };
   });
 
+  // t4 fork: a release manager's wake carries its queue and debts, so it starts the turn without
+  // reading them (AI-93); a finished run waits for a running turn instead of cutting its command.
+  const ledger = Option.getOrUndefined(yield* Effect.serviceOption(T4Ledger.T4Ledger));
+  const briefFor = (target: OrchestrationV2ThreadShell) =>
+    ledger === undefined
+      ? Effect.succeed("")
+      : ledger.world().pipe(
+          Effect.flatMap((world) =>
+            ledger.isReleaseManager(world, target)
+              ? T4Releases.releaseManagerBriefFor(target, world)
+              : Effect.succeed(""),
+          ),
+          Effect.provideService(T4Store.T4Store, store),
+          Effect.orElseSucceed(() => ""),
+        );
   const post = (threadId: string, text: string, options?: { readonly skipSettled?: boolean }) =>
     threads.getThreadShell(ThreadId.make(threadId)).pipe(
       Effect.flatMap((target) =>
@@ -506,9 +524,19 @@ const make = Effect.gen(function* () {
         (options?.skipSettled === true &&
           (target.settledOverride === "settled" || target.settledAt != null))
           ? Effect.void
-          : delivery
-              .deliver({ target, text, force: true, createdBy: "system", creationSource: "server" })
-              .pipe(Effect.asVoid),
+          : briefFor(target).pipe(
+              Effect.flatMap((brief) =>
+                delivery.deliver({
+                  target,
+                  text: brief + text,
+                  force: true,
+                  patient: true,
+                  createdBy: "system",
+                  creationSource: "server",
+                }),
+              ),
+              Effect.asVoid,
+            ),
       ),
       Effect.ignore,
     );

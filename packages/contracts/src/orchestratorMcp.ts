@@ -357,6 +357,13 @@ export const OrchestratorMcpThreadListInput = Schema.Struct({
   includeSubagents: Schema.optional(Schema.Boolean),
   cursor: Schema.optional(NonNegativeInt),
   limit: Schema.optional(PositiveInt.check(Schema.isLessThanOrEqualTo(100))),
+  /** t4 fork (AI-93): rows are compact unless this is set. */
+  detail: Schema.optional(
+    Schema.Boolean.annotate({
+      description:
+        "true: full rows (model, modes, creator, run, timestamps). Default: compact rows.",
+    }),
+  ),
 });
 export type OrchestratorMcpThreadListInput = typeof OrchestratorMcpThreadListInput.Type;
 
@@ -388,31 +395,32 @@ export const OrchestratorMcpThreadPullRequest = Schema.Struct({
 });
 export type OrchestratorMcpThreadPullRequest = typeof OrchestratorMcpThreadPullRequest.Type;
 
+/** t4 fork (AI-93): a compact row by default; `detail: true` fills every optional field. */
 export const OrchestratorMcpThreadListItem = Schema.Struct({
   threadId: ThreadId,
-  projectId: ProjectId,
   /** t4 fork. */
   t4: Schema.optional(OrchestratorMcpThreadT4Facts),
   title: Schema.String,
   link: Schema.optional(Schema.String),
-  createdBy: OrchestrationV2Actor,
-  creationSource: OrchestrationV2CreationSource,
   status: OrchestratorMcpThreadStatus,
-  latestRunId: Schema.NullOr(RunId),
-  providerInstanceId: ProviderInstanceId,
-  model: Schema.String,
-  runtimeMode: RuntimeMode,
-  interactionMode: ProviderInteractionMode,
-  linkedPullRequest: Schema.NullOr(ThreadLinkedPullRequest),
-  settled: Schema.Boolean,
-  settledAt: Schema.NullOr(IsoDateTime),
-  snoozed: Schema.Boolean,
-  snoozedUntil: Schema.NullOr(IsoDateTime),
-  parentThreadId: Schema.NullOr(ThreadId),
-  relationshipToParent: Schema.NullOr(Schema.Literals(["fork", "subagent"])),
-  itemCount: NonNegativeInt,
-  createdAt: IsoDateTime,
   updatedAt: IsoDateTime,
+  linkedPullRequest: Schema.optional(Schema.NullOr(ThreadLinkedPullRequest)),
+  settled: Schema.optional(Schema.Boolean),
+  snoozed: Schema.optional(Schema.Boolean),
+  parentThreadId: Schema.optional(Schema.NullOr(ThreadId)),
+  projectId: Schema.optional(ProjectId),
+  createdBy: Schema.optional(OrchestrationV2Actor),
+  creationSource: Schema.optional(OrchestrationV2CreationSource),
+  latestRunId: Schema.optional(Schema.NullOr(RunId)),
+  providerInstanceId: Schema.optional(ProviderInstanceId),
+  model: Schema.optional(Schema.String),
+  runtimeMode: Schema.optional(RuntimeMode),
+  interactionMode: Schema.optional(ProviderInteractionMode),
+  settledAt: Schema.optional(Schema.NullOr(IsoDateTime)),
+  snoozedUntil: Schema.optional(Schema.NullOr(IsoDateTime)),
+  relationshipToParent: Schema.optional(Schema.NullOr(Schema.Literals(["fork", "subagent"]))),
+  itemCount: Schema.optional(NonNegativeInt),
+  createdAt: Schema.optional(IsoDateTime),
 });
 export type OrchestratorMcpThreadListItem = typeof OrchestratorMcpThreadListItem.Type;
 
@@ -423,6 +431,8 @@ export const OrchestratorMcpThreadListResult = Schema.Struct({
   threads: Schema.Array(OrchestratorMcpThreadListItem),
   nextCursor: Schema.NullOr(NonNegativeInt),
   total: NonNegativeInt,
+  /** t4 fork (AI-93): how to see what a compact row leaves out. */
+  more: Schema.optional(Schema.String),
 });
 export type OrchestratorMcpThreadListResult = typeof OrchestratorMcpThreadListResult.Type;
 
@@ -527,6 +537,8 @@ export const OrchestratorMcpThreadTimelineItem = Schema.Struct({
   text: Schema.NullOr(Schema.String),
   textTruncated: Schema.Boolean,
   nextTextOffset: Schema.optional(Schema.NullOr(NonNegativeInt)),
+  /** t4 fork (AI-93): characters left after this page of a cut item's text. */
+  remainingChars: Schema.optional(NonNegativeInt),
   updatedAt: IsoDateTime,
 });
 export type OrchestratorMcpThreadTimelineItem = typeof OrchestratorMcpThreadTimelineItem.Type;
@@ -775,12 +787,39 @@ export const OrchestratorMcpListScheduledTasksInput = Schema.Struct({
         "true: every task in the project, finished ones too. Default: your thread's pending tasks.",
     }),
   ),
+  /** t4 fork (AI-93): one task in full; list rows are compact. */
+  scheduledTaskId: Schema.optional(
+    ScheduledTaskId.annotate({
+      description: "Read this one task in full (whole prompt, webhook URL) as `task`.",
+    }),
+  ),
 });
 export type OrchestratorMcpListScheduledTasksInput =
   typeof OrchestratorMcpListScheduledTasksInput.Type;
 
+/** t4 fork (AI-93): a list row; the prompt is cut to a preview. */
+export const OrchestratorMcpScheduledTaskRow = Schema.Struct({
+  scheduledTaskId: ScheduledTaskId,
+  title: Schema.String,
+  enabled: Schema.Boolean,
+  boundThreadId: Schema.NullOr(ThreadId),
+  schedule: ScheduledTaskSchedule,
+  nextRunAt: Schema.NullOr(IsoDateTime),
+  lastRunStatus: ScheduledTaskRunStatus,
+  promptPreview: Schema.String,
+  promptLength: NonNegativeInt,
+  blockedByPolicy: Schema.optional(Schema.String),
+});
+export type OrchestratorMcpScheduledTaskRow = typeof OrchestratorMcpScheduledTaskRow.Type;
+
 export const OrchestratorMcpListScheduledTasksResult = Schema.Struct({
-  tasks: Schema.Array(OrchestratorMcpScheduledTask),
+  // Full rows still decode: a linked environment on an older version sends them.
+  tasks: Schema.Array(
+    Schema.Union([OrchestratorMcpScheduledTaskRow, OrchestratorMcpScheduledTask]),
+  ),
+  /** With `scheduledTaskId`. */
+  task: Schema.optional(OrchestratorMcpScheduledTask),
+  more: Schema.optional(Schema.String),
 });
 export type OrchestratorMcpListScheduledTasksResult =
   typeof OrchestratorMcpListScheduledTasksResult.Type;

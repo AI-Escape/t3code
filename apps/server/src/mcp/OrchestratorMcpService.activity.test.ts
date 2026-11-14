@@ -296,7 +296,9 @@ it("readThread pages cut-off text without splitting an emoji across pages", asyn
           text,
           textTruncated: index < expected.length - 1,
           nextTextOffset: index < expected.length - 1 ? textOffset : null,
+          ...(index < expected.length - 1 ? { remainingChars: "a😀bc".length - textOffset } : {}),
         });
+        expect("remainingChars" in result.items[0]!).toBe(index < expected.length - 1);
       }
     }
   }).pipe(Effect.provide(layer), Effect.runPromise);

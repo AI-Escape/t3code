@@ -32,6 +32,11 @@ export interface T4DeliverInput {
   readonly text: string;
   readonly senderThreadId?: ThreadId;
   readonly interrupt?: boolean;
+  /**
+   * Not urgent: a running turn finishes first (queued), so a command it runs is never cut.
+   * 185 steered notes cancelled tool calls in a week, mostly test runs re-run (AI-93).
+   */
+  readonly patient?: boolean;
   /** Skip the delivery notes (the server's own relays). */
   readonly force?: boolean;
   /** Asks nothing of the recipient: a pending settle stands. */
@@ -57,6 +62,8 @@ export interface T4DeliveryShape {
     readonly sender: OrchestrationV2ThreadShell;
     readonly target: OrchestrationV2ThreadShell;
     readonly text: string;
+    /** Sent with mode `queue`: the delivery notes for a cut tool call don't apply. */
+    readonly queued?: boolean;
   }) => Effect.Effect<string, T4DeliveryError>;
 }
 
@@ -150,17 +157,18 @@ const make = Effect.gen(function* () {
             Effect.orElseSucceed(() => noQuestions),
           );
 
-  /** The delivery notes, prepended when they apply. */
+  /** The delivery notes, prepended when they apply; a queued message cancels nothing. */
   const withNotes = Effect.fn("t4.T4Delivery.withNotes")(function* (
     target: OrchestrationV2ThreadShell,
     text: string,
+    queued: boolean,
   ) {
     const questions = yield* pendingQuestions(target);
     const notes = deliveryNotes({
       settled: isSettled(target),
       questions: questions.live,
       openQuestions: questions.open,
-      claudeRunning: target.providerInstanceId.startsWith("claude") && isRunning(target),
+      claudeRunning: !queued && target.providerInstanceId.startsWith("claude") && isRunning(target),
     });
     return notes.length === 0
       ? text
@@ -176,7 +184,7 @@ const make = Effect.gen(function* () {
       });
     }
     const header = `Message from thread "${input.sender.title}" (${shortId(input.sender.id)}):\n\n`;
-    return yield* withNotes(input.target, header + input.text);
+    return yield* withNotes(input.target, header + input.text, input.queued === true);
   });
 
   const deliver: T4DeliveryShape["deliver"] = Effect.fn("t4.T4Delivery.deliver")(function* (
@@ -193,7 +201,10 @@ const make = Effect.gen(function* () {
         .getThreadShell(input.target.id)
         .pipe(Effect.orElseSucceed(() => null))) ?? input.target;
     const running = isRunning(target);
-    const text = input.force === true ? input.text : yield* withNotes(target, input.text);
+    const restart = input.interrupt === true && running;
+    const queued = !restart && input.patient === true;
+    const text =
+      input.force === true ? input.text : yield* withNotes(target, input.text, queued && running);
 
     const world = yield* ledger.world().pipe(Effect.mapError(fail("t4 ledger unavailable")));
     const rmModel = config.releaseManagerModel;
@@ -218,7 +229,7 @@ const make = Effect.gen(function* () {
         text,
         attachments: [],
         ...(modelSelection === undefined ? {} : { modelSelection }),
-        mode: input.interrupt === true && running ? "restart" : "auto",
+        mode: restart ? "restart" : queued ? "queue" : "auto",
         createdBy: input.createdBy ?? "agent",
         creationSource: input.creationSource ?? "mcp",
       })
@@ -229,7 +240,9 @@ const make = Effect.gen(function* () {
         : result.delivery === "steered"
           ? "it was mid-turn; the message went straight into the running turn"
           : result.delivery === "queued"
-            ? "it was starting a turn; the message is queued right behind it"
+            ? queued && running
+              ? "it is mid-turn; the message waits until that turn ends, so nothing it runs is cut (pass interrupt to cut in)"
+              : "it was starting a turn; the message is queued right behind it"
             : "delivered";
     return { messageId, delivery: result.delivery, how };
   });
