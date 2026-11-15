@@ -193,7 +193,11 @@ export const isClaudeAccountExhausted = (
   return blockedUntil(loadState(env, files), key, model) > nowMs;
 };
 
-/** The first account in order not used up for `model` (the main login included), else the main login. */
+/**
+ * The first account not used up for `model` (the main login included); with none, the main login
+ * if it exists, else the account freeing first - so Claude answers with its real limit, never the
+ * "Not logged in" of a token-less main, which nothing resumes (AI-99).
+ */
 export const pickClaudeAccount = (
   nowMs: number,
   env: NodeJS.ProcessEnv = process.env,
@@ -202,16 +206,20 @@ export const pickClaudeAccount = (
   const files = accountFiles(env);
   if (files.length === 0) return { key: MAIN_CLAUDE_ACCOUNT };
   const state = loadState(env, files);
+  let soonest: { account: ClaudeAccount; until: number } | null = null;
   for (const { key, file } of accountList(env)) {
-    if (blockedUntil(state, key, model) > nowMs) continue;
+    const until = blockedUntil(state, key, model);
     if (file === undefined) {
-      if (mainLoginAvailable(env)) return { key: MAIN_CLAUDE_ACCOUNT };
+      if (until <= nowMs && mainLoginAvailable(env)) return { key: MAIN_CLAUDE_ACCOUNT };
       continue;
     }
     const token = readToken(file);
-    if (token !== undefined) return { key, token };
+    if (token === undefined) continue;
+    if (until <= nowMs) return { key, token };
+    if (soonest === null || until < soonest.until) soonest = { account: { key, token }, until };
   }
-  return { key: MAIN_CLAUDE_ACCOUNT };
+  if (mainLoginAvailable(env) || soonest === null) return { key: MAIN_CLAUDE_ACCOUNT };
+  return soonest.account;
 };
 
 export const claudeAccountEnvironment = (
