@@ -194,11 +194,9 @@ export const isClaudeAccountExhausted = (
 };
 
 /**
- * The first account in order not used up for `model` (the main login included). With every one
- * used up: the main login when it exists, else the account whose mark ends first. Claude then
- * answers with its real limit, which T3's limit recovery marks and resumes at the reset, or runs
- * if the mark was stale. A token-less "main" made Claude answer "Not logged in", a failed turn
- * nothing resumes: usa-rs threads sat 17 h so on 2026-11-14 (AI-99).
+ * The first account not used up for `model` (the main login included); with none, the main login
+ * if it exists, else the account freeing first - so Claude answers with its real limit, never the
+ * "Not logged in" of a token-less main, which nothing resumes (AI-99).
  */
 export const pickClaudeAccount = (
   nowMs: number,
