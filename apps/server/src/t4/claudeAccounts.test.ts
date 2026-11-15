@@ -135,6 +135,21 @@ describe("t4 claudeAccounts", () => {
     expect(pickClaudeAccount(1_000, noLogin)).toEqual({ key: "main" });
   });
 
+  it("with every account used up and no main login, gives the one that frees first (AI-99)", () => {
+    const { dir, env } = setup();
+    const home = NodeFS.mkdtempSync(NodePath.join(NodeOS.tmpdir(), "t4-home-"));
+    const noLogin = { ...env, HOME: home } as NodeJS.ProcessEnv;
+    markClaudeAccountExhausted("1", 90_000, 1_000, noLogin);
+    markClaudeAccountExhausted("2", 50_000, 1_000, noLogin);
+    expect(pickClaudeAccount(1_000, noLogin)).toEqual({ key: "2", token: "token-two" });
+    // A token file gone is skipped there too.
+    NodeFS.rmSync(NodePath.join(dir, "2.token"));
+    expect(pickClaudeAccount(1_000, noLogin)).toEqual({ key: "1", token: "token-one" });
+    // No usable account at all: the main login, as before.
+    NodeFS.rmSync(NodePath.join(dir, "1.token"));
+    expect(pickClaudeAccount(1_000, noLogin)).toEqual({ key: "main" });
+  });
+
   it("signs the status check and text generation in with an account, used up or not", () => {
     const { dir, env } = setup();
     const home = NodeFS.mkdtempSync(NodePath.join(NodeOS.tmpdir(), "t4-home-"));

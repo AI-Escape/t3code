@@ -193,7 +193,13 @@ export const isClaudeAccountExhausted = (
   return blockedUntil(loadState(env, files), key, model) > nowMs;
 };
 
-/** The first account in order not used up for `model` (the main login included), else the main login. */
+/**
+ * The first account in order not used up for `model` (the main login included). With every one
+ * used up: the main login when it exists, else the account whose mark ends first. Claude then
+ * answers with its real limit, which T3's limit recovery marks and resumes at the reset, or runs
+ * if the mark was stale. A token-less "main" made Claude answer "Not logged in", a failed turn
+ * nothing resumes: usa-rs threads sat 17 h so on 2026-11-14 (AI-99).
+ */
 export const pickClaudeAccount = (
   nowMs: number,
   env: NodeJS.ProcessEnv = process.env,
@@ -202,16 +208,20 @@ export const pickClaudeAccount = (
   const files = accountFiles(env);
   if (files.length === 0) return { key: MAIN_CLAUDE_ACCOUNT };
   const state = loadState(env, files);
+  let soonest: { account: ClaudeAccount; until: number } | null = null;
   for (const { key, file } of accountList(env)) {
-    if (blockedUntil(state, key, model) > nowMs) continue;
+    const until = blockedUntil(state, key, model);
     if (file === undefined) {
-      if (mainLoginAvailable(env)) return { key: MAIN_CLAUDE_ACCOUNT };
+      if (until <= nowMs && mainLoginAvailable(env)) return { key: MAIN_CLAUDE_ACCOUNT };
       continue;
     }
     const token = readToken(file);
-    if (token !== undefined) return { key, token };
+    if (token === undefined) continue;
+    if (until <= nowMs) return { key, token };
+    if (soonest === null || until < soonest.until) soonest = { account: { key, token }, until };
   }
-  return { key: MAIN_CLAUDE_ACCOUNT };
+  if (mainLoginAvailable(env) || soonest === null) return { key: MAIN_CLAUDE_ACCOUNT };
+  return soonest.account;
 };
 
 export const claudeAccountEnvironment = (
