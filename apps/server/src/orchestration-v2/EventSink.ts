@@ -318,6 +318,20 @@ const layerBase: Layer.Layer<
       Effect.fnUntraced(function* (events: ReadonlyArray<OrchestrationV2DomainEvent>) {
         const staleRequests = new Set<RuntimeRequestId>();
         const staleNodes = new Set<NodeId>();
+        // t4 fork: a message-mode question outlives its turn, so its cancellation is stale -
+        // unless the same write posts the thread's new message-mode question, which replaces
+        // it (ProviderEventIngestor's dismissDuplicateQuestions, AI-105).
+        const replacingThreads = new Set(
+          events.flatMap((event) =>
+            event.type === "turn-item.updated" &&
+            event.payload.type === "user_input_request" &&
+            event.payload.responseMode === "message" &&
+            event.payload.status !== "cancelled" &&
+            event.payload.status !== "completed"
+              ? [event.threadId]
+              : [],
+          ),
+        );
         for (const event of events) {
           if (
             event.type !== "runtime-request.updated" ||
@@ -333,7 +347,7 @@ const layerBase: Layer.Layer<
             current?.status !== "pending" ||
             current.kind !== "user_input" ||
             current.providerTurnId !== event.payload.providerTurnId ||
-            current.responseCapability.type === "message"
+            (current.responseCapability.type === "message" && !replacingThreads.has(event.threadId))
           ) {
             staleRequests.add(event.payload.id);
             staleNodes.add(event.payload.nodeId);

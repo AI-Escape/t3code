@@ -1642,6 +1642,162 @@ layer("ProviderEventIngestorV2", (it) => {
     }),
   );
 
+  // t4 fork: AI-105 - a thread's new message-mode question replaces its older open ones.
+  it.effect("closes a thread's older open message-mode questions when it asks a new one", () =>
+    Effect.gen(function* () {
+      const now = yield* DateTime.now;
+      const eventSink = yield* EventSink.EventSinkV2;
+      const projectionStore = yield* ProjectionStore.ProjectionStoreV2;
+      const ingestor = yield* ProviderEventIngestor.ProviderEventIngestorV2;
+      const idAllocator = yield* IdAllocator.IdAllocatorV2;
+      const threadEvent = yield* threadCreatedEvent(now);
+      const threadId = threadEvent.threadId;
+      const providerSessionId = yield* idAllocator.allocate.providerSession({
+        providerInstanceId: modelSelection.instanceId,
+        threadId,
+      });
+      const providerThreadId = idAllocator.derive.providerThread({
+        driver: CODEX_DRIVER,
+        nativeThreadId: `${threadId}:replace`,
+      });
+      const providerTurnId = idAllocator.derive.providerTurn({
+        driver: CODEX_DRIVER,
+        nativeTurnId: `${threadId}:replace`,
+      });
+      // In the past: the cancel is stamped now, and a projection keeps the newest update.
+      const at = (minutes: number) => DateTime.add(now, { minutes: minutes - 60 });
+      const question = (
+        key: string,
+        text: string,
+        minutes: number,
+        capability: OrchestrationV2RuntimeRequest["responseCapability"],
+      ) => {
+        const nodeId = NodeId.make(`${threadId}:${key}`);
+        const request: OrchestrationV2RuntimeRequest = {
+          id: RuntimeRequestId.make(`${threadId}:${key}`),
+          nodeId,
+          providerTurnId,
+          nativeRequestRef: null,
+          kind: "user_input",
+          status: "pending",
+          responseCapability: capability,
+          createdAt: at(minutes),
+          resolvedAt: null,
+        };
+        const node: OrchestrationV2ExecutionNode = {
+          id: nodeId,
+          threadId,
+          runId: null,
+          parentNodeId: null,
+          rootNodeId: nodeId,
+          kind: "user_input_request",
+          status: "waiting",
+          countsForRun: false,
+          providerThreadId,
+          providerTurnId,
+          nativeItemRef: null,
+          runtimeRequestId: request.id,
+          checkpointScopeId: null,
+          startedAt: at(minutes),
+          completedAt: null,
+        };
+        const item: OrchestrationV2TurnItem = {
+          id: TurnItemId.make(`${threadId}:${key}`),
+          threadId,
+          runId: null,
+          nodeId,
+          providerThreadId,
+          providerTurnId,
+          nativeItemRef: null,
+          parentItemId: null,
+          ordinal: minutes,
+          status: "waiting",
+          title: text,
+          startedAt: at(minutes),
+          completedAt: null,
+          updatedAt: at(minutes),
+          type: "user_input_request",
+          requestId: request.id,
+          questions: [{ id: text, header: "Run", question: text, options: [] }],
+          ...(capability.type === "message" ? { responseMode: "message" as const } : {}),
+        };
+        return { request, node, item };
+      };
+      const seed = (fixture: ReturnType<typeof question>) =>
+        Effect.gen(function* () {
+          const events: Array<OrchestrationV2DomainEvent> = [];
+          for (const payload of [
+            { type: "runtime-request.updated" as const, payload: fixture.request },
+            { type: "node.updated" as const, payload: fixture.node },
+            { type: "turn-item.updated" as const, payload: fixture.item },
+          ])
+            events.push({
+              id: yield* idAllocator.allocate.event({ threadId }),
+              threadId,
+              occurredAt: now,
+              ...payload,
+            });
+          yield* eventSink.write({ events });
+        });
+      const ask = (fixture: ReturnType<typeof question>) =>
+        Effect.gen(function* () {
+          yield* ingestor.ingestNormalized({
+            providerSessionId,
+            providerInstanceId: modelSelection.instanceId,
+            threadId,
+            event: {
+              type: "runtime_request.updated",
+              driver: CODEX_DRIVER,
+              runtimeRequest: fixture.request,
+            },
+          });
+          yield* ingestor.ingestNormalized({
+            providerSessionId,
+            providerInstanceId: modelSelection.instanceId,
+            threadId,
+            event: {
+              type: "turn_item.updated",
+              driver: CODEX_DRIVER,
+              // A changed item: an unchanged one is skipped as already stored.
+              turnItem: { ...fixture.item, updatedAt: at(30) },
+            },
+          });
+        });
+      yield* eventSink.write({ events: [threadEvent] });
+      const older = question("older", "Run the history backfill, capped at $900?", 0, {
+        type: "message",
+      });
+      const live = question("live", "Which workspace?", 1, {
+        type: "live",
+        providerSessionId,
+      });
+      const newer = question("newer", "Start the history backfill now?", 10, {
+        type: "message",
+      });
+      yield* seed(older);
+      yield* seed(live);
+      yield* seed(newer);
+      // A late update of the older card does not close the newer one.
+      yield* ask(older);
+      const afterOlder = yield* projectionStore.getThreadProjection(threadId);
+      assert.equal(
+        afterOlder.turnItems.find((entry) => entry.id === newer.item.id)?.status,
+        "waiting",
+      );
+      yield* ask(newer);
+
+      const projection = yield* projectionStore.getThreadProjection(threadId);
+      const statusOf = (fixture: ReturnType<typeof question>) => ({
+        request: projection.runtimeRequests.find((entry) => entry.id === fixture.request.id)
+          ?.status,
+        item: projection.turnItems.find((entry) => entry.id === fixture.item.id)?.status,
+      });
+      assert.deepEqual(statusOf(older), { request: "cancelled", item: "cancelled" });
+      assert.deepEqual(statusOf(newer), { request: "pending", item: "waiting" });
+      assert.deepEqual(statusOf(live), { request: "pending", item: "waiting" });
+    }),
+  );
+
   it.effect("keeps a steered message pending until the provider reports it read", () =>
     Effect.gen(function* () {
       const now = yield* DateTime.now;
