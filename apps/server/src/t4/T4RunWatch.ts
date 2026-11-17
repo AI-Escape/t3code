@@ -89,8 +89,23 @@ const RunListItem = Schema.Struct({
   status: Schema.optional(Schema.String),
   conclusion: Schema.optional(Schema.String),
   url: Schema.optional(Schema.String),
+  attempt: Schema.optional(Schema.Number),
 });
 const decodeRunList = Schema.decodeUnknownEffect(Schema.fromJsonString(Schema.Array(RunListItem)));
+
+/**
+ * A run's key in a commit watch's `reported`: a re-run keeps its run id and
+ * counts up `attempt`, so each attempt is its own finish. Keyed by id alone, a
+ * re-run of a run the watch had reported failed never woke its thread - and a
+ * run-id watch on it was skipped as covered by that commit watch (usa-rs
+ * USA-2339's re-run went green and the thread sat idle for hours, 2026-11-16;
+ * eight such re-runs since 10-30). The first attempt keeps the bare id, which is
+ * what watches stored before this.
+ */
+const runKey = (run: { readonly databaseId: number; readonly attempt?: number | undefined }) =>
+  run.attempt !== undefined && run.attempt > 1
+    ? `${run.databaseId}#${run.attempt}`
+    : String(run.databaseId);
 
 export interface WorkflowRun {
   readonly name: string;
@@ -278,7 +293,7 @@ const make = Effect.gen(function* () {
           "--limit",
           "50",
           "--json",
-          "databaseId,name,workflowName,displayTitle,status,conclusion,url",
+          "databaseId,name,workflowName,displayTitle,status,conclusion,url,attempt",
         ],
         ...(cwd === null ? {} : { cwd }),
         timeout: "30 seconds",
@@ -336,8 +351,7 @@ const make = Effect.gen(function* () {
             (w) => w.threadId === input.threadId && w.commit === input.commit,
           );
           const reported =
-            previous?.reported ??
-            runs.filter((run) => run.status === "completed").map((run) => String(run.databaseId));
+            previous?.reported ?? runs.filter((run) => run.status === "completed").map(runKey);
           yield* saveCommits([
             ...list.filter((w) => !(w.threadId === input.threadId && w.commit === input.commit)),
             { ...input, since: previous?.since ?? now, reported, lastActivity: now },
@@ -379,7 +393,7 @@ const make = Effect.gen(function* () {
         continue;
       }
       const finished = runs.filter(
-        (run) => run.status === "completed" && !w.reported.includes(String(run.databaseId)),
+        (run) => run.status === "completed" && !w.reported.includes(runKey(run)),
       );
       const running = runs.filter((run) => run.status !== "completed");
       let lastActivity = w.lastActivity;
@@ -401,10 +415,10 @@ const make = Effect.gen(function* () {
               );
         if (conclusion !== "success") failed = true;
         held.push(
-          `- ${run.displayTitle || run.name || run.workflowName} #${run.databaseId}: ${conclusion}${detail && detail.failedJobs.length > 0 ? ` (failed: ${detail.failedJobs.join(", ")})` : ""} ${run.url ?? ""}`.trim(),
+          `- ${run.displayTitle || run.name || run.workflowName} #${run.databaseId}${run.attempt !== undefined && run.attempt > 1 ? ` (re-run, attempt ${run.attempt})` : ""}: ${conclusion}${detail && detail.failedJobs.length > 0 ? ` (failed: ${detail.failedJobs.join(", ")})` : ""} ${run.url ?? ""}`.trim(),
         );
       }
-      const reported = [...w.reported, ...finished.map((run) => String(run.databaseId))];
+      const reported = [...w.reported, ...finished.map(runKey)];
       const expired = now - w.since > MAX_AGE_MS;
       // Post on a failure, or once nothing for the commit is running (a
       // stage of the release is over); hold everything in between.

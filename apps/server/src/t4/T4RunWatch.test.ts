@@ -244,6 +244,55 @@ describe("t4 watch_workflow_run", () => {
     }),
   );
 
+  it.effect("wakes the thread when a run it reported failed is re-run and finishes", () =>
+    Effect.gen(function* () {
+      const h = harness();
+      h.runs.set("40", {
+        commit: "eee5555",
+        headSha: full("eee5555"),
+        displayTitle: "PR checks",
+        status: "in_progress",
+        attempt: 1,
+        jobs: [],
+      });
+      yield* h.use((w) => w.watchCommit({ ...input, commit: "eee5555" }));
+      h.runs.set("40", {
+        ...h.runs.get("40"),
+        status: "completed",
+        conclusion: "failure",
+        jobs: [{ name: "Tests (Shard 1/2)", conclusion: "failure" }],
+      });
+      yield* h.use((w) => w.sweep);
+      expect(h.delivered).toHaveLength(1);
+      expect(h.delivered[0]!.text).toContain("PR checks #40: failure");
+
+      // `gh run rerun 40 --failed`: same run id, next attempt.
+      h.runs.set("40", {
+        ...h.runs.get("40"),
+        status: "queued",
+        conclusion: "",
+        attempt: 2,
+        jobs: [],
+      });
+      // The run-id watch the agent makes is covered by the commit watch.
+      const watched = yield* h.use((w) => w.watch({ ...input, runId: "40" }));
+      expect(watched.watching).toBe(true);
+      expect(h.meta.get("workflow-run-watches")).toBeUndefined();
+
+      // Longer than the commit watch's quiet spell: a running re-run keeps it.
+      yield* TestClock.adjust("30 minutes");
+      yield* h.use((w) => w.sweep);
+      expect(h.delivered).toHaveLength(1);
+
+      h.runs.set("40", { ...h.runs.get("40"), status: "completed", conclusion: "success" });
+      yield* h.use((w) => w.sweep);
+      expect(h.delivered).toHaveLength(2);
+      expect(h.delivered[1]!.text).toContain("PR checks #40 (re-run, attempt 2): success");
+      yield* h.use((w) => w.sweep);
+      expect(h.delivered).toHaveLength(2);
+    }),
+  );
+
   it.effect("watches a short commit by its full SHA and refuses one GitHub can't find", () =>
     Effect.gen(function* () {
       const h = harness();
