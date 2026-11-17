@@ -342,15 +342,8 @@ export const layer: Layer.Layer<
     );
 
     /**
-     * t4 fork: a thread's new message-mode question replaces every older one of its
-     * own that is still open. Agents re-ask an open question - word for word, reworded,
-     * or folded into a card with the next decision - and the user saw both cards
-     * (usa-rs USA-2310, 2026-11-17: "Run Nyegel's history ...?" stayed up beside
-     * "Start Nyegel's history run now?", AI-105). Until then only exact copies were meant
-     * to close, and EventSink's guard dropped even those cancellations: none of usa-rs's
-     * 2,069 message-mode cards was ever cancelled. The guard now lets them through.
-     * Cancelling the older card loses nothing: answering a message-mode question only
-     * sends a message, and the doctrine asks for every open decision in one card.
+     * t4 fork: a thread's new message-mode question replaces its older open ones, however
+     * worded (AI-105). Nothing is lost: answering a message-mode question only sends a message.
      */
     const dismissDuplicateQuestions = Effect.fn("ProviderEventIngestor.dismissDuplicateQuestions")(
       function* (input: ProviderEventIngestInput, item: OrchestrationV2TurnItem) {
