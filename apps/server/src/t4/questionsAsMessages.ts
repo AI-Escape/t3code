@@ -11,5 +11,6 @@ export const QUESTION_POSTED_NOTE =
   "Your question is posted to the user; their answer will arrive as your next message. " +
   "End your turn now with your reply to them as your final message: everything they decide " +
   "from - what changed, links, screenshots embedded as ![alt](/absolute/path.png). Text you " +
-  "write before a tool call can reach them only as a short summary. Don't ask it again in " +
-  "this turn.";
+  "write before a tool call can reach them only as a short summary. It replaces any earlier " +
+  "question of yours still open, so it must hold every decision still open. Don't ask it " +
+  "again in this turn unless it left one out.";

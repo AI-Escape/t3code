@@ -342,9 +342,15 @@ export const layer: Layer.Layer<
     );
 
     /**
-     * t4 fork: a message-mode question identical to one still open in the thread
-     * replaces it, since agents re-ask open questions word for word. Cancelling the
-     * older card loses nothing: answering a message-mode question only sends a message.
+     * t4 fork: a thread's new message-mode question replaces every older one of its
+     * own that is still open. Agents re-ask an open question - word for word, reworded,
+     * or folded into a card with the next decision - and the user saw both cards
+     * (usa-rs USA-2310, 2026-11-17: "Run Nyegel's history ...?" stayed up beside
+     * "Start Nyegel's history run now?", AI-105). Until then only exact copies were meant
+     * to close, and EventSink's guard dropped even those cancellations: none of usa-rs's
+     * 2,069 message-mode cards was ever cancelled. The guard now lets them through.
+     * Cancelling the older card loses nothing: answering a message-mode question only
+     * sends a message, and the doctrine asks for every open decision in one card.
      */
     const dismissDuplicateQuestions = Effect.fn("ProviderEventIngestor.dismissDuplicateQuestions")(
       function* (input: ProviderEventIngestInput, item: OrchestrationV2TurnItem) {
@@ -355,19 +361,21 @@ export const layer: Layer.Layer<
         ) {
           return [];
         }
-        const textOf = (questions: ReadonlyArray<{ readonly question: string }>) =>
-          questions.map((question) => question.question.trim()).join("\n");
-        const wanted = textOf(item.questions);
-        if (wanted.length === 0) return [];
+        if (item.questions.length === 0) return [];
         const open = yield* projections
           .getPendingMessageUserInputs(item.threadId)
           .pipe(Effect.orElseSucceed(() => ({ runtimeRequests: [], nodes: [], turnItems: [] })));
+        // Only older cards: a replayed update of an old card must not close a newer one.
+        const askedBefore = (other: OrchestrationV2TurnItem) =>
+          item.startedAt === null ||
+          other.startedAt === null ||
+          DateTime.toEpochMillis(other.startedAt) <= DateTime.toEpochMillis(item.startedAt);
         const duplicates = open.turnItems.filter(
           (other) =>
             other.type === "user_input_request" &&
             other.id !== item.id &&
             other.requestId !== item.requestId &&
-            textOf(other.questions) === wanted,
+            askedBefore(other),
         );
         if (duplicates.length === 0) return [];
         const requestIds = new Set(
@@ -670,7 +678,7 @@ export const layer: Layer.Layer<
                   runId: input.event.turnItem.runId,
                   nodeId: input.event.turnItem.nodeId,
                 }),
-                // t4 fork: dismissDuplicateQuestions.
+                // t4 fork: dismissDuplicateQuestions (a new card replaces the older open ones).
                 ...(yield* dismissDuplicateQuestions(input, input.event.turnItem)),
               ];
             case "runtime_request.updated":
