@@ -3264,6 +3264,30 @@ function isClaudeRootTurnFrame(message: SDKMessage): boolean {
   );
 }
 
+// t4 fork (AI-104): a wake Claude never ran - no model output, and no result but the
+// empty task-notification successes the CLI sends without an API call.
+function isClaudeEmptyTaskNotificationSuccess(entry: SDKMessage): boolean {
+  return (
+    isClaudeTaskNotificationOriginResult(entry) &&
+    entry.subtype === "success" &&
+    !entry.is_error &&
+    entry.num_turns === 0 &&
+    entry.result.length === 0 &&
+    terminalStatusFromResult(entry) === "completed"
+  );
+}
+
+function claudeRanNoWakeTurn(frames: ReadonlyArray<SDKMessage>): boolean {
+  return frames.every(
+    (entry) =>
+      !(
+        (entry.type === "assistant" || entry.type === "stream_event") &&
+        entry.parent_tool_use_id == null
+      ) &&
+      (entry.type !== "result" || isClaudeEmptyTaskNotificationSuccess(entry)),
+  );
+}
+
 function claudePendingBackgroundTasksFromRoster(
   roster: ReadonlyMap<string, OrchestrationV2PendingBackgroundTask>,
   awaitedTaskIds: ReadonlySet<string>,
@@ -5460,6 +5484,20 @@ export const makeClaudeAdapterV2 = Effect.fn("makeClaudeAdapterV2")(function* (
         });
         const requestedContinuations = yield* Ref.make(new Set<string>());
         const absorbedWakes = yield* Ref.make(new Set<string>());
+        // t4 fork (AI-104): the last usage-limit stop per native thread, while this CLI
+        // process still holds it. After a limit the CLI answers later task notifications
+        // with empty results and no API call; their continuation runs carry the stop.
+        const usageLimitStops = yield* Ref.make(
+          new Map<
+            string,
+            {
+              readonly failure: OrchestrationV2ProviderFailure;
+              readonly account: string;
+              readonly claudeResetAt: string | null;
+              readonly scope: "fable" | "all";
+            }
+          >(),
+        );
         const heldProposedPlansByToolUseId = new Map<string, string>();
         const runtimeContext = yield* Effect.context<never>();
         const runPromise = Effect.runPromiseWith(runtimeContext);
@@ -5953,6 +5991,47 @@ export const makeClaudeAdapterV2 = Effect.fn("makeClaudeAdapterV2")(function* (
           yield* Ref.update(absorbedWakes, (current) => new Set(current).add(nativeThreadId));
         });
 
+        // t4 fork (AI-104): after a usage limit the CLI answers the next task notifications
+        // with empty results and no API call. Their continuation runs used to complete, which
+        // hid the limit stop from T3's limit recovery, so the thread was never resumed
+        // (usa-rs USA-2379, 2026-11-16). Such a run fails with the same limit instead.
+        const failWithUsageLimitStop = Effect.fnUntraced(function* (
+          context: ActiveClaudeTurnContext,
+          nativeThreadId: string,
+          frames: ReadonlyArray<SDKMessage>,
+        ) {
+          if (!claudeRanNoWakeTurn(frames)) return false;
+          const stop = (yield* Ref.get(usageLimitStops)).get(nativeThreadId);
+          if (stop === undefined) return false;
+          const completedAt = yield* DateTime.now;
+          const completedMs = DateTime.toEpochMillis(completedAt);
+          const resumeAtMs = markClaudeAccountExhausted(
+            stop.account,
+            stop.claudeResetAt === null ? null : Date.parse(stop.claudeResetAt),
+            completedMs,
+            process.env,
+            stop.scope,
+          );
+          const resetAt =
+            resumeAtMs === undefined
+              ? (stop.failure.resetAt ?? null)
+              : DateTime.formatIso(
+                  DateTime.makeUnsafe(Math.max(resumeAtMs, completedMs + 60_000)),
+                );
+          yield* Effect.logInfo("t4.claude-limit-carried", {
+            threadId: context.input.threadId,
+            account: stop.account,
+            resetAt,
+          });
+          yield* finalizeActiveTurn({
+            context,
+            status: "failed",
+            completedAt,
+            failure: { ...stop.failure, resetAt },
+          });
+          return true;
+        });
+
         // The SDK emits no initial roster; reset roster and wake eligibility when opening a live query.
         const resetBackgroundTaskStateForNativeThreadProcess = Effect.fnUntraced(function* (
           nativeThreadId: string,
@@ -5983,6 +6062,12 @@ export const makeClaudeAdapterV2 = Effect.fn("makeClaudeAdapterV2")(function* (
           const preservedOpaqueTombstones = [...priorOpaqueTombstones].filter((taskId) =>
             bufferedTaskNotificationIds.has(taskId),
           );
+          yield* Ref.update(usageLimitStops, (current) => {
+            if (!current.has(nativeThreadId)) return current;
+            const next = new Map(current);
+            next.delete(nativeThreadId);
+            return next;
+          });
           yield* clearPendingBackgroundTasksForNativeThread(nativeThreadId);
           yield* clearNativeThreadTaskIdSet(
             wakeEligibleBackgroundTasksByNativeThread,
@@ -10259,6 +10344,22 @@ export const makeClaudeAdapterV2 = Effect.fn("makeClaudeAdapterV2")(function* (
               resultFailure?.class === "usage_limit"
                 ? { ...resultFailure, resetAt: resetAt ?? resultFailure.resetAt ?? null }
                 : resultFailure;
+            if (!interrupted) {
+              yield* Ref.update(usageLimitStops, (current) => {
+                const next = new Map(current);
+                if (terminalFailure?.class === "usage_limit") {
+                  next.set(liveQuery.nativeThreadId, {
+                    failure: terminalFailure,
+                    account: liveQuery.t4Account,
+                    claudeResetAt,
+                    scope: t4LimitScope,
+                  });
+                } else {
+                  next.delete(liveQuery.nativeThreadId);
+                }
+                return next;
+              });
+            }
             yield* finalizeActiveTurn({
               context,
               status: interrupted
@@ -11664,6 +11765,7 @@ export const makeClaudeAdapterV2 = Effect.fn("makeClaudeAdapterV2")(function* (
                 const wakeAbsorbed = (yield* Ref.get(absorbedWakes)).has(nativeThreadId);
                 yield* forgetAbsorbedWake(nativeThreadId);
                 if (drained.length === 0) {
+                  if (yield* failWithUsageLimitStop(context, nativeThreadId, drained)) return;
                   const completedAt = yield* DateTime.now;
                   yield* finalizeActiveTurn({ context, status: "completed", completedAt });
                   return;
@@ -11681,13 +11783,7 @@ export const makeClaudeAdapterV2 = Effect.fn("makeClaudeAdapterV2")(function* (
                     .some((entry) => isClaudeTurnStartMessage(entry));
                 // The CLI can append empty task successes after a failure. Filter
                 // those for replay without changing the raw-tail successor guard.
-                const isEmptyTaskNotificationSuccess = (entry: SDKMessage) =>
-                  isClaudeTaskNotificationOriginResult(entry) &&
-                  entry.subtype === "success" &&
-                  !entry.is_error &&
-                  entry.num_turns === 0 &&
-                  entry.result.length === 0 &&
-                  terminalStatusFromResult(entry) === "completed";
+                const isEmptyTaskNotificationSuccess = isClaudeEmptyTaskNotificationSuccess;
                 const replayResultIndex = drained.findLastIndex(
                   (entry) => entry.type === "result" && !isEmptyTaskNotificationSuccess(entry),
                 );
@@ -11727,6 +11823,13 @@ export const makeClaudeAdapterV2 = Effect.fn("makeClaudeAdapterV2")(function* (
                     return next;
                   });
                 }
+                if (
+                  !emptyTurnBeforeNextTurn &&
+                  (lastResult !== undefined || wakeAbsorbed) &&
+                  (yield* failWithUsageLimitStop(context, nativeThreadId, drained))
+                ) {
+                  return;
+                }
                 if (lastResult !== undefined && !emptyTurnBeforeNextTurn) {
                   yield* handleSdkMessage({ query: querySession.query, message: lastResult });
                   return;
@@ -11754,6 +11857,8 @@ export const makeClaudeAdapterV2 = Effect.fn("makeClaudeAdapterV2")(function* (
                               nativeThreadId,
                             },
                           );
+                          if (yield* failWithUsageLimitStop(context, nativeThreadId, drained))
+                            return;
                           const completedAt = yield* DateTime.now;
                           yield* finalizeActiveTurn({ context, status: "completed", completedAt });
                         }),
