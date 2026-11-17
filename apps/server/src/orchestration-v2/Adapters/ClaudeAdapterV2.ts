@@ -6015,9 +6015,7 @@ export const makeClaudeAdapterV2 = Effect.fn("makeClaudeAdapterV2")(function* (
           const resetAt =
             resumeAtMs === undefined
               ? (stop.failure.resetAt ?? null)
-              : DateTime.formatIso(
-                  DateTime.makeUnsafe(Math.max(resumeAtMs, completedMs + 60_000)),
-                );
+              : DateTime.formatIso(DateTime.makeUnsafe(Math.max(resumeAtMs, completedMs + 60_000)));
           yield* Effect.logInfo("t4.claude-limit-carried", {
             threadId: context.input.threadId,
             account: stop.account,
