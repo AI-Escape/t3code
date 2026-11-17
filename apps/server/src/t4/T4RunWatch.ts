@@ -95,12 +95,8 @@ const decodeRunList = Schema.decodeUnknownEffect(Schema.fromJsonString(Schema.Ar
 
 /**
  * A run's key in a commit watch's `reported`: a re-run keeps its run id and
- * counts up `attempt`, so each attempt is its own finish. Keyed by id alone, a
- * re-run of a run the watch had reported failed never woke its thread - and a
- * run-id watch on it was skipped as covered by that commit watch (usa-rs
- * USA-2339's re-run went green and the thread sat idle for hours, 2026-11-16;
- * eight such re-runs since 10-30). The first attempt keeps the bare id, which is
- * what watches stored before this.
+ * counts up `attempt`, so each attempt is its own finish (AI-103). The first
+ * attempt keeps the bare id, which is what watches stored before this.
  */
 const runKey = (run: { readonly databaseId: number; readonly attempt?: number | undefined }) =>
   run.attempt !== undefined && run.attempt > 1

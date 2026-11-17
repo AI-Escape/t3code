@@ -12950,6 +12950,145 @@ describe("ClaudeAdapterV2 background wake turns", () => {
       ),
   );
 
+  // t4 fork (AI-104): usa-rs USA-2379 (2026-11-16). Three background agents died on the
+  // weekly limit together. Claude's wake for the first notice hit the limit; it answered the
+  // other two with empty results and no API call, and their runs completed - so T3's limit
+  // recovery saw a thread that had finished and never resumed it.
+  it.effect("carries a usage-limit stop into a later wake Claude never ran", () =>
+    Effect.scoped(
+      Effect.gen(function* () {
+        const harness = yield* makeWakeHarness;
+        const now = yield* DateTime.now;
+        const secondTaskId = "task-wake-limit-second";
+        const secondToolUseId = "toolu_wake_limit_second";
+
+        yield* harness.runtime.startTurn(
+          makeClaudeTestTurnInput({
+            threadId: harness.threadId,
+            providerThread: harness.providerThread,
+            now,
+            attemptId: RunAttemptId.make("attempt-claude-wake-carry-1"),
+            text: "Run both checks in the background.",
+            attachments: [],
+          }),
+        );
+        yield* Queue.offer(harness.sdkMessages, wakeTaskStarted);
+        yield* Queue.offer(
+          harness.sdkMessages,
+          claudeSdkFrame({
+            type: "system",
+            subtype: "task_started",
+            task_id: secondTaskId,
+            tool_use_id: secondToolUseId,
+            description: "Second background check",
+            is_backgrounded: true,
+            task_type: "local_bash",
+            uuid: "00000000-0000-4000-8000-000000000a01",
+            session_id: WAKE_NATIVE_SESSION,
+          }),
+        );
+        yield* Queue.offer(harness.sdkMessages, turnOneResult);
+        yield* Queue.take(harness.terminalReceipts);
+
+        // The first notice wakes Claude, and that wake hits the limit.
+        yield* Queue.offer(harness.sdkMessages, wakeNotification);
+        yield* harness.offerAndWait(
+          makeAssistantErrorFrame({
+            uuid: "00000000-0000-4000-8000-000000000a02",
+            error: "rate_limit",
+            apiErrorParams: {
+              rate_limit_info: {
+                status: "rejected",
+                rateLimitType: "seven_day",
+                resetsAt: 1790298600,
+              },
+            },
+          }),
+        );
+        yield* harness.offerAndWait(
+          makeResultFrame({
+            uuid: "00000000-0000-4000-8000-000000000a03",
+            result: "You've hit your weekly limit · resets Nov 22, 1am (America/Los_Angeles)",
+            isError: true,
+            apiErrorStatus: 429,
+            terminalReason: "api_error",
+            origin: { kind: "task-notification" },
+          }),
+        );
+        assert.lengthOf(harness.continuationRequests, 1);
+        yield* harness.runtime.startTurn(
+          makeClaudeTestTurnInput({
+            threadId: harness.threadId,
+            providerThread: harness.providerThread,
+            now,
+            attemptId: RunAttemptId.make("attempt-claude-wake-carry-2"),
+            text: "Background task completed.",
+            attachments: [],
+            providerTurnOrdinal: 2,
+            messageCreatedBy: "agent",
+            messageCreationSource: "provider",
+          }),
+        );
+        const limited = yield* Queue.take(harness.terminalReceipts);
+        assert.equal(limited?.status, "failed");
+        if (limited === undefined || limited.status !== "failed") return;
+        assert.equal(limited.failure.class, "usage_limit");
+
+        // The second notice gets only an empty result: Claude made no API call.
+        yield* harness.offerAndWait(
+          claudeSdkFrame({
+            type: "system",
+            subtype: "task_notification",
+            task_id: secondTaskId,
+            tool_use_id: secondToolUseId,
+            status: "failed",
+            output_file: `/tmp/claude-replay/tasks/${secondTaskId}.output`,
+            summary: "Second background check",
+            uuid: "00000000-0000-4000-8000-000000000a04",
+            session_id: WAKE_NATIVE_SESSION,
+          }),
+        );
+        yield* harness.offerAndWait(
+          makeResultFrame({
+            uuid: "00000000-0000-4000-8000-000000000a05",
+            result: "",
+            numTurns: 0,
+            origin: { kind: "task-notification" },
+            terminalReason: null,
+          }),
+        );
+        assert.lengthOf(harness.continuationRequests, 2);
+        yield* harness.runtime.startTurn(
+          makeClaudeTestTurnInput({
+            threadId: harness.threadId,
+            providerThread: harness.providerThread,
+            now,
+            attemptId: RunAttemptId.make("attempt-claude-wake-carry-3"),
+            text: "Background task failed.",
+            attachments: [],
+            providerTurnOrdinal: 3,
+            messageCreatedBy: "agent",
+            messageCreationSource: "provider",
+          }),
+        );
+        const carried = yield* Queue.take(harness.terminalReceipts);
+        assert.equal(carried?.status, "failed");
+        if (carried === undefined || carried.status !== "failed") return;
+        assert.equal(carried.failure.class, "usage_limit");
+        assert.equal(carried.failure.resetAt, limited.failure.resetAt);
+      }).pipe(
+        Effect.provide(
+          Layer.mergeAll(
+            IdAllocator.layer,
+            McpProviderSessions.layer,
+            NodeServices.layer,
+            NodeCrypto.layer,
+          ),
+        ),
+      ),
+    ),
+  );
+
   it.effect(
     "dates a buffered wake gateway limit from its arrival, not the continuation replay",
     () =>
