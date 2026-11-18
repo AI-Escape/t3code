@@ -1,8 +1,7 @@
 /**
  * t4 fork: delivering a message like t4's `deliver()`: steered into a running turn, or `interrupt`
- * restarts the turn with it. It tells the agent a live question it closed is unanswered (a
- * message-mode one stays open: don't ask twice), a cancelled Claude tool call was this message, a
- * settled thread is unsettled. A delivery asking nothing is a notice, so a pending settle survives.
+ * restarts it. Notes: a live question it closed is unanswered, a cancelled Claude tool call was
+ * this message, a settled thread is unsettled. Open message-mode cards get none (AI-114).
  */
 import {
   CommandId,
@@ -78,12 +77,6 @@ export const UNANSWERED_QUESTION_NOTE = (questions: ReadonlyArray<string>) =>
   "Handle this message, then ask the question again with your ask-user tool - unless " +
   "this message makes it moot.";
 
-export const OPEN_QUESTION_NOTE = (questions: ReadonlyArray<string>) =>
-  "Your question to the user is still open and they can answer it: " +
-  questions.map((q) => `"${q}"`).join("; ") +
-  ". This message is NOT their answer. Handle this message; don't ask the question again " +
-  "(their answer will arrive as a message) unless this message changes what you need to ask.";
-
 export const CANCELLED_TOOL_NOTE =
   'If a tool call of yours was just cancelled ("the user doesn\'t want to proceed"), this ' +
   "message cancelled it - not the user. The user has not asked you to stop; re-run it if you " +
@@ -97,16 +90,12 @@ export const REOPENED_SETTLED_NOTE =
 /** The delivery notes that apply to a target, as the message's prefix. */
 export const deliveryNotes = (input: {
   readonly settled: boolean;
+  /** Live questions a message can close. Message-mode ones stay open and get no note (AI-114). */
   readonly questions: ReadonlyArray<string>;
-  /** Message-mode questions: still answerable whatever this message does. */
-  readonly openQuestions?: ReadonlyArray<string>;
   readonly claudeRunning: boolean;
 }): ReadonlyArray<string> => [
   ...(input.settled ? [REOPENED_SETTLED_NOTE] : []),
   ...(input.questions.length > 0 ? [UNANSWERED_QUESTION_NOTE(input.questions)] : []),
-  ...((input.openQuestions ?? []).length > 0
-    ? [OPEN_QUESTION_NOTE(input.openQuestions ?? [])]
-    : []),
   ...(input.claudeRunning ? [CANCELLED_TOOL_NOTE] : []),
 ];
 
@@ -121,10 +110,10 @@ const make = Effect.gen(function* () {
   const fail = (message: string) => (cause: unknown) => new T4DeliveryError({ message, cause });
 
   /**
-   * Questions the target is still waiting on the user for: `live` ones an
-   * incoming message can close, `open` (message-mode) ones it cannot.
+   * Live questions the target waits on the user for - ones an incoming message can close.
+   * Message-mode questions stay open whatever arrives, so they need no note (AI-114).
    */
-  const noQuestions = { live: [] as ReadonlyArray<string>, open: [] as ReadonlyArray<string> };
+  const noQuestions: ReadonlyArray<string> = [];
   const pendingQuestions = (target: OrchestrationV2ThreadShell) =>
     target.pendingRuntimeRequest?.kind !== "user_input"
       ? Effect.succeed(noQuestions)
@@ -137,22 +126,21 @@ const make = Effect.gen(function* () {
           )
           .pipe(
             Effect.map((records) => {
-              const pending = new Map(
+              const live = new Set(
                 records.runtimeRequests
                   .filter(
-                    (request) => request.kind === "user_input" && request.status === "pending",
+                    (request) =>
+                      request.kind === "user_input" &&
+                      request.status === "pending" &&
+                      request.responseCapability.type !== "message",
                   )
-                  .map((request) => [request.id as string, request.responseCapability.type]),
+                  .map((request) => request.id as string),
               );
-              const questionsWhere = (open: boolean) =>
-                records.turnItems.flatMap((item) =>
-                  item.type === "user_input_request" &&
-                  pending.has(item.requestId) &&
-                  (pending.get(item.requestId) === "message") === open
-                    ? item.questions.map((question) => question.question || question.header)
-                    : [],
-                );
-              return { live: questionsWhere(false), open: questionsWhere(true) };
+              return records.turnItems.flatMap((item) =>
+                item.type === "user_input_request" && live.has(item.requestId)
+                  ? item.questions.map((question) => question.question || question.header)
+                  : [],
+              );
             }),
             Effect.orElseSucceed(() => noQuestions),
           );
@@ -166,8 +154,7 @@ const make = Effect.gen(function* () {
     const questions = yield* pendingQuestions(target);
     const notes = deliveryNotes({
       settled: isSettled(target),
-      questions: questions.live,
-      openQuestions: questions.open,
+      questions,
       claudeRunning: !queued && target.providerInstanceId.startsWith("claude") && isRunning(target),
     });
     return notes.length === 0
