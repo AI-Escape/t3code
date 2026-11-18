@@ -150,7 +150,7 @@ const secretRequestResult = (
     case "pending":
       return {
         status: "pending",
-        note: "The card is open and stays open until the user answers. End your turn now, with what the secret is for and where to get it in your final message. When the user enters it, a message brings you the file path (or secretRef). Do not ask again or schedule a re-ask for it.",
+        note: "The card is open and stays open until the user answers. End your turn now, with what the secret is for and where to get it in your final message. When the user enters it, a message brings you the file path (or the secretRef you asked for). Do not ask again or schedule a re-ask for it.",
       };
     case "saved":
       return {
@@ -2379,7 +2379,10 @@ const make = Effect.gen(function* () {
           reason: input.reason,
           ...(input.url === undefined ? {} : { url: input.url }),
           ...(input.placeholder === undefined ? {} : { placeholder: input.placeholder }),
-          ...(input.delivery === "file" ? { delivery: "file" as const } : {}),
+          // t4 fork (AI-112): a file unless the agent asked for a secretRef. Agents' shells
+          // can't use a ref (only schedule_task's webhook signature takes one), so a password
+          // asked for without `delivery` reached usa-rs USA-2490 unusable and had to be re-asked.
+          ...(input.delivery === "secretRef" ? {} : { delivery: "file" as const }),
           secretStatus: "pending",
         })
         .pipe(Effect.mapError(recordFailure));

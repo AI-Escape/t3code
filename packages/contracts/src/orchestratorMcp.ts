@@ -859,8 +859,9 @@ export const OrchestratorMcpRequestSecretInput = Schema.Struct({
     description: "Sign-in or setup page for the value. Shown as a button.",
   }),
   placeholder: Schema.optional(TrimmedNonEmptyString),
+  // t4 fork (AI-112): file is the default; a secretRef fits only a T3 tool that takes one.
   delivery: Schema.optional(Schema.Literals(["secretRef", "file"])).annotate({
-    description: "secretRef (default) for a T3 tool; file for a command.",
+    description: "file (default) for a command; secretRef only for a T3 tool that takes one.",
   }),
   value: Schema.optional(PastedSecretValue).annotate({
     description: "Pasted in this thread; no card.",

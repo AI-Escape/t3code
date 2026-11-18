@@ -41,7 +41,7 @@ The \`t3-code\` MCP server is how your thread works with other threads. Its tool
 ### Other
 
 - In your reply, mention a thread by its \`link\`, verbatim. Never a plain title or bare id.
-- A login, token, PIN, pairing code or sudo password only the user can give: call \`request_secret\` yourself and end your turn, not a chat ask or a handoff; its \`secretRef\` (for a T3 tool) or, with \`delivery: "file"\`, a file path (for a shell command) arrives as a message. Never invent one. Not for access you have. Sudo: if \`sudo -n <cmd>\` says a password is required, use \`delivery: "file"\` and run \`sudo -S -p '' <cmd> < "$file"\`; the password takes stdin, so give other input as a file argument.
+- A login, token, PIN, pairing code or sudo password only the user can give: call \`request_secret\` yourself and end your turn, not a chat ask or a handoff; a private file path arrives as a message (a one-use \`secretRef\` only if you asked with \`delivery: "secretRef"\`, for a T3 tool). Never invent one. Not for access you have. Sudo: if \`sudo -n <cmd>\` says a password is required, run \`sudo -S -p '' <cmd> < "$file"\`; the password takes stdin, so give other input as a file argument.
 - Tool names may carry a harness prefix such as \`mcp__t3_code__t3_handoff\`; the meaning is the same. T3 tools may load late. Try the name once before you call it absent.`,
   `### Visuals and preview
 

@@ -1,6 +1,7 @@
 import {
   EnvironmentId,
   NodeId,
+  type OrchestrationV2ServerCommand,
   type OrchestrationV2ThreadProjection,
   type OrchestrationV2ThreadShell,
   ProjectId,
@@ -847,4 +848,70 @@ it("requestSecret returns the unsaved note for a declined, cancelled or timed-ou
     { status: "cancelled", note: SECRET_REQUEST_UNSAVED_NOTE.cancelled },
     { status: "timed_out", note: SECRET_REQUEST_UNSAVED_NOTE.timed_out },
   ]);
+});
+
+// t4 fork (AI-112): an agent's shell can't use a secretRef, so a card is a file request unless
+// the agent asks for a ref.
+it("requestSecret opens a file card unless the agent asks for a secretRef", async () => {
+  const deliveries = await Effect.forEach(
+    [{}, { delivery: "file" as const }, { delivery: "secretRef" as const }],
+    (options) => {
+      const dispatched: Array<OrchestrationV2ServerCommand> = [];
+      const projection = () =>
+        ({
+          thread: baseThread({
+            threadId: parentThreadId,
+            title: "Parent",
+            instanceId: parentInstanceId,
+            model: "gpt-5.4",
+          }),
+          runs: [
+            { ...makeRun({ id: activeRunId, ordinal: 1, status: "running" }), rootNodeId: taskId },
+          ],
+          visibleTurnItems: [],
+          turnItems: [],
+          providerTurns: [],
+          runtimeRequests: [],
+          messages: [],
+          contextTransfers: [],
+          subagents: [],
+          updatedAt: now,
+        }) as unknown as OrchestrationV2ThreadProjection;
+      const layer = layerOrchestratorService.pipe(
+        Layer.provide(
+          Layer.mergeAll(
+            Layer.mock(ThreadManagementService.ThreadManagementService)({
+              getThreadRecords: () => Effect.sync(projection),
+              getThreadShell: () =>
+                Effect.sync(() => projection().thread as unknown as OrchestrationV2ThreadShell),
+              dispatch: (command) => Effect.sync(() => void dispatched.push(command) as never),
+            } satisfies Partial<ThreadManagementService.ThreadManagementService["Service"]>),
+            ServerSettings.layerTest(),
+            Layer.mock(ProviderRegistry.ProviderRegistry)({
+              getProviders: Effect.succeed([]),
+            } satisfies Partial<ProviderRegistry.ProviderRegistry["Service"]>),
+            Layer.mock(ProjectService.ProjectService)({}),
+            Layer.mock(SecretRequests.SecretRequests)({}),
+            Layer.mock(RemoteDelegation.RemoteDelegation)({}),
+            Layer.mock(ScheduledTaskService.ScheduledTaskService)({}),
+            Layer.mock(ProviderAdapterRegistry.ProviderAdapterRegistryV2)({}),
+            NodeCrypto.layer,
+          ),
+        ),
+      );
+      return Effect.gen(function* () {
+        const service = yield* OrchestratorMcpService.OrchestratorMcpService;
+        const result = yield* service.requestSecret(makeScope(), {
+          label: "Proofpoint password",
+          reason: "Signs the system in to Proofpoint.",
+          ...options,
+        });
+        expect(result.status).toBe("pending");
+        const card = dispatched.find((command) => command.type === "secret_request.record");
+        return card?.type === "secret_request.record" ? (card.delivery ?? null) : "no card";
+      }).pipe(Effect.provide(layer));
+    },
+  ).pipe(Effect.runPromise);
+
+  expect(deliveries).toEqual(["file", "file", null]);
 });

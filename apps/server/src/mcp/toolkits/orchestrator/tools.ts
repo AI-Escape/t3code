@@ -200,7 +200,7 @@ const DeleteScheduledTaskTool = Tool.make("delete_scheduled_task", {
 
 const RequestSecretTool = Tool.make("request_secret", {
   description:
-    'Ask the user for one secret per single-line card, then end your turn; never combine values. Open it, don\'t offer it. You never see the value. The card stays open until they answer; a message then brings a one-use `secretRef` for a tool that accepts it, or with `delivery: "file"` a private file path read only in its command, e.g. `adb pair <ip:port> "$(cat <file>)"`. Asked how: call now. Sign-in link: `url`. Pasted secret for child/script: `value` (no card; returns the file).',
+    'Ask the user for one secret per single-line card, then end your turn; never combine values. Open it, don\'t offer it. You never see the value. The card stays open until they answer; a message then brings a private file path, read only in its command, e.g. `adb pair <ip:port> "$(cat <file>)"` (`delivery: "secretRef"`: a one-use ref for a T3 tool instead). Asked how: call now. Sign-in link: `url`. Pasted secret for child/script: `value` (no card; returns the file).',
   parameters: OrchestratorMcpRequestSecretInput,
   success: OrchestratorMcpRequestSecretResult,
   failure: OrchestratorMcpFailure,
