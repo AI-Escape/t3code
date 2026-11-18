@@ -23,7 +23,7 @@ const normalizeIssue = (identifier: string) => identifier.trim().toUpperCase();
 function spawnFooter(parent: Shell, parentIsReleaseManager: boolean): string {
   const ref = shortId(parent.id);
   return parentIsReleaseManager
-    ? `\n\n---\nSpawned by the release manager (${ref}). When your PR is green and has the merge word, \`t3_handoff\` with done (no \`to\`) hands it the release and answers this spawn in one step. Blocked and need it to decide something: \`t3_handoff\` to "${ref}" with ask.`
+    ? `\n\n---\nSpawned by the release manager (${ref}). When your approved PR is green, \`t3_handoff\` with done (no \`to\`) hands it the release and answers this spawn in one step. Blocked and need it to decide something: \`t3_handoff\` to "${ref}" with ask.`
     : `\n\n---\nSpawned by thread "${parent.title}" (${ref}). When the work is finished: \`t3_handoff\` to "${ref}" with done and fyi. Blocked and need it to decide something: \`t3_handoff\` to "${ref}" with ask.`;
 }
 
