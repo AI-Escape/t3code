@@ -701,12 +701,30 @@ export const layer = Layer.mergeAll(
                 Effect.map((r) => r.messages),
                 Effect.orElseSucceed(() => []),
               );
+      const said = messages.filter((m) => m.role !== "system" && m.text.trim().length > 0);
+      // AI-116: the brief - what the agent wrote for this question - is kept
+      // apart, so messages that reach the thread afterwards (other threads'
+      // handoffs and the agent's replies) never push it out of the window.
+      // Claude asks first and writes the brief right after (message-mode
+      // questions); Codex writes it before asking.
+      const askedAt = DateTime.toEpochMillis(open.createdAt);
+      const ownRun = said.filter((m) => m.role === "assistant" && m.runId === item.runId);
+      const brief =
+        ownRun.find((m) => DateTime.toEpochMillis(m.createdAt) >= askedAt) ??
+        ownRun.filter((m) => DateTime.toEpochMillis(m.createdAt) < askedAt).at(-1);
+      const shown = (m: (typeof said)[number]) => ({
+        role: m.role,
+        text: m.text,
+        createdAt: DateTime.formatIso(m.createdAt),
+        runId: m.runId,
+      });
       return json({
         requestId: open.id,
         threadId,
         title: thread.title,
         responseMode: open.responseCapability.type,
         askedAt: DateTime.formatIso(open.createdAt),
+        askedRunId: item.runId,
         questions: item.questions.map((q) => ({
           id: q.id,
           header: q.header,
@@ -714,10 +732,8 @@ export const layer = Layer.mergeAll(
           multiSelect: q.multiSelect === true,
           options: q.options.map((o) => ({ label: o.label, description: o.description })),
         })),
-        messages: messages
-          .filter((m) => m.role !== "system" && m.text.trim().length > 0)
-          .slice(-12)
-          .map((m) => ({ role: m.role, text: m.text, createdAt: DateTime.formatIso(m.createdAt) })),
+        brief: brief === undefined ? null : shown(brief),
+        messages: said.slice(-12).map(shown),
       });
     }),
   ),
