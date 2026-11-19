@@ -100,6 +100,13 @@ Claude adapter switches (environment, set in t4's compose):
   absolute paths, no `cd` before the rm (`t4/declineSafetyChecks.ts`).
   Asks from a matched ask rule still reach the user.
 
+Copy blocks (AI-117): a fenced block with `copy` as its language - a value
+the user pastes somewhere, which t4's doctrine asks agents to write that way -
+renders as its text with a Copy button beside it, no header
+(`apps/web/src/components/chat/MarkdownCopyBlock.tsx`, routed from
+`ChatMarkdown`'s `pre`). The button copies the block without its closing
+newline; selecting the message copies it back as a `copy` fence.
+
 ## 3. Settings
 
 - `releaseManager.model` — selection release managers run on (t4: Codex

@@ -588,3 +588,28 @@ describe("ChatMarkdown Windows file links", () => {
     }
   });
 });
+
+it("draws a copy fence as its text with a Copy button beside it that copies it exactly", async () => {
+  setup();
+  const writeText = vi.spyOn(navigator.clipboard, "writeText").mockResolvedValue(undefined);
+  try {
+    await using screen = await renderText(
+      "Your Mailchimp code:\n\n```copy\n679774\n```\n\nAnd the command:\n\n```copy\ngh pr view 3412 --web\n```",
+    );
+    const blocks = screen.container.querySelectorAll<HTMLElement>(".chat-markdown-copyblock");
+    expect(blocks.length).toBe(2);
+    expect(blocks[0]!.querySelector("pre")!.textContent).toBe("679774");
+    // No language header: the value and its button share one row.
+    expect(blocks[0]!.querySelector(".chat-markdown-codeblock-header")).toBeNull();
+    const [copy] = buttonsLabelled(blocks[0]!, "Copy");
+    const text = blocks[0]!.querySelector("pre")!.getBoundingClientRect();
+    expect(copy!.getBoundingClientRect().left).toBeGreaterThanOrEqual(text.right);
+    await userEvent.click(copy!);
+    expect(writeText).toHaveBeenLastCalledWith("679774");
+    await expect.element(screen.getByRole("button", { name: "Copied" })).toBeVisible();
+    await userEvent.click(buttonsLabelled(blocks[1]!, "Copy")[0]!);
+    expect(writeText).toHaveBeenLastCalledWith("gh pr view 3412 --web");
+  } finally {
+    writeText.mockRestore();
+  }
+});

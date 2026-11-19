@@ -2181,6 +2181,11 @@ code {
   background: transparent;
 }
 
+/* t4: a ```copy fence is one row - the value, then its Copy button. */
+.chat-markdown .chat-markdown-copyblock pre {
+  padding: 0.25rem 0;
+}
+
 :is(.chat-markdown, .composer-tiptap) .chat-markdown-codeblock[data-wrap="true"] pre {
   white-space: pre-wrap;
   overflow-wrap: anywhere;
