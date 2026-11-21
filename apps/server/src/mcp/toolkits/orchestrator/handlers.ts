@@ -8,6 +8,7 @@ import * as Option from "effect/Option";
 import * as PeerForwarding from "../../../peer/PeerForwarding.ts";
 import * as PeerLinkRequests from "../../../peer/PeerLinkRequests.ts";
 import * as PeerLinks from "../../../peer/PeerLinks.ts";
+import * as RemoteDelegation from "../../../peer/RemoteDelegation.ts";
 import * as ScheduledTasks from "../../../scheduledTasks/ScheduledTaskService.ts";
 import * as T4Config from "../../../t4/T4Config.ts";
 import * as T4Delivery from "../../../t4/T4Delivery.ts";
@@ -68,7 +69,8 @@ const handlers = {
         );
       }),
   ),
-  t3_background_wait: McpToolAccess.actsAsCaller((input) =>
+  // Claude can start a turn by itself before T3 starts its run, so a live-run check would refuse the mark.
+  t3_background_wait: McpToolAccess.readsAsCaller((input) =>
     Effect.gen(function* () {
       const { scope, threads } = yield* readCaller();
       const caller = yield* McpInvocationContext.requireThreadScope(scope, "t3_background_wait");
@@ -92,7 +94,10 @@ const handlers = {
           Effect.mapError(
             (cause) =>
               new OrchestratorMcpFailure({
-                code: cause.reason === "unsupported" ? "invalid_request" : "orchestration_error",
+                code:
+                  cause.reason === "unsupported" || cause.reason === "unmatched"
+                    ? "invalid_request"
+                    : "orchestration_error",
                 message: cause.message,
               }),
           ),
@@ -155,7 +160,7 @@ const handlers = {
       { refused: "schedule tasks in this environment" },
     ),
     McpToolAccess.writes(
-      ({ scheduledTaskId, prompt, title, schedule, enabled, bindToCurrentThread }) =>
+      ({ scheduledTaskId, prompt, title, schedule, enabled, freshSession, bindToCurrentThread }) =>
         Effect.gen(function* () {
           if (scheduledTaskId === undefined) return yield* Effect.die("unreachable");
           // t4 fork: the same cap on a wake's note when it is rewritten.
@@ -171,6 +176,7 @@ const handlers = {
             title,
             schedule,
             enabled,
+            freshSession,
             bindToCurrentThread,
           });
         }),
@@ -259,39 +265,48 @@ const handlers = {
         return yield* service.update(scope, input);
       }),
   ),
-  t3_thread_send: McpToolAccess.writesThreads(
-    (input) => [input.threadId],
-    (input) =>
+  t3_thread_send: McpToolAccess.afterForwarding(
+    McpToolAccess.writesThreads(
+      (input) => [input.threadId],
+      (input) =>
+        Effect.gen(function* () {
+          const scope = yield* McpInvocationContext.McpInvocationContext;
+          const service = yield* OrchestratorMcpService.OrchestratorMcpService;
+          // t4 fork: a message from another thread carries t4's sender header
+          // and delivery notes; archived targets are refused (T4Delivery).
+          const t4 = yield* Effect.serviceOption(T4Delivery.T4Delivery);
+          const { caller, threads } = yield* readCaller();
+          if (Option.isSome(t4) && caller !== undefined && caller.id !== input.threadId) {
+            const target = yield* threads
+              .getThreadShell(input.threadId)
+              .pipe(Effect.mapError(unavailable));
+            if (target !== null) {
+              // t4 fork: a plain message from another thread waits for a running turn
+              // to end instead of cutting the command it runs; `steer`/`restart` cut in (AI-93).
+              const mode = (input.mode ?? "auto") === "auto" ? ("queue" as const) : input.mode;
+              const message = yield* t4.value
+                .decorate({ sender: caller, target, text: input.message, queued: mode === "queue" })
+                .pipe(
+                  Effect.mapError(
+                    (error) =>
+                      new OrchestratorMcpFailure({
+                        code: "thread_not_sendable",
+                        message: error.message,
+                      }),
+                  ),
+                );
+              return yield* service.sendToThread(scope, { ...input, message, mode });
+            }
+          }
+          return yield* service.sendToThread(scope, input);
+        }),
+    ),
+    // There the thread's parent is here, so only this side can make a follow-up a task.
+    (input, environmentId, sent) =>
       Effect.gen(function* () {
         const scope = yield* McpInvocationContext.McpInvocationContext;
-        const service = yield* OrchestratorMcpService.OrchestratorMcpService;
-        // t4 fork: a message from another thread carries t4's sender header
-        // and delivery notes; archived targets are refused (T4Delivery).
-        const t4 = yield* Effect.serviceOption(T4Delivery.T4Delivery);
-        const { caller, threads } = yield* readCaller();
-        if (Option.isSome(t4) && caller !== undefined && caller.id !== input.threadId) {
-          const target = yield* threads
-            .getThreadShell(input.threadId)
-            .pipe(Effect.mapError(unavailable));
-          if (target !== null) {
-            // t4 fork: a plain message from another thread waits for a running turn
-            // to end instead of cutting the command it runs; `steer`/`restart` cut in (AI-93).
-            const mode = (input.mode ?? "auto") === "auto" ? ("queue" as const) : input.mode;
-            const message = yield* t4.value
-              .decorate({ sender: caller, target, text: input.message, queued: mode === "queue" })
-              .pipe(
-                Effect.mapError(
-                  (error) =>
-                    new OrchestratorMcpFailure({
-                      code: "thread_not_sendable",
-                      message: error.message,
-                    }),
-                ),
-              );
-            return yield* service.sendToThread(scope, { ...input, message, mode });
-          }
-        }
-        return yield* service.sendToThread(scope, input);
+        const remote = yield* RemoteDelegation.RemoteDelegation;
+        return yield* remote.followUp(scope, environmentId, input, sent);
       }),
   ),
   t3_thread_wait: McpToolAccess.reads((input) =>

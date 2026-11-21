@@ -30,7 +30,7 @@ it.layer(DatabaseMaintenance.layer.pipe(Layer.provideMerge(NodeServices.layer)))
         yield* fs.writeFileString(dbPath, "not a database");
         const failure = yield* Effect.flip(maintenance.inspect(dbPath));
         assert.equal(failure._tag, "DatabaseInspectError");
-      }).pipe(Effect.scoped),
+      }),
     );
 
     it.effect("reports and deletes only the database from before 0.1.0", () =>
@@ -43,6 +43,8 @@ it.layer(DatabaseMaintenance.layer.pipe(Layer.provideMerge(NodeServices.layer)))
         const legacy = path.join(userdata, "state.sqlite");
         yield* Effect.gen(function* () {
           const sql = yield* SqlClient.SqlClient;
+          yield* sql`CREATE TABLE projection_projects (project_id TEXT PRIMARY KEY)`;
+          yield* sql`CREATE TABLE orchestration_v2_projection_threads (thread_id TEXT PRIMARY KEY)`;
           yield* sql`CREATE TABLE retained_data (value TEXT)`;
           yield* sql`INSERT INTO retained_data VALUES ('keep')`;
         }).pipe(Effect.provide(NodeSqliteClient.layer({ filename: dbPath })));
@@ -54,8 +56,30 @@ it.layer(DatabaseMaintenance.layer.pipe(Layer.provideMerge(NodeServices.layer)))
           yield* sql`PRAGMA journal_mode = WAL`;
           yield* sql`CREATE TABLE v1_data (value TEXT)`;
           yield* sql`INSERT INTO v1_data VALUES ('rollback')`;
+          yield* sql`CREATE TABLE projection_projects (project_id TEXT PRIMARY KEY, deleted_at TEXT)`;
+          yield* sql`CREATE TABLE projection_threads (thread_id TEXT PRIMARY KEY, deleted_at TEXT)`;
+          yield* sql`INSERT INTO projection_projects VALUES ('legacy-project', NULL)`;
+          yield* sql`INSERT INTO projection_threads VALUES ('legacy-thread', NULL), ('deleted-thread', '2026-10-01')`;
         }).pipe(Effect.provide(openLegacy));
         assert.isAbove((yield* maintenance.inspect(dbPath)).legacyDatabaseBytes ?? 0, 0);
+
+        assert.deepEqual((yield* maintenance.inspect(dbPath)).legacyOnlyRecords, {
+          projects: 1,
+          threads: 1,
+        });
+        const missing = yield* Effect.flip(maintenance.removeLegacyDatabase(dbPath));
+        assert.equal(missing._tag, "LegacyDatabaseHasUnmigratedRecordsError");
+        assert.isTrue(yield* fs.exists(legacy));
+
+        yield* Effect.gen(function* () {
+          const sql = yield* SqlClient.SqlClient;
+          yield* sql`INSERT INTO projection_projects VALUES ('legacy-project')`;
+          yield* sql`INSERT INTO orchestration_v2_projection_threads VALUES ('legacy-thread')`;
+        }).pipe(Effect.provide(NodeSqliteClient.layer({ filename: dbPath })));
+        assert.deepEqual((yield* maintenance.inspect(dbPath)).legacyOnlyRecords, {
+          projects: 0,
+          threads: 0,
+        });
 
         const refused = yield* Effect.gen(function* () {
           const sql = yield* SqlClient.SqlClient;
@@ -100,7 +124,7 @@ it.layer(DatabaseMaintenance.layer.pipe(Layer.provideMerge(NodeServices.layer)))
           assert.deepEqual(yield* sql`SELECT value FROM retained_data`, [{ value: "keep" }]);
         }).pipe(Effect.provide(NodeSqliteClient.layer({ filename: dbPath, readonly: true })));
         assert.isNull((yield* maintenance.inspect(dbPath)).legacyDatabaseBytes);
-      }).pipe(Effect.scoped),
+      }),
     );
 
     it.effect("runs a repair requested from Settings once and keeps its failure for Settings", () =>
@@ -155,7 +179,7 @@ it.layer(DatabaseMaintenance.layer.pipe(Layer.provideMerge(NodeServices.layer)))
           yield* fs.readFileString(broken.failure),
           new DatabaseMaintenance.DatabaseCompactError({ path: brokenPath, cause: null }).message,
         );
-      }).pipe(Effect.scoped),
+      }),
     );
 
     it.effect("refuses a repair whose copies would not fit on disk", () =>
@@ -171,7 +195,7 @@ it.layer(DatabaseMaintenance.layer.pipe(Layer.provideMerge(NodeServices.layer)))
         const shortfall = yield* DatabaseMaintenance.reclaimSpaceShortfall(dbPath, huge);
         assert.isAtLeast(shortfall?.neededBytes ?? 0, huge);
         assert.isBelow(shortfall?.freeBytes ?? Infinity, huge);
-      }).pipe(Effect.scoped),
+      }),
     );
 
     it.effect("compacts an existing database offline only once its server has stopped", () =>
@@ -253,18 +277,22 @@ it.layer(DatabaseMaintenance.layer.pipe(Layer.provideMerge(NodeServices.layer)))
         const clock = yield* Clock.Clock;
         const pauses: number[] = [];
         let activeNanos = 0n;
-        const result = yield* maintenance.compact(dbPath).pipe(
-          Effect.provideService(Clock.Clock, {
-            ...clock,
-            // Exceed the background budget whenever the compactor checks elapsed time.
-            monotonicTimeNanos: Effect.sync(() => (activeNanos += 30_000_000n)),
-            sleep: (duration) =>
-              Effect.sync(() => {
-                pauses.push(Duration.toMillis(duration));
-              }),
-          }),
-        );
+        const steps: string[] = [];
+        const result = yield* maintenance
+          .compact(dbPath, (step) => Effect.sync(() => steps.push(step)))
+          .pipe(
+            Effect.provideService(Clock.Clock, {
+              ...clock,
+              // Exceed the background budget whenever the compactor checks elapsed time.
+              monotonicTimeNanos: Effect.sync(() => (activeNanos += 30_000_000n)),
+              sleep: (duration) =>
+                Effect.sync(() => {
+                  pauses.push(Duration.toMillis(duration));
+                }),
+            }),
+          );
         assert.deepEqual(pauses, [], "offline doctor must not throttle compaction");
+        assert.deepEqual(steps, ["prune-events", "vacuum", "rebuild-search", "checkpoint"]);
         assert.equal(result.deletedReceiptCount, 51);
         assert.isBelow(result.afterBytes, result.beforeBytes - 3 * 1024 * 1024);
         yield* Effect.gen(function* () {
@@ -293,7 +321,7 @@ it.layer(DatabaseMaintenance.layer.pipe(Layer.provideMerge(NodeServices.layer)))
             ],
           );
         }).pipe(Effect.provide(NodeSqliteClient.layer({ filename: dbPath, readonly: true })));
-      }).pipe(Effect.scoped),
+      }),
     );
   },
 );
