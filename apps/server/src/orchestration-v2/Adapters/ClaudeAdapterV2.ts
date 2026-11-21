@@ -1759,7 +1759,7 @@ const CLAUDE_BACKGROUND_WAIT_INSTRUCTIONS = `
 
 ### Background work you wait on
 
-Background checks, tests, builds and Monitors are waited on for you: the thread stays Working until they end, and their completion notice brings you back. For other background work you will resume on, call \`t3_background_wait\` with its task ID right after starting it. Do not mark work you leave running, or PRs. Load a T3 tool with ToolSearch only if you lack its schema.
+Background checks, tests and Monitors are waited on for you. For other background work you resume on, call \`t3_background_wait\` with its task ID. Not for work you leave running or PRs. Load a T3 tool with ToolSearch only if you lack its schema.
 `;
 
 // Native subagents start from their task, not this session's system prompt.
