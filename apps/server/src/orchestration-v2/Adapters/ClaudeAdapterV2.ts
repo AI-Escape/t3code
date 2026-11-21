@@ -173,6 +173,7 @@ import {
 } from "../../provider/Drivers/ClaudeSkills.ts";
 // t4 fork: questionsAsMessages, declineSafetyChecks.
 import { QUESTION_POSTED_NOTE, t4QuestionsAsMessages } from "../../t4/questionsAsMessages.ts";
+import { awaitsOnItsOwn } from "../../t4/autoAwait.ts";
 import {
   safetyCheckDeclinedNote,
   safetyCheckKind,
@@ -1758,7 +1759,7 @@ const CLAUDE_BACKGROUND_WAIT_INSTRUCTIONS = `
 
 ### Background work you wait on
 
-To wait for a background command or Monitor you started (tests, a build), call \`t3_background_wait\` with their task IDs before you end your turn. Do not mark work you leave running, or PRs. Load a T3 tool with ToolSearch only if you lack its schema.
+Background checks, tests, builds and Monitors are waited on for you: the thread stays Working until they end, and their completion notice brings you back. For other background work you will resume on, call \`t3_background_wait\` with its task ID right after starting it. Do not mark work you leave running, or PRs. Load a T3 tool with ToolSearch only if you lack its schema.
 `;
 
 // Native subagents start from their task, not this session's system prompt.
@@ -8884,7 +8885,7 @@ export const makeClaudeAdapterV2 = Effect.fn("makeClaudeAdapterV2")(function* (
               launch?.classification.itemType === "command_execution"
                 ? firstStringInputField(launch.input, ["command"])
                 : undefined;
-            yield* upsertPendingBackgroundTask(input.nativeThreadId, {
+            const started: OrchestrationV2PendingBackgroundTask = {
               ...(launch === undefined || command === undefined
                 ? {}
                 : {
@@ -8907,7 +8908,16 @@ export const makeClaudeAdapterV2 = Effect.fn("makeClaudeAdapterV2")(function* (
                   typeof message.description === "string" ? message.description : undefined,
                 parentTaskId: Reflect.get(message, "parent_task_id"),
               }),
-            });
+            };
+            yield* upsertPendingBackgroundTask(input.nativeThreadId, started);
+            // t4 fork (AI-125): checks, tests and Monitors are waited on without t3_background_wait.
+            if (awaitsOnItsOwn(started)) {
+              yield* addTaskIdsToNativeThreadSet(
+                awaitedBackgroundTasksByNativeThread,
+                input.nativeThreadId,
+                [started.taskId],
+              );
+            }
             rosterChanged = true;
           } else if (message.type === "system" && message.subtype === "task_notification") {
             yield* endClaudeMonitorTasks((taskId) => taskId === message.task_id);
@@ -10840,11 +10850,18 @@ export const makeClaudeAdapterV2 = Effect.fn("makeClaudeAdapterV2")(function* (
             const reason = NodeUtil.stripVTControlCharacters(
               callbackOptions.decisionReason ?? "",
             ).trim();
-            yield* Effect.logInfo("t4.claude-safety-check-declined", {
-              toolName,
-              reason,
-              kind: safetyCheckKind(reason, typeof command === "string" ? command : undefined),
-            });
+            const kind = safetyCheckKind(reason, typeof command === "string" ? command : undefined);
+            // t4 fork (AI-125): a Bash command with no removal, copy or risky target runs; 21 of
+            // 27 declines in a week were such heredocs.
+            if (toolName === "Bash" && kind === "unparsed") {
+              yield* Effect.logInfo("t4.claude-safety-check-allowed", { toolName, reason });
+              return {
+                behavior: "allow",
+                updatedInput: toolInput,
+                toolUseID: callbackOptions.toolUseID,
+              } satisfies PermissionResult;
+            }
+            yield* Effect.logInfo("t4.claude-safety-check-declined", { toolName, reason, kind });
             return {
               behavior: "deny",
               message: safetyCheckDeclinedNote(
@@ -12499,7 +12516,9 @@ export const makeClaudeAdapterV2 = Effect.fn("makeClaudeAdapterV2")(function* (
                 yield* Ref.get(pendingBackgroundTasksByNativeThread),
                 nativeThreadId,
               );
-              const matched = [...new Set(taskIds)].filter((taskId) => roster.has(taskId));
+              // t4 fork (AI-125): clearing with no ids clears every task.
+              const named = taskIds.length === 0 && !awaited ? [...roster.keys()] : taskIds;
+              const matched = [...new Set(named)].filter((taskId) => roster.has(taskId));
               if (matched.length === 0) return { matched };
               if (awaited) {
                 yield* addTaskIdsToNativeThreadSet(

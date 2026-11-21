@@ -10607,12 +10607,13 @@ describe("ClaudeAdapterV2 background wake turns", () => {
             [WAKE_TASK_ID, false],
           ],
         );
+        // t4 fork (AI-125): clearing with no ids clears every task.
         const released = yield* awaitBackgroundTasks({
           providerThread: harness.providerThread,
-          taskIds: ["dev-server"],
+          taskIds: [],
           awaited: false,
         });
-        assert.deepStrictEqual(released.matched, ["dev-server"]);
+        assert.deepStrictEqual(released.matched, ["dev-server", WAKE_TASK_ID]);
         assert.deepStrictEqual(
           marks(yield* nextRoster((tasks) => !tasks.some((task) => task.awaited === true))),
           [
@@ -10758,8 +10759,9 @@ describe("ClaudeAdapterV2 background wake turns", () => {
 
         const roster = providerThreadRosterEvents(harness.events).at(-1)?.providerThread
           .pendingBackgroundTasks;
+        // t4 fork (AI-125): a Monitor is waited on without t3_background_wait.
         assert.deepEqual(roster, [
-          { taskId: longRunning.taskId, kind: "monitor", description: "Monitor 0" },
+          { taskId: longRunning.taskId, kind: "monitor", description: "Monitor 0", awaited: true },
         ]);
       }).pipe(
         Effect.provide(
@@ -20381,6 +20383,35 @@ describe("ClaudeAdapterV2 declines safety checks", () => {
         );
         const previous = process.env.T4_CLAUDE_DECLINE_SAFETY_CHECKS;
         process.env.T4_CLAUDE_DECLINE_SAFETY_CHECKS = "1";
+        const ask = (command: string, toolUseID: string, decisionReason: string) =>
+          canUseTool!(
+            "Bash",
+            { command },
+            {
+              signal: new AbortController().signal,
+              toolUseID,
+              requestId: `request-${toolUseID}`,
+              decisionReason,
+              suppressAlwaysAllowRule: true,
+            },
+          );
+        const decisions = yield* Effect.promise(() =>
+          Promise.all([
+            // t4 fork (AI-125): no removal, copy or risky target in it - it runs.
+            ask(
+              "python3 - <<'EOF'\nprint('ok')\nEOF",
+              "tool-heredoc",
+              "This shell -c script could not be checked",
+            ),
+          ]),
+        );
+        assert.deepEqual(decisions, [
+          {
+            behavior: "allow",
+            updatedInput: { command: "python3 - <<'EOF'\nprint('ok')\nEOF" },
+            toolUseID: "tool-heredoc",
+          },
+        ]);
         const decision = yield* Effect.promise(() =>
           canUseTool!(
             "Bash",
