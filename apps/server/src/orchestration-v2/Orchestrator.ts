@@ -13,6 +13,7 @@ import {
 } from "@t3tools/shared/orchestrationV2ThreadError";
 import { canonicalizeGitCafePullRequestUrl } from "@t3tools/source-control-definitions/registry";
 import { threadPullRequestsOf } from "../sourceControl/threadPullRequests.ts";
+import { redactKeyTitles } from "../t4/redactTitles.ts";
 import {
   normalizeThreadPullRequestKey,
   visibleThreadPullRequests,
@@ -14308,7 +14309,9 @@ const makeOrchestrator = Effect.fn("orchestrationV2.Orchestrator.layer")(functio
   }, withCommandMetrics);
 
   // dispatchWithReceiptEffect owns the dispatch span; this wrapper selects the thread locks.
-  const dispatchWithReceipt = Effect.fnUntraced(function* (command: OrchestrationV2ServerCommand) {
+  const dispatchWithReceipt = Effect.fnUntraced(function* (received: OrchestrationV2ServerCommand) {
+    // t4 fork (AI-125): no key-shaped token becomes a thread title.
+    const command = redactKeyTitles(received);
     const dispatch = threadDispatch.withLock(
       commandThreadId(command),
       dispatchWithReceiptEffect(command),

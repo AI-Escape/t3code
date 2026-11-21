@@ -187,7 +187,7 @@ const handlers = {
         }),
     ),
   ),
-  list_scheduled_tasks: McpToolAccess.reads(({ all, ...input }) =>
+  list_scheduled_tasks: McpToolAccess.reads(({ all, finished, ...input }) =>
     Effect.gen(function* () {
       const scope = yield* McpInvocationContext.McpInvocationContext;
       const service = yield* OrchestratorMcpService.OrchestratorMcpService;
@@ -197,7 +197,15 @@ const handlers = {
       // t4 fork: a thread sees its own pending tasks unless it asks for all.
       const { caller } = yield* readCaller();
       if (all === true || caller === undefined || input.projectId !== undefined) {
-        return OrchestratorMcpService.scheduledTaskRows(result.tasks);
+        const ran = (task: (typeof result.tasks)[number]) =>
+          task.schedule.type === "once" && task.nextRunAt === null;
+        const left = finished === true ? 0 : result.tasks.filter(ran).length;
+        const rows = OrchestratorMcpService.scheduledTaskRows(
+          left === 0 ? result.tasks : result.tasks.filter((task) => !ran(task)),
+        );
+        if (left === 0) return rows;
+        const note = `${left} one-shot task${left === 1 ? "" : "s"} that already ran left out - pass \`finished\` to include them.`;
+        return { ...rows, more: rows.more === undefined ? note : `${rows.more} ${note}` };
       }
       return OrchestratorMcpService.scheduledTaskRows(
         result.tasks.filter((task) => task.boundThreadId === caller.id && task.nextRunAt !== null),

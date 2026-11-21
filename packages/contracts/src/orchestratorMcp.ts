@@ -783,8 +783,13 @@ export const OrchestratorMcpListScheduledTasksInput = Schema.Struct({
   /** t4 fork: a thread's own pending tasks by default (the project list held every finished one). */
   all: Schema.optional(
     Schema.Boolean.annotate({
-      description:
-        "true: every task in the project, finished ones too. Default: your thread's pending tasks.",
+      description: "true: every task in the project. Default: your thread's pending tasks.",
+    }),
+  ),
+  /** t4 fork (AI-125): `all` leaves out one-shot tasks that already ran (138 rows, 64 KB). */
+  finished: Schema.optional(
+    Schema.Boolean.annotate({
+      description: "With `all`: include one-shot tasks that already ran.",
     }),
   ),
   /** t4 fork (AI-93): one task in full; list rows are compact. */
