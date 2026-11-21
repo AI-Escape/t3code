@@ -52,13 +52,25 @@ function redeliversMessage(
   );
 }
 
-/** t4 fork: a run that sends again the message of a run a restart cut before it started. */
+/**
+ * t4 fork: a run cancelled before its provider took the prompt, marked started or not
+ * (AI-123): it carries no work newer than the runs a restart cut beside it.
+ */
+function cutBeforePrompt(
+  run: OrchestrationV2Run,
+  providerTurns: ReadonlyArray<Pick<OrchestrationV2ProviderTurn, "runAttemptId">>,
+): boolean {
+  return cancelledBeforeStart(run) || (run.status === "cancelled" && unstartedRun(run, providerTurns));
+}
+
+/** t4 fork: a run that sends again the message of a run a restart cut before its provider took it. */
 function resendsCutMessage(
   run: OrchestrationV2Run,
   runs: ReadonlyArray<OrchestrationV2Run>,
+  providerTurns: ReadonlyArray<Pick<OrchestrationV2ProviderTurn, "runAttemptId">>,
 ): boolean {
   const cut = runs.find((candidate) => candidate.id === run.restartContinuationOfRunId);
-  return cut !== undefined && cancelledBeforeStart(cut);
+  return cut !== undefined && cutBeforePrompt(cut, providerTurns);
 }
 
 const MAX_CONTINUATION_CHAIN = 3;
@@ -248,9 +260,9 @@ export const continueRestartedRun = Effect.fn("RestartContinuation.continueResta
         (run) =>
           run.id !== source.id &&
           run.status !== "queued" &&
-          !cancelledBeforeStart(run) &&
+          !cutBeforePrompt(run, projection.providerTurns) &&
           // t4 fork: a re-sent message the same restart cut carries old work, not newer (AI-88).
-          !resendsCutMessage(run, projection.runs) &&
+          !resendsCutMessage(run, projection.runs, projection.providerTurns) &&
           runRanAfter(run, source),
       )
     )

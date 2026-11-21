@@ -14,6 +14,7 @@ import {
   TurnItemId,
   type OrchestrationV2ThreadProjection,
 } from "@t3tools/contracts";
+import * as DateTime from "effect/DateTime";
 import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
 
@@ -1550,6 +1551,9 @@ it.effect("sends a run the restart caught before its provider took the prompt ag
   const attemptId = RunAttemptId.make("attempt_unstarted_wake");
   const startedRunId = RunId.make("run_started_cut");
   const startedAttemptId = RunAttemptId.make("attempt_started_cut");
+  // t4 fork (AI-123): usa-rs USA-2884's wake, marked started in the shutdown's grace period.
+  const untakenRunId = RunId.make("run_started_untaken");
+  const untakenAttemptId = RunAttemptId.make("attempt_started_untaken");
   const providerInstanceId = ProviderInstanceId.make("claudeAgent");
   const providerThreadId = ProviderThreadId.make("provider_thread_unstarted");
   const committed: Array<Parameters<EventSink.EventSinkV2["Service"]["commitCommand"]>[0]> = [];
@@ -1577,6 +1581,12 @@ it.effect("sends a run the restart caught before its provider took the prompt ag
       status: "starting",
       startedAt: null,
       activeAttemptId: startedAttemptId,
+    },
+    {
+      id: untakenRunId,
+      status: "running",
+      startedAt: DateTime.makeUnsafe("2026-11-21T13:32:09.075Z"),
+      activeAttemptId: untakenAttemptId,
     },
   ]);
   projection = {
@@ -1639,7 +1649,7 @@ it.effect("sends a run the restart caught before its provider took the prompt ag
         ),
       );
       // The run whose provider turn began is upstream's: its prompt may have been taken.
-      assert.deepEqual(continued(command), [runId], trigger);
+      assert.deepEqual(continued(command), [runId, untakenRunId], trigger);
     }
     yield* reconcile("shutdown", false);
     assert.deepEqual(continued(committed.at(-1)), []);

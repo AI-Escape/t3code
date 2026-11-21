@@ -183,18 +183,17 @@ export function neverStarted(
 }
 
 /**
- * t4 fork: the provider never took this run's prompt - no provider turn, never started -
- * so sending its message again after a restart repeats nothing (AI-88).
+ * t4 fork: the provider never took this run's prompt - no provider turn for its attempt -
+ * so sending its message again after a restart repeats nothing (AI-88). A run marked
+ * started counts too: usa-rs USA-2884's wake was started during the shutdown's grace
+ * period, the provider never got it, and it was lost (AI-123).
  */
 export function unstartedRun(
-  run: Pick<OrchestrationV2Run, "startedAt" | "activeAttemptId">,
+  run: Pick<OrchestrationV2Run, "activeAttemptId">,
   providerTurns: ReadonlyArray<Pick<ProviderTurnState, "runAttemptId">>,
 ): boolean {
-  return (
-    run.startedAt === null &&
-    !providerTurns.some(
-      (turn) => run.activeAttemptId !== null && turn.runAttemptId === run.activeAttemptId,
-    )
+  return !providerTurns.some(
+    (turn) => run.activeAttemptId !== null && turn.runAttemptId === run.activeAttemptId,
   );
 }
 

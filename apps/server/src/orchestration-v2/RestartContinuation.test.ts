@@ -1302,9 +1302,39 @@ it.effect("sends an unstarted run's own message again instead of continuing", ()
     );
     assert.equal(again?.text, first!.text);
 
+    // t4 fork (AI-123): a run marked started that the provider never took is sent again too.
+    const [startedUntaken] = yield* continuationDispatches(unstarted({ startedAt: now }));
+    assert.equal(startedUntaken?.text, first!.text);
+
     // A run whose provider turn began keeps upstream's "continue".
     const [started] = yield* continuationTexts(cutMidTurn());
     assert.match(started ?? "", /^Continue where you left off/);
+  }),
+);
+
+// t4 fork (AI-123): usa-rs USA-2884's wake was marked started in the shutdown's grace period.
+it.effect("still continues a cut run when a re-sent started-but-untaken message ran first", () =>
+  Effect.gen(function* () {
+    const cut = cutMidTurn();
+    const wakeRunId = RunId.make("run:cut-wake");
+    const wakeAttemptId = RunAttemptId.make("attempt:cut-wake");
+    const texts = yield* continuationTexts({
+      ...cut,
+      runs: [
+        ...cut.runs,
+        { ...cut.runs[0]!, id: wakeRunId, ordinal: 2, startedAt: now, activeAttemptId: wakeAttemptId },
+        {
+          ...cut.runs[0]!,
+          id: RunId.make("run:resent-wake"),
+          ordinal: 3,
+          status: "running",
+          completedAt: null,
+          restartContinuationOfRunId: wakeRunId,
+        },
+      ],
+    } as unknown as OrchestrationV2ThreadProjection);
+    assert.lengthOf(texts, 1);
+    assert.match(texts[0]!, /^Continue where you left off/);
   }),
 );
 
