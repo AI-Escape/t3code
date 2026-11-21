@@ -2,6 +2,7 @@ import * as NodeCrypto from "@effect/platform-node/NodeCrypto";
 import * as NodeServices from "@effect/platform-node/NodeServices";
 import { expect, it } from "@effect/vitest";
 import { EnvironmentId, ProviderInstanceId, ThreadId } from "@t3tools/contracts";
+import * as DateTime from "effect/DateTime";
 import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
 import { McpSchema, McpServer } from "effect/ai";
@@ -14,6 +15,7 @@ import * as T4Config from "../../../t4/T4Config.ts";
 import * as T4Delivery from "../../../t4/T4Delivery.ts";
 import * as T4Ledger from "../../../t4/T4Ledger.ts";
 import * as T4RunWatch from "../../../t4/T4RunWatch.ts";
+import * as T4Releases from "../../../t4/T4Releases.ts";
 import * as T4Sql from "../../../t4/T4Sql.ts";
 import * as T4Store from "../../../t4/T4Store.ts";
 import * as McpHttpServer from "../../McpHttpServer.ts";
@@ -42,6 +44,33 @@ describe("t4 release queue helpers", () => {
     expect(releaseNotice("failed", [9], "Backend tests: test_quotes fails on main")).toBe(
       "release failed on your PR #9: Backend tests: test_quotes fails on main",
     );
+  });
+
+  it("nudges an owner only for a PR long queued or on staging, once per state", () => {
+    const now = Date.UTC(2026, 10, 21, 12);
+    const at = (hoursAgo: number) =>
+      DateTime.formatIso(DateTime.makeUnsafe(now - hoursAgo * 3_600_000));
+    const row = (state: T4Store.T4ReleaseState, hoursAgo: number, note: string | null = null) =>
+      ({
+        projectId: "p",
+        pr: 7,
+        state,
+        note,
+        queuedAt: at(hoursAgo),
+        mergedAt: at(hoursAgo),
+        stagedAt: at(hoursAgo),
+        shippedAt: null,
+        updatedAt: at(0),
+      }) as T4Store.T4ReleaseRow;
+    // A note edited a minute ago doesn't restart the clock (AI-98).
+    expect(T4Releases.staleNotice(row("queued", 3, "Waiting on checks."), now)).toMatch(
+      /^release: your PR #7 has been queued for 3h\S*, not merged yet: Waiting on checks\. If/,
+    );
+    expect(T4Releases.staleNotice(row("staging", 5), now)).toContain("on staging for 5h");
+    expect(T4Releases.staleNotice(row("queued", 1), now)).toBeUndefined();
+    expect(T4Releases.staleNotice(row("staging", 3), now)).toBeUndefined();
+    expect(T4Releases.staleNotice(row("merged", 30), now)).toBeUndefined();
+    expect(T4Releases.staleNotice(row("held", 30), now)).toBeUndefined();
   });
 });
 
@@ -260,8 +289,8 @@ it.effect(
         'shipped: "USA-9 Fix" (#2340, #2341)',
         'shipped (waiting): "USA-455 Waits" (#2340)',
       ]);
-      // shipped answers the owner's handoff, so it reaches a running turn at once.
-      expect(delivered[2]).toMatchObject({ to: OWNER, patient: false });
+      // shipped answers the owner's handoff but asks nothing: it waits for a running turn too.
+      expect(delivered[2]).toMatchObject({ to: OWNER, patient: true });
       expect(delivered[2]!.text).toContain("answers your handoff");
       expect(delivered[2]!.text).toContain("shipped: PRs #2340, #2341 live in production");
       expect(delivered[3]!.text).toContain("You are no longer waiting on it");

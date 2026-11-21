@@ -13,6 +13,7 @@ import * as ScheduledTasks from "../../../scheduledTasks/ScheduledTaskService.ts
 import * as T4Config from "../../../t4/T4Config.ts";
 import * as T4Delivery from "../../../t4/T4Delivery.ts";
 import * as T4Facts from "../../../t4/T4Facts.ts";
+import { isRunning } from "../../../t4/T4Threads.ts";
 import * as Wakes from "../../../t4/wakes.ts";
 import { readCaller, unavailable } from "../../threadAccess.ts";
 import * as McpInvocationContext from "../../McpInvocationContext.ts";
@@ -283,7 +284,11 @@ const handlers = {
             if (target !== null) {
               // t4 fork: a plain message from another thread waits for a running turn
               // to end instead of cutting the command it runs; `steer`/`restart` cut in (AI-93).
-              const mode = (input.mode ?? "auto") === "auto" ? ("queue" as const) : input.mode;
+              // A steer to an idle thread has nothing to cut into, so it queues (AI-125).
+              const mode =
+                (input.mode ?? "auto") === "auto" || (input.mode === "steer" && !isRunning(target))
+                  ? ("queue" as const)
+                  : input.mode;
               const message = yield* t4.value
                 .decorate({ sender: caller, target, text: input.message, queued: mode === "queue" })
                 .pipe(

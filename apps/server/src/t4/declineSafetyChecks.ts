@@ -1,7 +1,8 @@
-// t4 fork: under bypassPermissions Claude Code still forwards some safety checks (rm, cp, mv,
-// unparseable commands) to the permission callback. With T4_CLAUDE_DECLINE_SAFETY_CHECKS=1 such a
-// provider_check is declined at once with a note that fits its reason; asks from the user's own
-// ask rules still reach the user.
+/**
+ * t4 fork: with `T4_CLAUDE_DECLINE_SAFETY_CHECKS=1`, a safety check Claude Code forwards under
+ * `bypassPermissions` is declined with advice that fits its kind (rm, cp/mv, working-directory or
+ * critical target, unresolved path, unparsed; AI-124); the user's own ask rules still reach them.
+ */
 export const t4DeclineSafetyChecks = (env: NodeJS.ProcessEnv = process.env): boolean =>
   env.T4_CLAUDE_DECLINE_SAFETY_CHECKS?.trim() === "1";
 

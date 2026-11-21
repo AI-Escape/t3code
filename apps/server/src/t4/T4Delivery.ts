@@ -1,7 +1,7 @@
 /**
  * t4 fork: delivering a message like t4's `deliver()`: steered into a running turn, or `interrupt`
- * restarts it. Notes: a live question it closed is unanswered, a cancelled Claude tool call was
- * this message, a settled thread is unsettled. Open message-mode cards get none (AI-114).
+ * restarts it. Notes: a live question it closed is unanswered, a Claude approval it cut was this
+ * message, a settled thread is unsettled. Open message-mode cards get none (AI-114).
  */
 import {
   CommandId,
@@ -92,11 +92,12 @@ export const deliveryNotes = (input: {
   readonly settled: boolean;
   /** Live questions a message can close. Message-mode ones stay open and get no note (AI-114). */
   readonly questions: ReadonlyArray<string>;
-  readonly claudeRunning: boolean;
+  /** A steer into a Claude turn held on an approval, which the steer cancels. */
+  readonly cutsApproval: boolean;
 }): ReadonlyArray<string> => [
   ...(input.settled ? [REOPENED_SETTLED_NOTE] : []),
   ...(input.questions.length > 0 ? [UNANSWERED_QUESTION_NOTE(input.questions)] : []),
-  ...(input.claudeRunning ? [CANCELLED_TOOL_NOTE] : []),
+  ...(input.cutsApproval ? [CANCELLED_TOOL_NOTE] : []),
 ];
 
 const make = Effect.gen(function* () {
@@ -145,7 +146,10 @@ const make = Effect.gen(function* () {
             Effect.orElseSucceed(() => noQuestions),
           );
 
-  /** The delivery notes, prepended when they apply; a queued message cancels nothing. */
+  /**
+   * The delivery notes, prepended when they apply. Claude holds a steer until the command it runs
+   * returns, so a steer cancels only a pending approval: 432 notes in a week, <=18 real (AI-125).
+   */
   const withNotes = Effect.fn("t4.T4Delivery.withNotes")(function* (
     target: OrchestrationV2ThreadShell,
     text: string,
@@ -155,7 +159,12 @@ const make = Effect.gen(function* () {
     const notes = deliveryNotes({
       settled: isSettled(target),
       questions,
-      claudeRunning: !queued && target.providerInstanceId.startsWith("claude") && isRunning(target),
+      cutsApproval:
+        !queued &&
+        target.providerInstanceId.startsWith("claude") &&
+        isRunning(target) &&
+        target.pendingRuntimeRequest !== null &&
+        target.pendingRuntimeRequest.kind !== "user_input",
     });
     return notes.length === 0
       ? text

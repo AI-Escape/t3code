@@ -56,7 +56,7 @@ export const HandoffTool = Tool.make("t3_handoff", {
     "Hand work to another thread with an explicit effect on the handoff ledger (who owes whom an answer). The ledger moves only on these flags, never on wording.",
     "Without `to`: hand your finished work to this project's release manager. That always asks it to release (it then owes you an answer); a release manager is created and pinned if the project has none. The release manager itself must name `to`.",
     "With `to`: say what the handoff does - `done` answers what you owe that thread (settles its handoff to you), `ask` makes it owe you a reply, `fyi` does neither. `done` combines with `ask` (finished, and asking something new) or `fyi` (finished, nothing more). A handoff to a release manager from any other thread is always a request.",
-    "A running recipient gets `done`/`ask` steered into its turn at once; a pure `fyi` waits until that turn ends, so the command it runs is never cut. `interrupt` stops its running turn and restarts it with your message.",
+    "A running recipient gets an `ask` steered into its turn at once; `done` and `fyi` wait until that turn ends, so the command it runs is never cut. `interrupt` stops its running turn and restarts it with your message.",
     "`check` returns the project's release manager without sending anything.",
   ].join(" "),
   parameters: Schema.Struct({
@@ -307,7 +307,7 @@ const PrRef = Schema.Struct({
 const ReleaseQueueTool = Tool.make("release_queue", {
   ...common,
   description: [
-    "The release manager's queue, kept by t4 (the dashboard shows it as what is on staging). Without `prs`: the PRs not yet shipped, oldest first, as compact rows (`changed` marks rows changed since your last read; `detail` for full rows). A release manager sees its whole queue; any other thread sees its own PRs and those it waits on (`all`: the whole project, plus PRs shipped in the last 7 days). Owners hear `staging:` and `shipped:` without reading it, and a PR sitting 2 h in one state gets its owner a note - no wakes to check.",
+    "The release manager's queue, kept by t4 (the dashboard shows it as what is on staging). Without `prs`: the PRs not yet shipped, oldest first, as compact rows (`changed` marks rows changed since your last read; `detail` for full rows). A release manager sees its whole queue; any other thread sees its own PRs and those it waits on (`all`: the whole project, plus PRs shipped in the last 7 days). Owners hear `staging:` and `shipped:` without reading it, and a PR queued 2 h or staged 4 h gets its owner a note - no wakes to check.",
     "`waitFor` (a PR, of any project, that blocks your work): you get its staging and shipped notices too; `stopWaiting` undoes it.",
     "With `prs` (release manager only): record each PR's state - queued (handed off, not merged), merged (on the release branch, not deployed), staging (deployed to staging), held (waiting on the user, e.g. a production promotion they gate), shipped (live in production), failed (its release failed). An owner's handoff that names its PR queues it for you.",
     "Moving a PR to staging, shipped or failed also sends its owner the notice (staging: fyi; shipped: done + fyi; failed: done + ask, with `note` as the cause), and threads waiting on it theirs - one message per owner per call; `notify: false` records only.",
