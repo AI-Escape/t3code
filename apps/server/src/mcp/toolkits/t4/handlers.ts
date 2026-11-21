@@ -596,7 +596,8 @@ const handoff = Effect.fn("t4.handoff")(function* (input: HandoffInput) {
       text: header + body + footer + wakesNote,
       senderThreadId: me.id,
       interrupt: input.interrupt === true,
-      patient: pureFyi,
+      // Asking nothing, a done waits for the turn to end like an fyi (AI-125: ~360 steers a week).
+      patient: !ask,
       notice: !ask,
     })
     .pipe(Effect.mapError((error) => invalid(error.message)));
@@ -1074,7 +1075,7 @@ export const layer = McpToolAccess.toLayer(T4Toolkit, {
                 target,
                 text: header + body + footer + wakesNote,
                 senderThreadId: me.id,
-                patient: !done,
+                patient: !ask,
                 notice: !ask,
               })
               .pipe(Effect.result);
