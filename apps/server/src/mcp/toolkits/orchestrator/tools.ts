@@ -146,7 +146,7 @@ const WorkflowStopTool = Tool.make("t3_workflow_stop", {
 
 const BackgroundWaitTool = Tool.make("t3_background_wait", {
   description:
-    "Keep this thread in Working while background work runs. Pass `taskIds` once started. Not for work left running (dev server, watcher). `waiting=false` clears. Does not stop the task. Claude/OpenCode only.",
+    "Keep this thread Working while other background work runs (checks, tests, Monitors need no call). Pass `taskIds`. Not for work left running. `waiting=false` clears; no ids: all. Claude/OpenCode only.",
   parameters: Schema.Struct({
     taskIds: Schema.optional(
       Schema.Array(TrimmedNonEmptyString).check(Schema.isMinLength(1), Schema.isMaxLength(20)),
@@ -158,6 +158,7 @@ const BackgroundWaitTool = Tool.make("t3_background_wait", {
   success: Schema.Struct({
     matched: Schema.Array(Schema.String),
     unmatched: Schema.Array(Schema.String),
+    note: Schema.optional(Schema.String),
   }),
   failure: OrchestratorMcpFailure,
   failureMode: "return",
@@ -186,7 +187,7 @@ const ScheduleTaskTool = Tool.make("schedule_task", {
 const ListScheduledTasksTool = Tool.make("list_scheduled_tasks", {
   parameters: OrchestratorMcpListScheduledTasksInput,
   description:
-    "List scheduled tasks. Omit `projectId` for this thread's project. Rows show the first 120 chars of each prompt and its `promptLength`; pass `scheduledTaskId` here to read one task in full (`task`, with its webhook URL). Pass a `scheduledTaskId` to `schedule_task` or `delete_scheduled_task`. In a scheduled run, do not call this to find your task. Do the prompt.",
+    "List scheduled tasks. Rows preview 120 chars of each prompt (`promptLength`: all); `scheduledTaskId` reads one task in full (`task`, with webhook URL). Pass a `scheduledTaskId` to `schedule_task` or `delete_scheduled_task`. In a scheduled run, do not call this to find your task. Do the prompt.",
   success: OrchestratorMcpListScheduledTasksResult,
   failure: OrchestratorMcpFailure,
   failureMode: "return",

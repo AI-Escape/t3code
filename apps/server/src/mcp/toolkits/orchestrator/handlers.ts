@@ -79,7 +79,9 @@ const handlers = {
         ...(input.taskIds ?? []),
         ...(input.taskId === undefined ? [] : [input.taskId]),
       ];
-      if (taskIds.length === 0) {
+      const waiting = input.waiting ?? true;
+      // t4 fork (AI-125): clearing needs no ids; 158 calls a week invented "placeholder" for one.
+      if (taskIds.length === 0 && waiting) {
         return yield* new OrchestratorMcpFailure({
           code: "invalid_request",
           message: "Pass `taskIds`, the background task ids to wait on.",
@@ -89,9 +91,17 @@ const handlers = {
         .awaitBackgroundTasks({
           threadId: caller.thread.threadId,
           taskIds,
-          awaited: input.waiting ?? true,
+          awaited: waiting,
         })
         .pipe(
+          Effect.map((result) =>
+            result.unmatched.length === 0
+              ? result
+              : {
+                  ...result,
+                  note: `${result.unmatched.join(", ")}: no such running task - already finished, so nothing to wait on.`,
+                },
+          ),
           Effect.mapError(
             (cause) =>
               new OrchestratorMcpFailure({
@@ -183,7 +193,7 @@ const handlers = {
         }),
     ),
   ),
-  list_scheduled_tasks: McpToolAccess.reads(({ all, ...input }) =>
+  list_scheduled_tasks: McpToolAccess.reads(({ all, finished, ...input }) =>
     Effect.gen(function* () {
       const scope = yield* McpInvocationContext.McpInvocationContext;
       const service = yield* OrchestratorMcpService.OrchestratorMcpService;
@@ -193,7 +203,15 @@ const handlers = {
       // t4 fork: a thread sees its own pending tasks unless it asks for all.
       const { caller } = yield* readCaller();
       if (all === true || caller === undefined || input.projectId !== undefined) {
-        return OrchestratorMcpService.scheduledTaskRows(result.tasks);
+        const ran = (task: (typeof result.tasks)[number]) =>
+          task.schedule.type === "once" && task.nextRunAt === null;
+        const left = finished === true ? 0 : result.tasks.filter(ran).length;
+        const rows = OrchestratorMcpService.scheduledTaskRows(
+          left === 0 ? result.tasks : result.tasks.filter((task) => !ran(task)),
+        );
+        if (left === 0) return rows;
+        const note = `${left} one-shot task${left === 1 ? "" : "s"} that already ran left out - pass \`finished\` to include them.`;
+        return { ...rows, more: rows.more === undefined ? note : `${rows.more} ${note}` };
       }
       return OrchestratorMcpService.scheduledTaskRows(
         result.tasks.filter((task) => task.boundThreadId === caller.id && task.nextRunAt !== null),

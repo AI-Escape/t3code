@@ -397,6 +397,7 @@ export const layer = McpToolAccess.toLayer(ProjectToolkit, {
             issues,
             // A replayed launch is its own live thread; keep only the message it built.
             anyway: input.anyway === true || replaying,
+            title: input.title,
             message: input.message,
           }).pipe(
             Effect.provideService(T4Ledger.T4Ledger, t4Ledger.value),
