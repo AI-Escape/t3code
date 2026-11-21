@@ -652,15 +652,17 @@ it.effect("a launch into a new worktree creates nothing when its base ref has no
     expect((refused as { message: string }).message).toContain(
       'Base ref "t3/renamed" does not resolve to a commit in project "Client target" (/projects/client-target). No thread was created. Pass a branch, tag, or commit that exists there',
     );
-    expect((yield* launchFrom("main", "feature/taken")).at(-1)?.result).toMatchObject({
-      code: "invalid_request",
-      message:
-        'Branch "feature/taken" already exists in project "Client target". No thread was created. Pass a branch name that does not exist yet, or omit branch to get a generated name.',
-    });
     expect(launched).toHaveLength(0);
+    // t4 fork: a branch that already exists gets a -<4 hex> suffix instead of a refusal.
+    expect((yield* launchFrom("main", "feature/taken")).at(-1)?.result).toMatchObject({ projectId });
+    expect(launched).toHaveLength(1);
+    const taken = launched[0]?.workspaceStrategy;
+    expect(taken?.type === "worktree" ? taken.branch : undefined).toMatch(
+      /^feature\/taken-[0-9a-f]{4}$/,
+    );
 
     expect((yield* launchFrom("main")).at(-1)?.result).toMatchObject({ projectId });
-    expect(launched).toHaveLength(1);
+    expect(launched).toHaveLength(2);
   }),
 );
 

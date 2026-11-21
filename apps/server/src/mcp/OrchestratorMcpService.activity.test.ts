@@ -412,9 +412,12 @@ it("readThread pages cut-off text without splitting an emoji across pages", asyn
         expect("remainingChars" in result.items[0]!).toBe(index < expected.length - 1);
       }
     }
+    // t4 fork: its defaults are 50 items of 1,500 chars; this checks upstream's paging at 10 x 500.
     const first = yield* service.readThread(makeScope(), {
       threadId: parentThreadId,
       view: "activity",
+      limit: 10,
+      maxCharsPerItem: 500,
     });
     expect(first.items[1]).toMatchObject({
       text: "x".repeat(500),

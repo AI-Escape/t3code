@@ -42,7 +42,6 @@ import {
   cancelledTurnItemWork,
   mergeRestartCancelledBackgroundWork,
   neverStarted,
-  unstartedRun,
 } from "./RestartBackgroundNote.ts";
 
 export class ProviderRuntimeRecoveryError extends Schema.TaggedError<ProviderRuntimeRecoveryError>()(
@@ -454,7 +453,10 @@ export const make = Effect.gen(function* () {
                 !retryableMessageIds.has(message.id) &&
                 message.notification === undefined &&
                 message.delegatedCompletion === undefined &&
-                (message.scheduledTaskId !== undefined || message.creationSource === "mcp"),
+                (message.scheduledTaskId !== undefined ||
+                  message.creationSource === "mcp" ||
+                  // t4 fork (AI-88): t4's own notices and wakes (release, run watch, stall).
+                  (message.createdBy === "system" && message.creationSource === "server")),
             ),
           )
         : [];
@@ -1012,25 +1014,6 @@ export const make = Effect.gen(function* () {
               now,
             )
           : undefined;
-      // t4 fork: a run the restart caught before its provider took the prompt - a wake, a
-      // handoff or a message seconds old - is sent again once the server is back. Upstream
-      // cancelled it, and the message was lost (usa-rs USA-2029's wake, 2026-11-12, AI-88).
-      const redeliveredRuns = continueAfterRestart
-        ? runs.filter(
-            (run) =>
-              run.status !== "queued" &&
-              run.id !== continuationRun?.id &&
-              unstartedRun(run, projection.providerTurns) &&
-              // A run cut while its own question is open keeps the question; its answer arrives as a message.
-              !projection.runtimeRequests.some(
-                (request) =>
-                  request.status === "pending" &&
-                  projection.nodes.some(
-                    (node) => node.id === request.nodeId && node.runId === run.id,
-                  ),
-              ),
-          )
-        : [];
       let processLossCount = 1;
       // Normal upgrades must not exhaust an unfinished turn's crash allowance.
       if (
@@ -1068,12 +1051,6 @@ export const make = Effect.gen(function* () {
               },
             ]
           : []),
-        ...redeliveredRuns.map((run) => ({
-          id: `effect:restart-continuation:${run.id}`,
-          commandId,
-          threadId: projection.thread.id,
-          request: { type: "provider-runtime.continue" as const, sourceRunId: run.id },
-        })),
       ];
       const stoppedSessions = projection.providerSessions.filter(
         (candidate) => candidate.status !== "stopped" && candidate.status !== "error",

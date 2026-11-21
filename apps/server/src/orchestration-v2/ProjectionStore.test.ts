@@ -7154,12 +7154,12 @@ it.layer(layerTest)("ProjectionStoreV2", (it) => {
       for (const lookup of stopRequestLookups) {
         assert.include(lookup, "orchestration_v2_projection_turn_items_stop_request_idx");
       }
-      // The active, activity, and pending-secret lookups; walking the ordinal index instead
-      // reads every run of an idle thread.
+      // The active and activity lookups; walking the ordinal index instead reads every run of an
+      // idle thread. t4 fork: the pending-secret lookup reads live items, not runs.
       const activeRunLookups = plan.filter(
         (detail) => detail.startsWith("SEARCH r ") && detail.includes("(thread_id=?"),
       );
-      assert.lengthOf(activeRunLookups, 4);
+      assert.lengthOf(activeRunLookups, 3);
       for (const lookup of activeRunLookups) {
         assert.include(lookup, "orchestration_v2_projection_runs_thread_status_idx");
       }

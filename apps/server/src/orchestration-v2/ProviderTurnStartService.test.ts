@@ -196,6 +196,7 @@ function startWithMissingWorktree(
           createWorktree,
           listLocalBranchNames,
           hasCommit,
+          resolvePrimaryRemoteName: () => Effect.succeed("origin"),
         }),
         Layer.mock(ProjectService.ProjectService)({
           getById: () =>

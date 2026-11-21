@@ -3460,11 +3460,7 @@ it.effect.each([
         key,
         shouldFinalizeRun: () => Effect.succeed(true),
         events: () =>
-          Stream.make(
-            rootTurn("running", null),
-            backgroundTurnItemEvent(ids, "command_execution", "running", 1),
-            rootTurn(status, terminalAt),
-          ).pipe(
+          Stream.make(rootTurn("running", null), rootTurn(status, terminalAt)).pipe(
             Stream.concat(
               failure === "later-stream"
                 ? Stream.fail(
@@ -3517,15 +3513,6 @@ it.effect.each([
       const durable = (yield* Ref.get(durableTurns)).get(ids.rootProviderTurnId);
       // A failed interrupt keeps the stored turn running for the next start to retry.
       assert.equal(durable?.status, interrupt === "fails" ? "running" : status);
-      // The restarted runtime took the run's commands with it; a failed restart may not have.
-      assert.deepEqual(
-        finalEvents.flatMap((event) =>
-          event.type === "turn-item.updated" && event.payload.type === "command_execution"
-            ? [event.payload.status]
-            : [],
-        ),
-        interrupt === "succeeds" ? ["cancelled"] : [],
-      );
       assert.deepEqual(durable?.completedAt, interrupt === "fails" ? null : terminalAt);
     }),
 );

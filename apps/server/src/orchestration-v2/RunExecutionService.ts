@@ -168,8 +168,6 @@ type OpenRunOwnedSubagentProjection = {
   readonly childTurnItems: ReadonlyMap<TurnItemId, OrchestrationV2TurnItem>;
   readonly nodes: ReadonlyMap<NodeId, OrchestrationV2ExecutionNode>;
   readonly linkedChildThreadIds: ReadonlySet<ThreadId>;
-  /** The root run's unfinished shell commands. */
-  readonly commandItems?: ReadonlyMap<TurnItemId, OrchestrationV2TurnItem>;
 };
 
 export type UnsettledWork = {
@@ -733,8 +731,6 @@ export const layer: Layer.Layer<
         readonly hasUnpairedRunInterruptRequest?: () => Effect.Effect<boolean, never>;
         readonly loadRunInterruptReason?: () => Effect.Effect<string | undefined, never>;
         readonly openRunOwnedSubagents?: OpenRunOwnedSubagentProjection;
-        // t4 fork (AI-73): the runtime was restarted under the run, so its commands can never report back.
-        readonly cancelOpenCommands?: boolean;
         readonly openRunOwnedSubagentsTerminal?: ProviderTerminalEvent;
         // Root turn snapshot written with the run when T3 ends the run itself.
         readonly abandonedProviderTurn?: OrchestrationV2ProviderTurn;
@@ -822,23 +818,6 @@ export const layer: Layer.Layer<
                 allocateEventId,
               })
             : [];
-        const cancelledCommandEvents: Array<OrchestrationV2DomainEvent> = [];
-        const lostToolCallIds = new Set((input.lostToolCalls ?? []).map((item) => item.id));
-        for (const item of input.cancelOpenCommands === true
-          ? (open.commandItems?.values() ?? [])
-          : []) {
-          if (lostToolCallIds.has(item.id)) continue;
-          cancelledCommandEvents.push({
-            id: yield* allocateEventId(),
-            type: "turn-item.updated",
-            threadId: item.threadId,
-            runId: input.run.id,
-            ...(item.nodeId === null ? {} : { nodeId: item.nodeId }),
-            providerInstanceId: input.run.providerInstanceId,
-            occurredAt: completedAt,
-            payload: { ...item, status: "cancelled", completedAt, updatedAt: completedAt },
-          });
-        }
         const persistedStatus =
           input.terminal.status === "completed" ? "waiting" : input.terminal.status;
         // Omit delegatedCompletion; the startup snapshot must not overwrite newer acknowledgements, successors, or Stop barriers.
@@ -887,7 +866,6 @@ export const layer: Layer.Layer<
               : [],
           events: [
             ...cascadedSubagentEvents,
-            ...cancelledCommandEvents,
             ...(yield* interruptLostToolCalls({
               run: input.run,
               toolCalls: input.lostToolCalls ?? [],
@@ -1600,18 +1578,6 @@ export const layer: Layer.Layer<
                 return { ...current, childTurnItems };
               });
             }
-            if (belongsToRootRun && event.turnItem.type === "command_execution" && deliverable) {
-              const commandItem = event.turnItem;
-              yield* Ref.update(openRunOwnedSubagents, (current) => {
-                const commandItems = new Map(current.commandItems ?? []);
-                if (isSettledTurnItemStatus(commandItem.status)) {
-                  commandItems.delete(commandItem.id);
-                } else {
-                  commandItems.set(commandItem.id, commandItem);
-                }
-                return { ...current, commandItems };
-              });
-            }
             if (belongsToRootRun && event.turnItem.type === "subagent") {
               const subagentItem = event.turnItem;
               yield* Ref.update(openRunOwnedSubagents, (current) => {
@@ -2113,7 +2079,6 @@ export const layer: Layer.Layer<
                   }
                   const providerThread = yield* Ref.get(latestProviderThread);
                   // Stop background work too; the failed consumer cannot persist terminal events.
-                  let runtimeRestarted = false;
                   const abandonedProviderTurn =
                     routing.rootProviderTurnId !== null && !routing.rootTurnEnded
                       ? yield* input.session
@@ -2135,11 +2100,6 @@ export const layer: Layer.Layer<
                             // A failed interrupt leaves the stored turn running so the next start
                             // retries it. The snapshot is cached before it is published, so it may
                             // not be stored: replay a terminal one as-is.
-                            Effect.tap((interrupted) =>
-                              Effect.sync(() => {
-                                runtimeRestarted = interrupted;
-                              }),
-                            ),
                             Effect.map((interrupted) =>
                               !interrupted || rootProviderTurn === null
                                 ? null
@@ -2179,7 +2139,6 @@ export const layer: Layer.Layer<
                       expectedStatus: "running",
                     },
                     openRunOwnedSubagents: openSubagents,
-                    cancelOpenCommands: runtimeRestarted,
                     ...(abandonedProviderTurn === null ? {} : { abandonedProviderTurn }),
                     lostToolCalls,
                     completedAt,

@@ -1309,7 +1309,7 @@ it.effect.each([
       },
     });
     const settledRun = yield* createRun(threadId, "completed", { providerThreadId });
-    const cutWake = yield* createRun(threadId, later.status, {
+    yield* createRun(threadId, later.status, {
       ordinal: 2,
       providerThreadId,
       completedAt: null,
@@ -1348,16 +1348,8 @@ it.effect.each([
 
     const effects = yield* sql<{ readonly effect_id: string }>`
       SELECT effect_id FROM orchestration_v2_effect_outbox WHERE thread_id = ${threadId}
-      ORDER BY effect_id
     `;
-    // t4 fork (AI-88): the cut wake is sent again too; upstream lost it.
-    assert.deepEqual(
-      effects.map((effect) => effect.effect_id).toSorted(),
-      [
-        `effect:restart-continuation:${settledRun}`,
-        `effect:restart-continuation:${cutWake}`,
-      ].toSorted(),
-    );
+    assert.deepEqual(effects, [{ effect_id: `effect:restart-continuation:${settledRun}` }]);
     const projection = yield* projections.getThreadProjection(threadId);
     assert.deepEqual(projection.runs[0]?.restartCancelledBackgroundWork, [
       { kind: "subagent", label: "sleep 150 (subagent agent)", id: "agent" },

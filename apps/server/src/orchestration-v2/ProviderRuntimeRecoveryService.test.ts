@@ -532,6 +532,8 @@ it.effect.each([
   "starting-other-request",
   "starting-own-request",
   "starting-scheduled",
+  // t4 fork (AI-88): a t4 notice or wake (release, run watch, stall) is sent again too.
+  "starting-t4-notice",
   "starting-steered",
   "running",
   "running-delegated",
@@ -545,7 +547,10 @@ it.effect.each([
     : scenario.startsWith("running")
       ? "running"
       : scenario;
-  const resent = scenario === "starting-scheduled" || scenario === "running-delegated";
+  const resent =
+    scenario === "starting-scheduled" ||
+    scenario === "starting-t4-notice" ||
+    scenario === "running-delegated";
   const terminalized =
     status === "preparing" ||
     scenario === "starting-own-request" ||
@@ -675,7 +680,9 @@ it.effect.each([
                 ? { createdBy: "agent", creationSource: "mcp" }
                 : scenario === "running-resume"
                   ? { createdBy: "agent", creationSource: "server" }
-                  : { createdBy: "user" }),
+                  : scenario === "starting-t4-notice"
+                    ? { createdBy: "system", creationSource: "server" }
+                    : { createdBy: "user" }),
               ...(scenario === "starting-scheduled" ? { scheduledTaskId: "scheduled-task" } : {}),
             },
           ]
@@ -1685,117 +1692,4 @@ it.effect("leaves delegated tasks to their own child threads after process loss"
     );
     assert.deepEqual(noted, [`subagent ${nativeSubagentId}`]);
   }).pipe(Effect.provide(layer));
-});
-
-// t4 fork (AI-88): usa-rs USA-2029's wake fired one second before a deploy restart; its run was
-// starting, never started, and the restart cancelled it with nothing to send it again.
-it.effect("sends a run the restart caught before its provider took the prompt again", () => {
-  const threadId = ThreadId.make("thread_unstarted_wake");
-  const runId = RunId.make("run_unstarted_wake");
-  const attemptId = RunAttemptId.make("attempt_unstarted_wake");
-  const startedRunId = RunId.make("run_started_cut");
-  const startedAttemptId = RunAttemptId.make("attempt_started_cut");
-  // t4 fork (AI-123): usa-rs USA-2884's wake, marked started in the shutdown's grace period.
-  const untakenRunId = RunId.make("run_started_untaken");
-  const untakenAttemptId = RunAttemptId.make("attempt_started_untaken");
-  const providerInstanceId = ProviderInstanceId.make("claudeAgent");
-  const providerThreadId = ProviderThreadId.make("provider_thread_unstarted");
-  const committed: Array<Parameters<EventSink.EventSinkV2["Service"]["commitCommand"]>[0]> = [];
-  const projectionFor = (
-    runs: ReadonlyArray<Record<string, unknown>>,
-    providerTurns: ReadonlyArray<Record<string, unknown>> = [],
-  ) =>
-    ({
-      thread: { id: threadId, projectId: "project_unstarted" },
-      runtimeRequests: [],
-      providerSessions: [],
-      providerThreads: [],
-      providerTurns,
-      runs: runs.map((run) => ({ providerInstanceId, providerThreadId, ...run })),
-      attempts: [],
-      nodes: [],
-      subagents: [],
-      messages: [],
-      turnItems: [],
-    }) as unknown as OrchestrationV2ThreadProjection;
-  let projection = projectionFor([
-    { id: runId, status: "starting", startedAt: null, activeAttemptId: attemptId },
-    {
-      id: startedRunId,
-      status: "starting",
-      startedAt: null,
-      activeAttemptId: startedAttemptId,
-    },
-    {
-      id: untakenRunId,
-      status: "running",
-      startedAt: DateTime.makeUnsafe("2026-11-21T13:32:09.075Z"),
-      activeAttemptId: untakenAttemptId,
-    },
-  ]);
-  projection = {
-    ...projection,
-    providerTurns: [
-      {
-        id: ProviderTurnId.make("turn_took_prompt"),
-        providerThreadId,
-        runAttemptId: startedAttemptId,
-        status: "running",
-      },
-    ],
-  } as unknown as OrchestrationV2ThreadProjection;
-  const layerFor = (continueThreadsAfterServerUpdate: boolean) =>
-    ProviderRuntimeRecovery.layer.pipe(
-      Layer.provide(ServerSettings.layerTest({ continueThreadsAfterServerUpdate })),
-      Layer.provide(
-        Layer.mergeAll(
-          Layer.mock(ProjectionStore.ProjectionStoreV2)({
-            getRecoveryThreadIds: () => Effect.succeed([threadId]),
-            getRuntimeRecoveryProjection: () => Effect.succeed(projection),
-            getMessagesById: () => Effect.succeed(new Map()),
-          }),
-          Layer.mock(EventSink.EventSinkV2)({
-            commitCommand: (input) => {
-              committed.push(input);
-              return Effect.succeed({ committed: true, cancelledEffectCount: 0 } as never);
-            },
-          }),
-          IdAllocator.layer,
-          Layer.mock(EffectWorker.OrchestrationEffectWorkerV2)({
-            runRecoveryOnce: Effect.succeed(false),
-          }),
-          Layer.mock(EffectOutbox.EffectOutboxV2)({
-            reconcileAfterProcessLoss: Effect.succeed({ requeued: 0, cancelled: 0 }),
-          }),
-        ),
-      ),
-    );
-  const continued = (input: (typeof committed)[number] | undefined) =>
-    (input?.effects ?? []).flatMap((effect) =>
-      effect.request.type === "provider-runtime.continue" ? [effect.request.sourceRunId] : [],
-    );
-  const reconcile = (trigger: "startup" | "shutdown", enabled: boolean) =>
-    Effect.gen(function* () {
-      return yield* (yield* ProviderRuntimeRecovery.ProviderRuntimeRecoveryService).reconcile(
-        trigger,
-      );
-    }).pipe(Effect.provide(layerFor(enabled)));
-  return Effect.gen(function* () {
-    for (const trigger of ["shutdown", "startup"] as const) {
-      yield* reconcile(trigger, true);
-      const command = committed.at(-1);
-      assert.isTrue(
-        command?.events.some(
-          (event) =>
-            event.type === "run.updated" &&
-            event.runId === runId &&
-            event.payload.status === "cancelled",
-        ),
-      );
-      // The run whose provider turn began is upstream's: its prompt may have been taken.
-      assert.deepEqual(continued(command), [runId, untakenRunId], trigger);
-    }
-    yield* reconcile("shutdown", false);
-    assert.deepEqual(continued(committed.at(-1)), []);
-  });
 });

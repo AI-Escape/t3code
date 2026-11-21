@@ -729,7 +729,8 @@ describe("orchestrator MCP toolkit", () => {
         const read = yield* invoke("t3_thread_read", {
           threadId: delegated.childThreadId,
           limit: 100,
-          ...(result === "😀" ? { maxCharsPerItem: 1 } : {}),
+          // t4 fork: items default to 1,500 chars; upstream's 500 keeps this page as written.
+          maxCharsPerItem: result === "😀" ? 1 : 500,
         }).pipe(Effect.withTracer(tracer));
         expect(read.isError).not.toBe(true);
         expect(transferReads.length).toBeGreaterThan(0);

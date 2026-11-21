@@ -2410,7 +2410,7 @@ it.layer(Layer.mergeAll(NodeServices.layer, NodeCrypto.layer))("server settings"
   it.effect.each([
     { label: "malformed JSON", broken: '{"defaultAutoPull": tru' },
     { label: "invalid retention", broken: '{"usageHistoryRetentionDays": 0}' },
-  ])("leaves settings.json with $label untouched and disables destructive defaults", ({ broken }) =>
+  ])("leaves settings.json with $label untouched and disables destructive defaults", ({ label, broken }) =>
     Effect.gen(function* () {
       const serverConfig = yield* ServerConfig.ServerConfig;
       const fileSystem = yield* FileSystem.FileSystem;
@@ -2429,7 +2429,8 @@ it.layer(Layer.mergeAll(NodeServices.layer, NodeCrypto.layer))("server settings"
 
       const settings = yield* serverSettings.getSettings;
       assert.isFalse(settings.projectSettingsFolded);
-      assert.isFalse(settings.continueThreadsAfterServerUpdate);
+      // t4 fork: a readable file without an opt-out still continues threads (continuesAfterServerUpdate).
+      assert.equal(settings.continueThreadsAfterServerUpdate, label !== "malformed JSON");
       assert.equal(settings.usageHistoryRetentionDays, "unlimited");
       assert.deepEqual(settings.projectSettingsOverrides, {});
 

@@ -2542,12 +2542,18 @@ const make = Effect.gen(function* () {
               failure("orchestration_error", `Could not list scheduled tasks: ${error.message}`),
             ),
           );
+        // t4 fork: `scheduledTaskId` finds the task in any project unless `projectId` is named.
         const wanted = tasks.filter((task) =>
           input.scheduledTaskId !== undefined
-            ? task.id === input.scheduledTaskId
+            ? task.id === input.scheduledTaskId &&
+              (input.projectId === undefined || task.projectId === input.projectId)
             : projectId === undefined || task.projectId === projectId,
         );
-        if (input.scheduledTaskId !== undefined && wanted.length === 0) {
+        if (
+          input.scheduledTaskId !== undefined &&
+          input.projectId === undefined &&
+          wanted.length === 0
+        ) {
           return yield* failure(
             "task_not_found",
             `Scheduled task ${input.scheduledTaskId} was not found.`,
