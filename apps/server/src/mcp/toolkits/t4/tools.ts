@@ -303,8 +303,8 @@ const ReleaseQueueTool = Tool.make("release_queue", {
   description: [
     "The release manager's queue, kept by t4 (the dashboard shows it as what is on staging). Without `prs`: the PRs not yet shipped, oldest first, as compact rows (`changed` marks rows changed since your last read; `detail` for full rows). A release manager sees its whole queue; any other thread sees its own PRs and those it waits on (`all`: the whole project, plus PRs shipped in the last 7 days). Owners hear `staging:` and `shipped:` without reading it, and a PR queued 2 h or staged 4 h gets its owner a note - no wakes to check.",
     "`waitFor` (a PR, of any project, that blocks your work): you get its staging and shipped notices too; `stopWaiting` undoes it.",
-    "With `prs` (release manager only): record each PR's state - queued (handed off, not merged), merged (on the release branch, not deployed), staging (deployed to staging), held (waiting on the user, e.g. a production promotion they gate), shipped (live in production), failed (its release failed). An owner's handoff that names its PR queues it for you.",
-    "Moving a PR to staging, shipped or failed also sends its owner the notice (staging: fyi; shipped: done + fyi; failed: done + ask, with `note` as the cause), and threads waiting on it theirs - one message per owner per call; `notify: false` records only.",
+    "With `prs` (release manager only): record each PR's state - queued (handed off, not merged), merged (on the release branch, not deployed), staging (deployed to staging), held (waiting on the user, e.g. a production promotion they gate), shipped (live in production), failed (its release failed), dropped (will not ship from this queue: withdrawn, cancelled, transferred - removes it). An owner's handoff that names its PR queues it for you. A write returns only the rows it wrote and a count of what is open.",
+    "Moving a PR to staging, shipped, failed or dropped also sends its owner the notice (staging: fyi; shipped and dropped: done + fyi; failed: done + ask, with `note` as the cause), and threads waiting on it theirs - one message per owner per call; `notify: false` records only.",
   ].join(" "),
   parameters: Schema.Struct({
     prs: Schema.optional(
@@ -322,7 +322,7 @@ const ReleaseQueueTool = Tool.make("release_queue", {
           ),
           note: Schema.optional(
             Schema.String.annotate({
-              description: "One line: why it is held, or why the release failed.",
+              description: "One line: why it is held, dropped, or why the release failed.",
             }),
           ),
         }),

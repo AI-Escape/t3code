@@ -22,6 +22,7 @@ import type { Tool } from "effect/ai";
 import * as ThreadLaunch from "../../../orchestration-v2/ThreadLaunchService.ts";
 import * as Project from "../../../project/ProjectService.ts";
 import * as ScheduledTasks from "../../../scheduledTasks/ScheduledTaskService.ts";
+import { threadPullRequestsOf } from "../../../sourceControl/threadPullRequests.ts";
 import * as T4Config from "../../../t4/T4Config.ts";
 import * as T4Decisions from "../../../t4/T4Decisions.ts";
 import * as T4Delivery from "../../../t4/T4Delivery.ts";
@@ -207,6 +208,10 @@ export const prOfHandoff = (body: string): number | undefined => {
 
 export const releaseNotice = T4Releases.releaseNotice;
 
+type NoticeState = "staging" | "shipped" | "failed" | "dropped";
+const isNoticeState = (state: T4Store.T4ReleaseState): state is NoticeState =>
+  state === "staging" || state === "shipped" || state === "failed" || state === "dropped";
+
 /** When each thread last read release_queue, for its rows' `changed` flag. */
 const lastReads = new Map<string, string>();
 
@@ -359,6 +364,35 @@ const handoffOnce = Effect.fn("t4.handoffOnce")(function* (input: HandoffInput) 
         .pipe(Effect.ignoreCause({ log: true })),
     ),
   );
+});
+
+/**
+ * A handoff to the release manager ends the sender's PR watches: the release manager rides the PR
+ * from here, and 405 unwatches a week came right before such a handoff (AI-125).
+ */
+const dropPrWatches = Effect.fn("t4.dropPrWatches")(function* (me: OrchestrationV2ThreadShell) {
+  const watched = threadPullRequestsOf(me).filter(
+    (link) => link.watch !== undefined && link.source !== "stack-dismissed",
+  );
+  if (watched.length === 0) return undefined;
+  const { threads } = yield* readCaller();
+  const crypto = yield* SecureRandom.SecureRandom;
+  for (const link of watched) {
+    yield* threads
+      .dispatch({
+        type: "thread.pull-request.watch",
+        commandId: CommandId.make(
+          `t4:handoff-unwatch:${yield* crypto.uuidV4().pipe(Effect.orDie)}`,
+        ),
+        threadId: me.id,
+        host: link.host,
+        repository: link.repository,
+        number: link.number,
+        watching: false,
+      })
+      .pipe(Effect.ignore);
+  }
+  return `stopped watching ${watched.map((link) => `#${link.number}`).join(", ")} - the release manager rides ${watched.length === 1 ? "it" : "them"} now; no need to unwatch`;
 });
 
 const handoff = Effect.fn("t4.handoff")(function* (input: HandoffInput) {
@@ -523,6 +557,8 @@ const handoff = Effect.fn("t4.handoff")(function* (input: HandoffInput) {
     notes.push(
       `no release manager for ${project.title} - started "${title}", pinned, and handed it this`,
     );
+    const unwatched = yield* dropPrWatches(me);
+    if (unwatched !== undefined) notes.push(unwatched);
     const rmShell = yield* threads.getThreadShell(rmId).pipe(Effect.mapError(unavailable));
     return {
       to:
@@ -602,6 +638,10 @@ const handoff = Effect.fn("t4.handoff")(function* (input: HandoffInput) {
     })
     .pipe(Effect.mapError((error) => invalid(error.message)));
   if (pureFyi) yield* FyiDigest.noteDelivered(me.id, target.id);
+  if (toReleaseManager) {
+    const unwatched = yield* dropPrWatches(me);
+    if (unwatched !== undefined) notes.push(unwatched);
+  }
   if (ask) {
     yield* store
       .recordHandoff({
@@ -981,6 +1021,7 @@ export const layer = McpToolAccess.toLayer(T4Toolkit, {
       }
 
       const updates = input.prs ?? [];
+      const written: Array<T4Store.T4ReleaseRow> = [];
       if (updates.length > 0) {
         if (!meIsRm) {
           return yield* invalid(
@@ -993,6 +1034,8 @@ export const layer = McpToolAccess.toLayer(T4Toolkit, {
             .pipe(Effect.mapError(ledgerUnavailable))).map((row) => [row.pr, row]),
         );
         const changed: Array<T4Store.T4ReleaseRow> = [];
+        // A dropped PR's waiters, read before the drop removes them.
+        const droppedWaiters = new Map<number, ReadonlyArray<T4Store.T4ReleaseWaiter>>();
         for (const update of updates) {
           if (!Number.isInteger(update.pr) || update.pr <= 0) {
             return yield* invalid(`'${update.pr}' is not a PR number`);
@@ -1001,6 +1044,24 @@ export const layer = McpToolAccess.toLayer(T4Toolkit, {
             return yield* invalid(
               `PR #${update.pr}: a failed release needs \`note\` - the failing job and a one-line cause`,
             );
+          }
+          if (update.state === "dropped") {
+            const key = { projectId: me.projectId, pr: update.pr };
+            const waiters = yield* store.releaseWaiters(key).pipe(Effect.orElseSucceed(() => []));
+            const removed = yield* store.dropRelease(key).pipe(Effect.mapError(ledgerUnavailable));
+            if (removed === undefined) {
+              notes.push(`PR #${update.pr} was not in the queue - nothing to drop`);
+              continue;
+            }
+            const dropped = {
+              ...removed,
+              state: "dropped" as const,
+              note: update.note?.trim() || removed.note,
+            };
+            droppedWaiters.set(update.pr, waiters);
+            written.push(dropped);
+            changed.push(dropped);
+            continue;
           }
           const owner =
             update.owner === undefined ? undefined : yield* resolveRef(update.owner, world);
@@ -1019,13 +1080,13 @@ export const layer = McpToolAccess.toLayer(T4Toolkit, {
               note: update.note?.trim() || undefined,
             })
             .pipe(Effect.mapError(ledgerUnavailable));
+          written.push(row);
           if (before.get(row.pr)?.state !== row.state) changed.push(row);
         }
         if (input.notify !== false) {
           const groups = new Map<string, Array<T4Store.T4ReleaseRow>>();
           for (const row of changed) {
-            if (row.state !== "staging" && row.state !== "shipped" && row.state !== "failed")
-              continue;
+            if (!isNoticeState(row.state)) continue;
             if (row.ownerThreadId === null) {
               notes.push(
                 `PR #${row.pr} has no owner recorded - pass \`owner\` so it hears \`${row.state}\``,
@@ -1037,7 +1098,7 @@ export const layer = McpToolAccess.toLayer(T4Toolkit, {
           }
           for (const rows of groups.values()) {
             const first = rows[0]!;
-            const state = first.state as "staging" | "shipped" | "failed";
+            const state = first.state as NoticeState;
             const target = world.byId.get(first.ownerThreadId!);
             const prs = rows.map((row) => row.pr);
             if (target === undefined || isRetired(target)) {
@@ -1069,7 +1130,10 @@ export const layer = McpToolAccess.toLayer(T4Toolkit, {
                 .settleHandoffs({ fromThreadId: target.id, toThreadId: me.id })
                 .pipe(Effect.mapError(ledgerUnavailable));
             }
-            const wakesNote = state === "shipped" ? yield* pendingWakesNote(target.id, now) : "";
+            const wakesNote =
+              state === "shipped" || state === "dropped"
+                ? yield* pendingWakesNote(target.id, now)
+                : "";
             const delivered = yield* delivery
               .deliver({
                 target,
@@ -1106,11 +1170,13 @@ export const layer = McpToolAccess.toLayer(T4Toolkit, {
               ),
             )?.title ?? "this project";
           for (const row of changed) {
-            if (row.state !== "staging" && row.state !== "shipped" && row.state !== "failed")
-              continue;
-            const waiters = yield* store
-              .releaseWaiters({ projectId: row.projectId, pr: row.pr })
-              .pipe(Effect.orElseSucceed(() => []));
+            if (!isNoticeState(row.state)) continue;
+            const waiters =
+              row.state === "dropped"
+                ? (droppedWaiters.get(row.pr) ?? [])
+                : yield* store
+                    .releaseWaiters({ projectId: row.projectId, pr: row.pr })
+                    .pipe(Effect.orElseSucceed(() => []));
             for (const waiter of waiters) {
               if (row.state === "shipped") {
                 yield* store.removeReleaseWaiter(waiter).pipe(Effect.ignore);
@@ -1121,7 +1187,7 @@ export const layer = McpToolAccess.toLayer(T4Toolkit, {
               const sent = yield* delivery
                 .deliver({
                   target,
-                  text: T4Releases.waiterNotice(row.state, row, projectTitle),
+                  text: T4Releases.waiterNotice(row.state as NoticeState, row, projectTitle),
                   senderThreadId: me.id,
                   patient: true,
                   notice: true,
@@ -1133,6 +1199,28 @@ export const layer = McpToolAccess.toLayer(T4Toolkit, {
             }
           }
         }
+      }
+
+      // A write answers with the rows it wrote and a count, not the queue again: the echoed queue
+      // was 94% of the tool's output, 10.3 MB a week (AI-125).
+      if (updates.length > 0) {
+        const open = (yield* store
+          .releaseQueue({ projectId: me.projectId })
+          .pipe(Effect.mapError(ledgerUnavailable))).filter((row) => row.state !== "shipped");
+        const counts = T4Store.RELEASE_STATES.flatMap((state) => {
+          const n = open.filter((row) => row.state === state).length;
+          return n === 0 ? [] : [`${n} ${state}`];
+        });
+        notes.push(
+          open.length === 0
+            ? "your queue is now empty"
+            : `your queue: ${open.length} open (${counts.join(", ")})`,
+        );
+        return {
+          entries: written.map((row) => T4Releases.compactEntry(row, world, now, undefined)),
+          notified,
+          notes,
+        };
       }
 
       // Reads: a release manager sees its whole queue; anyone else its own PRs and the ones it

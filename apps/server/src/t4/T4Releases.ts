@@ -115,7 +115,7 @@ export const compactEntry = (
 
 /** One release notice per owner and state (release_queue). */
 export const releaseNotice = (
-  state: "staging" | "shipped" | "failed",
+  state: "staging" | "shipped" | "failed" | "dropped",
   prs: ReadonlyArray<number>,
   note: string | null,
 ) => {
@@ -129,12 +129,14 @@ export const releaseNotice = (
       return `shipped: ${plural} ${list} live in production. Verify, close your Linear.${note ? ` ${note}` : ""}`;
     case "failed":
       return `release failed on your ${plural} ${list}: ${note ?? "see the release manager's thread"}`;
+    case "dropped":
+      return `dropped: ${plural} ${list} left the release queue and will not ship from it${note ? `: ${note.trim().replace(/[.\s]+$/, "")}.` : "."} Nothing more to do for ${prs.length === 1 ? "it" : "them"} there.`;
   }
 };
 
 /** What a thread waiting on someone else's PR hears (AI-93). */
 export const waiterNotice = (
-  state: "staging" | "shipped" | "failed",
+  state: "staging" | "shipped" | "failed" | "dropped",
   row: Pick<Row, "pr" | "title" | "note">,
   projectTitle: string,
 ) => {
@@ -146,6 +148,8 @@ export const waiterNotice = (
       return `release: ${what}, which you were waiting on, is live in production. You are no longer waiting on it.`;
     case "failed":
       return `release: ${what}, which you are waiting on, failed to release${row.note ? ` (${row.note})` : ""}. Its owner is fixing it; you hear again when it ships.`;
+    case "dropped":
+      return `release: ${what}, which you were waiting on, left the release queue and will not ship from it${row.note ? ` (${row.note})` : ""}. You are no longer waiting on it.`;
   }
 };
 

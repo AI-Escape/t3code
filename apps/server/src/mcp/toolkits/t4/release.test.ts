@@ -79,7 +79,26 @@ const OTHER = ThreadId.make("t4-owner-0002");
 const WAITER = ThreadId.make("t4-waiter-0001");
 const RM = ThreadId.make("t4-rm-0001");
 const shells = new Map([
-  [OWNER, { ...McpToolAccessTestkit.liveThreadShell(OWNER), title: "USA-9 Fix" }],
+  [
+    OWNER,
+    {
+      ...McpToolAccessTestkit.liveThreadShell(OWNER),
+      title: "USA-9 Fix",
+      pullRequests: [
+        {
+          host: "github.com",
+          repository: "acme/app",
+          number: 2340,
+          url: "https://github.com/acme/app/pull/2340",
+          source: "agent",
+          linkedAt: "2026-11-21T00:00:00.000Z",
+          snapshot: null,
+          stack: null,
+          watch: { startedAt: "2026-11-21T00:00:00.000Z" },
+        },
+      ],
+    } as never,
+  ],
   [OTHER, { ...McpToolAccessTestkit.liveThreadShell(OTHER), title: "USA-10 Other" }],
   [WAITER, { ...McpToolAccessTestkit.liveThreadShell(WAITER), title: "USA-455 Waits" }],
   [
@@ -118,6 +137,8 @@ const scopeOf = (threadId: ThreadId): McpInvocationContext.McpInvocationScope =>
 });
 
 const delivered: Array<{ to: string; text: string; notice: boolean; patient: boolean }> = [];
+const dispatched: Array<{ type: string; threadId?: string; number?: number; watching?: boolean }> =
+  [];
 
 const ledgerLayer = Layer.effect(
   T4Ledger.T4Ledger,
@@ -152,6 +173,11 @@ const layer = McpHttpServer.layerT4Toolkit.pipe(
       Layer.mock(ThreadManagement.ThreadManagementService)({
         getThreadShell: (id) => Effect.succeed(shells.get(id as ThreadId) ?? null),
         getProjectThreadRecords: () => Effect.fail("no records" as never),
+        dispatch: (command) =>
+          Effect.sync(() => {
+            dispatched.push(command as never);
+            return {} as never;
+          }),
       }),
       Layer.mock(T4Delivery.T4Delivery)({
         deliver: (input) =>
@@ -208,6 +234,13 @@ it.effect(
       });
       expect(handoff.isError).toBe(false);
       expect(handoff.body.notes).toContain("PR #2340 is in the release manager's queue");
+      // The release manager rides the PR now: the owner's watch ends with the handoff (AI-125).
+      expect(dispatched).toMatchObject([
+        { type: "thread.pull-request.watch", threadId: OWNER, number: 2340, watching: false },
+      ]);
+      expect(handoff.body.notes).toContain(
+        "stopped watching #2340 - the release manager rides it now; no need to unwatch",
+      );
 
       const queued = yield* call(RM, "release_queue", {});
       expect(queued.body.entries).toMatchObject([
@@ -295,11 +328,34 @@ it.effect(
       expect(delivered[2]!.text).toContain("shipped: PRs #2340, #2341 live in production");
       expect(delivered[3]!.text).toContain("You are no longer waiting on it");
       expect((yield* store.openHandoffs()).map((h) => h.fromThreadId)).toEqual([OTHER]);
-      expect(shipped.body.entries.map((e: { pr: number }) => e.pr)).toEqual([2399]);
       expect(yield* store.releaseWaiters({ threadId: WAITER })).toEqual([]);
+      // A write answers with the rows it wrote and a count, not the queue again (AI-125).
+      expect(shipped.body.entries.map((e: { pr: number }) => e.pr)).toEqual([2340, 2341]);
+      expect(shipped.body.notes).toContain("your queue: 1 open (1 queued)");
       const recent = yield* call(RM, "release_queue", { all: true });
       expect(recent.body.entries.map((e: { pr: number }) => e.pr)).toEqual([2340, 2341, 2399]);
       expect(recent.body.entries[0]).toMatchObject({ commit: "abc1234", state: "shipped" });
+
+      // A PR that will not ship from here is dropped: it leaves the queue, its owner's handoff is
+      // answered and its waiters hear it, instead of sitting held for days.
+      yield* call(WAITER, "release_queue", { waitFor: { pr: 2399 } });
+      const dropped = yield* call(RM, "release_queue", {
+        prs: [{ pr: 2399, state: "dropped", note: "Withdrawn at your request." }],
+      });
+      expect(dropped.body.entries).toMatchObject([{ pr: 2399, state: "dropped" }]);
+      expect(dropped.body.notes).toContain("your queue is now empty");
+      expect(delivered[4]).toMatchObject({ to: OTHER, notice: true });
+      expect(delivered[4]!.text).toContain(
+        "dropped: PR #2399 left the release queue and will not ship from it: Withdrawn at your request. Nothing more to do for it there.",
+      );
+      expect(delivered[5]).toMatchObject({ to: WAITER });
+      expect(delivered[5]!.text).toContain("You are no longer waiting on it");
+      expect(yield* store.openHandoffs()).toEqual([]);
+      expect(yield* store.releaseWaiters({ threadId: WAITER })).toEqual([]);
+      const after = yield* call(RM, "release_queue", { all: true });
+      expect(after.body.entries.map((e: { pr: number }) => e.pr)).toEqual([2340, 2341]);
+      const dropAgain = yield* call(RM, "release_queue", { prs: [{ pr: 2399, state: "dropped" }] });
+      expect(dropAgain.body.notes).toContain("PR #2399 was not in the queue - nothing to drop");
     }).pipe(Effect.provide(layer)),
 );
 
