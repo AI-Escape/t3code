@@ -412,6 +412,7 @@ export const layer = Layer.mergeAll(
         projectId: input.projectId,
         issues,
         anyway: input.force === true,
+        title: input.title,
         message: input.message,
       });
       if ("refused" in before) return json({ error: before.refused }, 409);

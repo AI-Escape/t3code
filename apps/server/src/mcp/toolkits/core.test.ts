@@ -1156,6 +1156,10 @@ it.effect("list_scheduled_tasks rows preview each prompt and read one task in fu
       webhook: { path: "/hooks/x", url: "https://t3.example/hooks/x", hasSecret: false },
     },
     scheduledTask("task-short", "auto"),
+    {
+      ...(scheduledTask("task-ran", "auto") as object),
+      schedule: { type: "once", runAt: "2026-10-02T00:00:00.000Z" },
+    },
   ] as never;
   return Effect.gen(function* () {
     const listed = yield* callAsClient("list_scheduled_tasks", {});
@@ -1177,6 +1181,16 @@ it.effect("list_scheduled_tasks rows preview each prompt and read one task in fu
       ],
       more: expect.stringContaining("`scheduledTaskId`"),
     });
+    // A one-shot that already ran is left out unless asked for (AI-125).
+    expect((listed.structuredContent as { more: string }).more).toContain(
+      "1 one-shot task that already ran left out - pass `finished` to include them.",
+    );
+    const withFinished = yield* callAsClient("list_scheduled_tasks", { finished: true });
+    expect(
+      (withFinished.structuredContent as { tasks: Array<{ scheduledTaskId: string }> }).tasks.map(
+        (task) => task.scheduledTaskId,
+      ),
+    ).toEqual(["task-long", "task-short", "task-ran"]);
 
     const full = yield* callAsClient("list_scheduled_tasks", { scheduledTaskId: "task-long" });
     expect(full.structuredContent).toEqual({

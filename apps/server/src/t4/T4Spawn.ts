@@ -20,6 +20,30 @@ const LIVE_WINDOW_MS = 3 * 3600_000;
 
 const normalizeIssue = (identifier: string) => identifier.trim().toUpperCase();
 
+const COMMON_WORDS = new Set(
+  "with from into that this when then than them they have make adds update thread work about after before more less only each does dont should still also fork".split(
+    " ",
+  ),
+);
+/** A title's distinctive words: issue ids and common words left out. */
+const titleKeywords = (title: string): ReadonlySet<string> =>
+  new Set(
+    (
+      title
+        .toLowerCase()
+        .replace(/\b[a-z]+-\d+\b/g, " ")
+        .match(/[a-z][a-z0-9]{3,}/g) ?? []
+    ).filter((word) => !COMMON_WORDS.has(word)),
+  );
+
+/** The words two titles share, when they share enough to look like the same work. */
+export const sharedKeywords = (left: string, right: string): ReadonlyArray<string> => {
+  const a = titleKeywords(left);
+  const b = titleKeywords(right);
+  const shared = [...a].filter((word) => b.has(word));
+  return shared.length >= 2 && shared.length * 2 >= Math.min(a.size, b.size) ? shared : [];
+};
+
 function spawnFooter(parent: Shell, parentIsReleaseManager: boolean): string {
   const ref = shortId(parent.id);
   return parentIsReleaseManager
@@ -54,6 +78,7 @@ export const beforeLaunch = Effect.fn("t4.beforeLaunch")(function* (input: {
   readonly projectId: ProjectId;
   readonly issues: ReadonlyArray<string>;
   readonly anyway: boolean;
+  readonly title: string;
   readonly message: string | undefined;
 }) {
   const ledger = yield* T4Ledger.T4Ledger;
@@ -61,16 +86,16 @@ export const beforeLaunch = Effect.fn("t4.beforeLaunch")(function* (input: {
   const now = yield* Clock.currentTimeMillis;
   const world = yield* ledger.world();
 
+  const live = world.threads.filter(
+    (thread) =>
+      thread.projectId === input.projectId &&
+      !isRetired(thread) &&
+      thread.id !== input.caller?.id &&
+      !ledger.isReleaseManager(world, thread) &&
+      thread.lineage.relationshipToParent !== "subagent" &&
+      (isRunning(thread) || now - lastActivityMs(thread) < LIVE_WINDOW_MS),
+  );
   if (input.caller !== undefined && !input.anyway && input.issues.length === 0) {
-    const live = world.threads.filter(
-      (thread) =>
-        thread.projectId === input.projectId &&
-        !isRetired(thread) &&
-        thread.id !== input.caller?.id &&
-        !ledger.isReleaseManager(world, thread) &&
-        thread.lineage.relationshipToParent !== "subagent" &&
-        (isRunning(thread) || now - lastActivityMs(thread) < LIVE_WINDOW_MS),
-    );
     if (live.length > 0) {
       const listing = live
         .slice(0, 10)
@@ -81,6 +106,27 @@ export const beforeLaunch = Effect.fn("t4.beforeLaunch")(function* (input: {
         .join("\n");
       return {
         refused: `these threads are live in this project - if one already owns this work, message it instead.\n${listing}\nRe-run with anyway when the work is genuinely separate.`,
+      } as const;
+    }
+  }
+
+  // Naming an issue skips the live-thread guard, so a thread on the same work under another issue
+  // still needs a word: the user relayed between such threads by hand (AI-125).
+  if (input.caller !== undefined && !input.anyway && input.issues.length > 0) {
+    const similar = live.flatMap((thread) => {
+      const shared = sharedKeywords(input.title, thread.title);
+      return shared.length === 0 ? [] : [{ thread, shared }];
+    });
+    if (similar.length > 0) {
+      const listing = similar
+        .slice(0, 5)
+        .map(
+          ({ thread, shared }) =>
+            `  ${shortId(thread.id)}  ${thread.title} (shares: ${shared.join(", ")})`,
+        )
+        .join("\n");
+      return {
+        refused: `these live threads look like the same work - if one already owns it, message it instead.\n${listing}\nRe-run with anyway when the work is genuinely separate.`,
       } as const;
     }
   }
