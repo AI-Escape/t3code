@@ -8,7 +8,7 @@ import { Navigate, useNavigate } from "@tanstack/react-router";
 import { useEffect, useState } from "react";
 
 import ChatView from "./ChatView";
-import { BackgroundThreadContext } from "./chat/backgroundThread";
+import { BackgroundThreadContext, HiddenThreadContext } from "./chat/backgroundThread";
 import { SidebarInset } from "./ui/sidebar";
 // t4 fork: keep the composer above a phone's keyboard.
 import { useKeyboardViewportFrame } from "../hooks/useKeyboardViewportFrame";
@@ -234,7 +234,9 @@ export function ThreadRouteView({
       ref={keyboardFrameRef}
       style={keyboardFrameStyle}
     >
-      <BackgroundThreadContext value={background}>{view}</BackgroundThreadContext>
+      <BackgroundThreadContext value={background}>
+        <HiddenThreadContext value={background}>{view}</HiddenThreadContext>
+      </BackgroundThreadContext>
       {background ? null : redirect}
     </SidebarInset>
   );

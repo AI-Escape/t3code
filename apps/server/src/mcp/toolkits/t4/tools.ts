@@ -8,8 +8,9 @@ import { OrchestratorMcpFailure, ProjectId, ThreadId } from "@t3tools/contracts"
 import * as SecureRandom from "effect/crypto/SecureRandom";
 import * as Schema from "effect/Schema";
 import * as SqlClient from "effect/sql/SqlClient";
-import { Tool, Toolkit } from "effect/ai";
+import { McpSchema, Tool, Toolkit } from "effect/ai";
 
+import * as McpInvocationContext from "../../McpInvocationContext.ts";
 import * as ThreadLaunch from "../../../orchestration-v2/ThreadLaunchService.ts";
 import * as ThreadManagementService from "../../../orchestration-v2/ThreadManagementService.ts";
 import * as Project from "../../../project/ProjectService.ts";
@@ -18,7 +19,6 @@ import * as T4Delivery from "../../../t4/T4Delivery.ts";
 import * as T4Ledger from "../../../t4/T4Ledger.ts";
 import * as T4RunWatch from "../../../t4/T4RunWatch.ts";
 import * as T4Store from "../../../t4/T4Store.ts";
-import * as McpInvocationContext from "../../McpInvocationContext.ts";
 
 const ThreadRef = Schema.String.annotate({
   description:
@@ -92,7 +92,10 @@ export const HandoffTool = Tool.make("t3_handoff", {
     youStillOweThem: Schema.Boolean,
     notes: Schema.Array(Schema.String),
   }),
-}).annotate(Tool.Destructive, false);
+})
+  .annotate(Tool.Destructive, false)
+  // t4 fork: acts as the calling thread, so outside clients never see it.
+  .annotate(McpSchema.EnabledWhen, McpInvocationContext.hiddenFromOutsideClients);
 
 const OwedEntry = Schema.Struct({
   id: Schema.String,
@@ -261,7 +264,10 @@ const WatchWorkflowRunTool = Tool.make("watch_workflow_run", {
     ),
     next: Schema.String,
   }),
-}).annotate(Tool.Destructive, false);
+})
+  .annotate(Tool.Destructive, false)
+  // t4 fork: acts as the calling thread, so outside clients never see it.
+  .annotate(McpSchema.EnabledWhen, McpInvocationContext.hiddenFromOutsideClients);
 
 const ReleaseState = Schema.Literals(T4Store.RELEASE_STATES);
 
@@ -345,7 +351,10 @@ const ReleaseQueueTool = Tool.make("release_queue", {
     notified: Schema.Array(Schema.String),
     notes: Schema.Array(Schema.String),
   }),
-}).annotate(Tool.Destructive, false);
+})
+  .annotate(Tool.Destructive, false)
+  // t4 fork: acts as the calling thread, so outside clients never see it.
+  .annotate(McpSchema.EnabledWhen, McpInvocationContext.hiddenFromOutsideClients);
 
 export const T4Toolkit = Toolkit.make(
   HandoffTool,
