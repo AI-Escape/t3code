@@ -58,9 +58,18 @@ export interface T4Wake {
 
 /**
  * A PR in a release manager's queue (AI-71). held: waiting on the user (a
- * production promotion they gate); failed: the owner owes a fix.
+ * production promotion they gate); failed: the owner owes a fix; dropped: it will not ship from
+ * here (withdrawn, cancelled, transferred) - written only to remove the row.
  */
-export const RELEASE_STATES = ["queued", "merged", "staging", "held", "shipped", "failed"] as const;
+export const RELEASE_STATES = [
+  "queued",
+  "merged",
+  "staging",
+  "held",
+  "shipped",
+  "failed",
+  "dropped",
+] as const;
 export type T4ReleaseState = (typeof RELEASE_STATES)[number];
 const isReleaseState = (state: unknown): state is T4ReleaseState =>
   RELEASE_STATES.includes(state as T4ReleaseState);
@@ -261,6 +270,11 @@ export interface T4StoreShape {
    * already has it in flight (then only a missing owner is filled in).
    */
   readonly queueRelease: (update: T4ReleaseUpdate) => Effect.Effect<T4ReleaseRow, StoreError>;
+  /** Removes a PR from the queue, and its waiters; the row it was, if any. */
+  readonly dropRelease: (key: {
+    readonly projectId: string;
+    readonly pr: number;
+  }) => Effect.Effect<T4ReleaseRow | undefined, StoreError>;
 
   /** Threads waiting on a PR they don't own (AI-93). */
   readonly addReleaseWaiter: (waiter: T4ReleaseWaiter) => Effect.Effect<boolean, StoreError>;
@@ -680,6 +694,22 @@ const make = Effect.gen(function* () {
   const updateRelease: T4StoreShape["updateRelease"] = (update) =>
     writeRelease(update, (existing, at) => applyReleaseUpdate(existing, update, at));
 
+  const dropRelease: T4StoreShape["dropRelease"] = (key) =>
+    sql
+      .withTransaction(
+        Effect.gen(function* () {
+          const rows = yield* sql<ReleaseDbRow>`
+            DELETE FROM t4_release_queue WHERE project_id = ${key.projectId} AND pr = ${key.pr}
+            RETURNING *
+          `;
+          yield* sql`
+            DELETE FROM t4_release_waiters WHERE project_id = ${key.projectId} AND pr = ${key.pr}
+          `;
+          return rows[0];
+        }),
+      )
+      .pipe(Effect.map((row) => (row === undefined ? undefined : releaseOf(row))));
+
   const queueRelease: T4StoreShape["queueRelease"] = (update) =>
     writeRelease(update, (existing, at) =>
       existing === undefined || existing.state === "shipped" || existing.state === "failed"
@@ -841,6 +871,7 @@ const make = Effect.gen(function* () {
     addStall,
     releaseQueue,
     updateRelease,
+    dropRelease,
     queueRelease,
     addReleaseWaiter,
     removeReleaseWaiter,
