@@ -24,6 +24,7 @@ import * as References from "effect/References";
 import { McpSchema, McpServer } from "effect/ai";
 
 import * as McpHttpServer from "../../apps/server/src/mcp/McpHttpServer.ts";
+import * as ScheduledTaskService from "../../apps/server/src/scheduledTasks/ScheduledTaskService.ts";
 import * as McpInvocationContext from "../../apps/server/src/mcp/McpInvocationContext.ts";
 import { liveThreadShell } from "../../apps/server/src/mcp/McpToolAccess.testkit.ts";
 import * as OrchestratorMcpService from "../../apps/server/src/mcp/OrchestratorMcpService.ts";
@@ -106,6 +107,8 @@ export const makeBackgroundWait = Effect.fn("evaluateMcpToolUse.makeBackgroundWa
       Layer.provide(Layer.mock(PeerLinkRequests.PeerLinkRequests)({})),
       Layer.provide(Layer.mock(PeerLinks.PeerLinks)({})),
       Layer.provide(Layer.mock(RemoteDelegation.RemoteDelegation)({})),
+      // t4 fork: the orchestrator handlers read scheduled tasks (wakes).
+      Layer.provide(Layer.mock(ScheduledTaskService.ScheduledTaskService)({})),
     ),
   );
   type Entry = Parameters<McpServer.McpServer["Service"]["addTool"]>[0];
