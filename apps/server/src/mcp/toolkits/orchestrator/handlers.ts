@@ -77,7 +77,9 @@ const handlers = {
         ...(input.taskIds ?? []),
         ...(input.taskId === undefined ? [] : [input.taskId]),
       ];
-      if (taskIds.length === 0) {
+      const waiting = input.waiting ?? true;
+      // t4 fork (AI-125): clearing needs no ids; 158 calls a week invented "placeholder" for one.
+      if (taskIds.length === 0 && waiting) {
         return yield* new OrchestratorMcpFailure({
           code: "invalid_request",
           message: "Pass `taskIds`, the background task ids to wait on.",
@@ -87,9 +89,17 @@ const handlers = {
         .awaitBackgroundTasks({
           threadId: caller.thread.threadId,
           taskIds,
-          awaited: input.waiting ?? true,
+          awaited: waiting,
         })
         .pipe(
+          Effect.map((result) =>
+            result.unmatched.length === 0
+              ? result
+              : {
+                  ...result,
+                  note: `${result.unmatched.join(", ")}: no such running task - already finished, so nothing to wait on.`,
+                },
+          ),
           Effect.mapError(
             (cause) =>
               new OrchestratorMcpFailure({

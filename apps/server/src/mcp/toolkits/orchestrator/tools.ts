@@ -140,7 +140,7 @@ const WorkflowStopTool = Tool.make("t3_workflow_stop", {
 
 const BackgroundWaitTool = Tool.make("t3_background_wait", {
   description:
-    "Keep this thread in Working while background work runs. Pass `taskIds` once started. Not for work left running (dev server, watcher). `waiting=false` clears. Does not stop the task. Claude only.",
+    "Keep this thread Working while other background work runs (checks, tests, Monitors need no call). Pass `taskIds`. Not for work left running. `waiting=false` clears; no ids: all. Claude only.",
   parameters: Schema.Struct({
     taskIds: Schema.optional(
       Schema.Array(TrimmedNonEmptyString).check(Schema.isMinLength(1), Schema.isMaxLength(20)),
@@ -152,6 +152,7 @@ const BackgroundWaitTool = Tool.make("t3_background_wait", {
   success: Schema.Struct({
     matched: Schema.Array(Schema.String),
     unmatched: Schema.Array(Schema.String),
+    note: Schema.optional(Schema.String),
   }),
   failure: OrchestratorMcpFailure,
   failureMode: "return",
