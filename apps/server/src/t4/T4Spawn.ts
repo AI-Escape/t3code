@@ -26,7 +26,7 @@ const COMMON_WORDS = new Set(
   ),
 );
 /** A title's distinctive words: issue ids and common words left out. */
-export const titleKeywords = (title: string): ReadonlySet<string> =>
+const titleKeywords = (title: string): ReadonlySet<string> =>
   new Set(
     (
       title
