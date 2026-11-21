@@ -178,7 +178,11 @@ import {
 } from "../../provider/Drivers/ClaudeSkills.ts";
 // t4 fork: questionsAsMessages, declineSafetyChecks.
 import { QUESTION_POSTED_NOTE, t4QuestionsAsMessages } from "../../t4/questionsAsMessages.ts";
-import { safetyCheckDeclinedNote, t4DeclineSafetyChecks } from "../../t4/declineSafetyChecks.ts";
+import {
+  safetyCheckDeclinedNote,
+  safetyCheckKind,
+  t4DeclineSafetyChecks,
+} from "../../t4/declineSafetyChecks.ts";
 // t4 fork: claudeAccounts.
 import {
   anotherClaudeAccountFree,
@@ -12774,7 +12778,11 @@ export const makeClaudeAdapterV2 = Effect.fn("makeClaudeAdapterV2")(function* (
             const reason = NodeUtil.stripVTControlCharacters(
               callbackOptions.decisionReason ?? "",
             ).trim();
-            yield* Effect.logInfo("t4.claude-safety-check-declined", { toolName, reason });
+            yield* Effect.logInfo("t4.claude-safety-check-declined", {
+              toolName,
+              reason,
+              kind: safetyCheckKind(reason, typeof command === "string" ? command : undefined),
+            });
             return {
               behavior: "deny",
               message: safetyCheckDeclinedNote(
