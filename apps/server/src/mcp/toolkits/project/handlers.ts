@@ -356,15 +356,17 @@ export const layer = McpToolAccess.toLayer(ProjectToolkit, {
             : requestedStrategy;
         // Reject unresolved base refs and blocked branch names before accepting a launch; worktree provisioning happens later.
         // t4 fork: an explicit branch that already exists gets a `-<4 hex>` suffix, as t4's
-        // dashboard launches do (t4/T4Http.ts); upstream refuses it (#31279).
+        // dashboard launches do (t4/T4Http.ts); upstream refuses it.
         const checkWorktreeBase = (workspaceStrategy: NonNullable<typeof strategy>) =>
           ThreadLaunch.ThreadLaunchService.pipe(
-            Effect.flatMap((launches) => launches.checkWorktreeBase({ projectId, workspaceStrategy })),
+            Effect.flatMap((launches) =>
+              launches.checkWorktreeBase({ projectId, workspaceStrategy }),
+            ),
           );
         if (!replaying && strategy?.type === "worktree" && strategy.branch !== undefined) {
           const exists = yield* checkWorktreeBase(strategy).pipe(
             Effect.as(false),
-            Effect.catchTag("ThreadLaunchBranchExistsError", () => Effect.succeed(true)),
+            Effect.catchTags({ ThreadLaunchBranchExistsError: () => Effect.succeed(true) }),
             Effect.orElseSucceed(() => false),
           );
           if (exists) {

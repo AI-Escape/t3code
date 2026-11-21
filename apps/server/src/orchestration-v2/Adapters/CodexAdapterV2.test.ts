@@ -3800,10 +3800,7 @@ describe("CodexAdapterV2 post-settle continuation", () => {
         cyberAccess: { defaultProgram: "daybreakBlue" },
       });
       // t4 fork: the first orchestration section is the handoff ledger.
-      assert.include(
-        params.additionalContext?.t3_code_orchestration_01?.value ?? "",
-        "t3_handoff",
-      );
+      assert.include(params.additionalContext?.t3_code_orchestration_01?.value ?? "", "t3_handoff");
       const entries = codexReplayPreamble({ nativeThreadId, nativeTurnId, prompt: "work" });
       const transcript = makeCodexReplayTranscript({
         scenario: "restore-context",

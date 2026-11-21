@@ -1,3 +1,4 @@
+import { useGT } from "gt-react";
 import { CheckIcon, CopyIcon } from "lucide-react";
 
 import { useCopyToClipboard } from "../../hooks/useCopyToClipboard";
@@ -8,6 +9,7 @@ import { reportMarkdownActionFailure } from "./markdownActionFailure";
  * an id, a command), drawn as the text with a Copy button right beside it.
  * The button copies the block exactly, without its closing newline. */
 export function MarkdownCopyBlock({ code }: { code: string }) {
+  const gt = useGT();
   const value = code.replace(/\n$/, "");
   const { copyToClipboard, isCopied } = useCopyToClipboard({
     timeout: 1500,
@@ -30,11 +32,11 @@ export function MarkdownCopyBlock({ code }: { code: string }) {
         size="sm"
         className="shrink-0 self-center select-none"
         data-thread-find-ignore=""
-        aria-label={isCopied ? "Copied" : "Copy"}
+        aria-label={isCopied ? gt("Copied") : gt("Copy")}
         onClick={() => copyToClipboard(value)}
       >
         {isCopied ? <CheckIcon /> : <CopyIcon />}
-        {isCopied ? "Copied" : "Copy"}
+        {isCopied ? gt("Copied") : gt("Copy")}
       </Button>
     </div>
   );

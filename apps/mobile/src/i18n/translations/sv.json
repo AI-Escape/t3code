@@ -3483,6 +3483,7 @@
   "dc673e51738ee402": "En tråd, ny session",
   "d1800696738e0855": "Vid webhook",
   "cc68653937406aaa": "En gång, {date} kl. {time}",
+  "cadde1c1929b7f2e": "Cron {expression}",
   "e0226f73554fcc85": "Varje dag",
   "e1222cad4667e338": "{days} kl. {time}",
   "74b25bf2e8d10313": "{days} kl. {time} {zone}",

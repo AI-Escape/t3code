@@ -92,7 +92,8 @@ export const HandoffTool = Tool.make("t3_handoff", {
     youStillOweThem: Schema.Boolean,
     notes: Schema.Array(Schema.String),
   }),
-}).annotate(Tool.Destructive, false)
+})
+  .annotate(Tool.Destructive, false)
   // t4 fork: acts as the calling thread, so outside clients never see it.
   .annotate(McpSchema.EnabledWhen, McpInvocationContext.hiddenFromOutsideClients);
 
@@ -263,7 +264,8 @@ const WatchWorkflowRunTool = Tool.make("watch_workflow_run", {
     ),
     next: Schema.String,
   }),
-}).annotate(Tool.Destructive, false)
+})
+  .annotate(Tool.Destructive, false)
   // t4 fork: acts as the calling thread, so outside clients never see it.
   .annotate(McpSchema.EnabledWhen, McpInvocationContext.hiddenFromOutsideClients);
 
@@ -349,7 +351,8 @@ const ReleaseQueueTool = Tool.make("release_queue", {
     notified: Schema.Array(Schema.String),
     notes: Schema.Array(Schema.String),
   }),
-}).annotate(Tool.Destructive, false)
+})
+  .annotate(Tool.Destructive, false)
   // t4 fork: acts as the calling thread, so outside clients never see it.
   .annotate(McpSchema.EnabledWhen, McpInvocationContext.hiddenFromOutsideClients);
 

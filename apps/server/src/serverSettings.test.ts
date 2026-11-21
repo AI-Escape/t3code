@@ -2410,13 +2410,15 @@ it.layer(Layer.mergeAll(NodeServices.layer, NodeCrypto.layer))("server settings"
   it.effect.each([
     { label: "malformed JSON", broken: '{"defaultAutoPull": tru' },
     { label: "invalid retention", broken: '{"usageHistoryRetentionDays": 0}' },
-  ])("leaves settings.json with $label untouched and disables destructive defaults", ({ label, broken }) =>
-    Effect.gen(function* () {
-      const serverConfig = yield* ServerConfig.ServerConfig;
-      const fileSystem = yield* FileSystem.FileSystem;
-      const sql = yield* SqlClient.SqlClient;
-      const serverSettings = yield* ServerSettingsModule.ServerSettingsService;
-      yield* sql`
+  ])(
+    "leaves settings.json with $label untouched and disables destructive defaults",
+    ({ label, broken }) =>
+      Effect.gen(function* () {
+        const serverConfig = yield* ServerConfig.ServerConfig;
+        const fileSystem = yield* FileSystem.FileSystem;
+        const sql = yield* SqlClient.SqlClient;
+        const serverSettings = yield* ServerSettingsModule.ServerSettingsService;
+        yield* sql`
         INSERT INTO projection_projects (
           project_id, title, workspace_root, auto_pull, scripts_json, created_at, updated_at
         )
@@ -2425,17 +2427,17 @@ it.layer(Layer.mergeAll(NodeServices.layer, NodeCrypto.layer))("server settings"
           ${"2026-08-25T00:00:00.000Z"}, ${"2026-08-25T00:00:00.000Z"}
         )
       `;
-      yield* fileSystem.writeFileString(serverConfig.settingsPath, broken);
+        yield* fileSystem.writeFileString(serverConfig.settingsPath, broken);
 
-      const settings = yield* serverSettings.getSettings;
-      assert.isFalse(settings.projectSettingsFolded);
-      // t4 fork: a readable file without an opt-out still continues threads (continuesAfterServerUpdate).
-      assert.equal(settings.continueThreadsAfterServerUpdate, label !== "malformed JSON");
-      assert.equal(settings.usageHistoryRetentionDays, "unlimited");
-      assert.deepEqual(settings.projectSettingsOverrides, {});
+        const settings = yield* serverSettings.getSettings;
+        assert.isFalse(settings.projectSettingsFolded);
+        // t4 fork: a readable file without an opt-out still continues threads (continuesAfterServerUpdate).
+        assert.equal(settings.continueThreadsAfterServerUpdate, label !== "malformed JSON");
+        assert.equal(settings.usageHistoryRetentionDays, "unlimited");
+        assert.deepEqual(settings.projectSettingsOverrides, {});
 
-      assert.equal(yield* fileSystem.readFileString(serverConfig.settingsPath), broken);
-    }).pipe(Effect.provide(layerServerSettings())),
+        assert.equal(yield* fileSystem.readFileString(serverConfig.settingsPath), broken);
+      }).pipe(Effect.provide(layerServerSettings())),
   );
 });
 

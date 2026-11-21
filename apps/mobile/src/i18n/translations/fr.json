@@ -3477,6 +3477,7 @@
   "dc673e51738ee402": "Un seul fil, nouvelle session",
   "d1800696738e0855": "Sur webhook",
   "cc68653937406aaa": "Une fois, le {date} à {time}",
+  "cadde1c1929b7f2e": "Cron {expression}",
   "e0226f73554fcc85": "Tous les jours",
   "e1222cad4667e338": "{days} à {time}",
   "74b25bf2e8d10313": "{days} à {time} {zone}",

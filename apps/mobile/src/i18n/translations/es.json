@@ -3477,6 +3477,7 @@
   "dc673e51738ee402": "Un solo hilo, sesión nueva",
   "d1800696738e0855": "Al recibir un webhook",
   "cc68653937406aaa": "Una vez, el {date} a las {time}",
+  "cadde1c1929b7f2e": "Cron {expression}",
   "e0226f73554fcc85": "Todos los días",
   "e1222cad4667e338": "{days} a las {time}",
   "74b25bf2e8d10313": "{days} a las {time} {zone}",

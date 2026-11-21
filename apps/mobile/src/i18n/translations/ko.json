@@ -3478,6 +3478,7 @@
   "dc673e51738ee402": "스레드 하나, 새 세션",
   "d1800696738e0855": "웹후크 수신 시",
   "cc68653937406aaa": "한 번, {date} {time}",
+  "cadde1c1929b7f2e": "Cron {expression}",
   "e0226f73554fcc85": "매일",
   "e1222cad4667e338": "{days} {time}",
   "74b25bf2e8d10313": "{days} {time} {zone}",

@@ -8,7 +8,6 @@ import {
   ProjectId,
   ProviderDriverKind,
   ProviderInstanceId,
-  RunAttemptId,
   RunId,
   ScheduledTaskId,
   SECRET_REQUEST_UNSAVED_NOTE,

@@ -702,11 +702,9 @@ export const layer = Layer.mergeAll(
                 Effect.orElseSucceed(() => []),
               );
       const said = messages.filter((m) => m.role !== "system" && m.text.trim().length > 0);
-      // AI-116: the brief - what the agent wrote for this question - is kept
-      // apart, so messages that reach the thread afterwards (other threads'
-      // handoffs and the agent's replies) never push it out of the window.
-      // Claude asks first and writes the brief right after (message-mode
-      // questions); Codex writes it before asking.
+      // The brief (what the agent wrote for this question) is kept apart, so later messages
+      // never push it out of the window. Claude writes it right after asking (message-mode
+      // questions); Codex writes it before.
       const askedAt = DateTime.toEpochMillis(open.createdAt);
       const ownRun = said.filter((m) => m.role === "assistant" && m.runId === item.runId);
       const brief =

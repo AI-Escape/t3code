@@ -952,15 +952,12 @@ const make = Effect.fn("makeWithDatabase")(function* (
   const readers =
     options.readerWorker && isFileDatabase
       ? yield* Effect.forEach(Array.from({ length: READER_POOL_SIZE }), () =>
-          Effect.map(
-            makeReader(options.filename, readerPool),
-            (acquire) => ({
-              acquire,
-              // t4 fork: each reader is first come, first served too.
-              lock: makeFairLock(),
-              claimed: false,
-            }),
-          ),
+          Effect.map(makeReader(options.filename, readerPool), (acquire) => ({
+            acquire,
+            // t4 fork: each reader is first come, first served too.
+            lock: makeFairLock(),
+            claimed: false,
+          })),
         )
       : [];
   // One permit per slot, so a queued read waits for any reader, not one it picked while all were busy.

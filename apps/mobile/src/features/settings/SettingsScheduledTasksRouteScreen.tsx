@@ -140,7 +140,9 @@ function describeSchedule(
   if (task.schedule.type === "interval")
     return formatScheduledTaskInterval(task.schedule.everyMs, resolve);
   // t4 fork: cron schedules (created by agents as wakes).
-  if (task.schedule.type === "cron") return `Cron ${task.schedule.expression}`;
+  if (task.schedule.type === "cron") {
+    return resolve(msg("Cron {expression}", { expression: task.schedule.expression }));
+  }
   const days = task.schedule.weekdays?.length
     ? repeatLabel(task.schedule.weekdays, resolve, locale)
     : resolve(msg("Every day"));

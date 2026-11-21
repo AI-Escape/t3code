@@ -1036,22 +1036,20 @@ export const make = Effect.gen(function* () {
         if (Option.isSome(previous) && previous.value.request.type === "provider-runtime.continue")
           processLossCount += previous.value.request.processLossCount ?? 0;
       }
-      const effects: Array<EffectOutbox.PendingOrchestrationEffectV2> = [
-        ...(continuationRun
-          ? [
-              {
-                id: `effect:restart-continuation:${continuationRun.id}`,
-                commandId,
-                threadId: projection.thread.id,
-                request: {
-                  type: "provider-runtime.continue" as const,
-                  sourceRunId: continuationRun.id,
-                  processLossCount,
-                },
+      const effects: Array<EffectOutbox.PendingOrchestrationEffectV2> = continuationRun
+        ? [
+            {
+              id: `effect:restart-continuation:${continuationRun.id}`,
+              commandId,
+              threadId: projection.thread.id,
+              request: {
+                type: "provider-runtime.continue",
+                sourceRunId: continuationRun.id,
+                processLossCount,
               },
-            ]
-          : []),
-      ];
+            },
+          ]
+        : [];
       const stoppedSessions = projection.providerSessions.filter(
         (candidate) => candidate.status !== "stopped" && candidate.status !== "error",
       ).length;

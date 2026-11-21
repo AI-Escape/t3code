@@ -3479,6 +3479,7 @@
   "dc673e51738ee402": "同一会话，全新上下文",
   "d1800696738e0855": "收到 webhook 时",
   "cc68653937406aaa": "一次，{date} {time}",
+  "cadde1c1929b7f2e": "Cron {expression}",
   "e0226f73554fcc85": "每天",
   "e1222cad4667e338": "{days} 的 {time}",
   "74b25bf2e8d10313": "{days} 的 {time} {zone}",

@@ -3482,6 +3482,7 @@
   "dc673e51738ee402": "Ein Thread, neue Sitzung",
   "d1800696738e0855": "Per Webhook",
   "cc68653937406aaa": "Einmal, {date} um {time}",
+  "cadde1c1929b7f2e": "Cron {expression}",
   "e0226f73554fcc85": "Jeden Tag",
   "e1222cad4667e338": "{days} um {time}",
   "74b25bf2e8d10313": "{days} um {time} {zone}",

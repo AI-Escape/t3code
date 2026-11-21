@@ -3474,6 +3474,7 @@
   "dc673e51738ee402": "1 つのスレッド、新しいセッション",
   "d1800696738e0855": "Webhook 受信時",
   "cc68653937406aaa": "1 回、{date} {time}",
+  "cadde1c1929b7f2e": "Cron {expression}",
   "e0226f73554fcc85": "毎日",
   "e1222cad4667e338": "{days} の {time}",
   "74b25bf2e8d10313": "{days} の {time} {zone}",

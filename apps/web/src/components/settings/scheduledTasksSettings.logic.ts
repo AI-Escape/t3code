@@ -60,7 +60,9 @@ export function scheduleLabel(
     return resolve(msg("Once, {time}", { time: ONCE_FORMATTER.format(new Date(schedule.runAt)) }));
   }
   // t4 fork: cron schedules (created by agents as wakes).
-  if (schedule.type === "cron") return `Cron ${schedule.expression}`;
+  if (schedule.type === "cron") {
+    return resolve(msg("Cron {expression}", { expression: schedule.expression }));
+  }
   if (schedule.type === "interval") {
     const minutes = schedule.everyMs / 60_000;
     return Number.isInteger(minutes)

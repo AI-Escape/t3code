@@ -145,8 +145,6 @@ import * as T4ModelPolicy from "../t4/T4ModelPolicy.ts";
 // Return recoverable handles before common MCP client timeouts expire.
 const DEFAULT_WAIT_TIMEOUT_MS = 30_000;
 const MAX_WAIT_TIMEOUT_MS = 45_000;
-const DEFAULT_SECRET_REQUEST_TIMEOUT_MS = 10 * 60 * 1_000;
-const MAX_SECRET_REQUEST_TIMEOUT_MS = 60 * 60 * 1_000;
 const TASK_WAKE_EVENTS = [
   { thread: "parent", eventType: "subagent.updated" },
   { thread: "child", eventType: "run.updated" },
