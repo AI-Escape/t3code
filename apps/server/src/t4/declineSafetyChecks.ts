@@ -19,7 +19,13 @@ const LITERAL =
   "literal absolute paths - no `cd` before it in the same command, no relative glob, no glob " +
   "across directories, no variable, `~` or command substitution in a path";
 
-export type SafetyCheckKind = "workspace" | "critical" | "unresolved" | "copy-move" | "rm" | "unparsed";
+export type SafetyCheckKind =
+  | "workspace"
+  | "critical"
+  | "unresolved"
+  | "copy-move"
+  | "rm"
+  | "unparsed";
 
 /** Which kind of check stopped the command (logged, so declines can be counted by kind). */
 export const safetyCheckKind = (reason: string | undefined, command?: string): SafetyCheckKind => {
@@ -28,7 +34,8 @@ export const safetyCheckKind = (reason: string | undefined, command?: string): S
   if (/critical|top-level|system director/.test(r)) return "critical";
   if (/variable|expansion|statically|unresolv/.test(r)) return "unresolved";
   if (/dangerous (cp|mv) /.test(r)) return "copy-move";
-  if (command !== undefined && COPY_MOVE.test(command) && !RM_COMMAND.test(command)) return "copy-move";
+  if (command !== undefined && COPY_MOVE.test(command) && !RM_COMMAND.test(command))
+    return "copy-move";
   if (command === undefined || RM_COMMAND.test(command)) return "rm";
   return "unparsed";
 };
@@ -49,7 +56,8 @@ const ADVICE: Record<SafetyCheckKind, (reason: string) => string> = {
       `${LITERAL}; never a destination of \`/\`, your home or a top-level folder.`
     );
   },
-  rm: () => `Do it in a form the check can verify: for a removal, one rm per target with its ${LITERAL}.`,
+  rm: () =>
+    `Do it in a form the check can verify: for a removal, one rm per target with its ${LITERAL}.`,
   unparsed: () =>
     "The check could not read this command the way the shell will, and it has no removal in " +
     "it: resend it in plain syntax. Don't run a script inline through a heredoc or `-c`: save " +
