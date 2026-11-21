@@ -60,7 +60,9 @@ function cutBeforePrompt(
   run: OrchestrationV2Run,
   providerTurns: ReadonlyArray<Pick<OrchestrationV2ProviderTurn, "runAttemptId">>,
 ): boolean {
-  return cancelledBeforeStart(run) || (run.status === "cancelled" && unstartedRun(run, providerTurns));
+  return (
+    cancelledBeforeStart(run) || (run.status === "cancelled" && unstartedRun(run, providerTurns))
+  );
 }
 
 /** t4 fork: a run that sends again the message of a run a restart cut before its provider took it. */

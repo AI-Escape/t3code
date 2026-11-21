@@ -1322,7 +1322,13 @@ it.effect("still continues a cut run when a re-sent started-but-untaken message 
       ...cut,
       runs: [
         ...cut.runs,
-        { ...cut.runs[0]!, id: wakeRunId, ordinal: 2, startedAt: now, activeAttemptId: wakeAttemptId },
+        {
+          ...cut.runs[0]!,
+          id: wakeRunId,
+          ordinal: 2,
+          startedAt: now,
+          activeAttemptId: wakeAttemptId,
+        },
         {
           ...cut.runs[0]!,
           id: RunId.make("run:resent-wake"),

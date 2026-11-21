@@ -149,16 +149,34 @@ export const waiterNotice = (
   }
 };
 
-const STALE_MS = 2 * 60 * 60_000;
+/**
+ * How long a state may sit before its owner hears about it. Only queued (handed off, not merged)
+ * and staging (unverified) can need the owner; merged and held are the release manager's wait,
+ * and 94 of 122 such notes in a week woke owners to say "nothing to do" (AI-125).
+ */
+const STALE_AFTER_MS: Partial<Record<Row["state"], number>> = {
+  queued: 2 * 60 * 60_000,
+  staging: 4 * 60 * 60_000,
+};
 const pingedKey = (row: Row) => `release-ping:${row.projectId}:${row.pr}`;
+/** Once per state reached: a note-only edit doesn't send it again (AI-98). */
+const pingedValue = (row: Row) => `${row.state}@${stateSinceOf(row)}`;
 
-/** The note an owner gets when its PR has sat in one state for over 2 hours. */
-const staleNotice = (row: Row, nowMs: number) =>
-  `release: your PR #${row.pr} is still ${row.state} (for ${ago(Date.parse(stateSinceOf(row)), nowMs)})${row.note ? `: ${row.note}` : ""}. Nothing to do for it - the release manager sends \`shipped:\` when it is live; don't schedule a wake or read \`release_queue\` to check.`;
+/** The note an owner gets when its PR has sat too long in a state that may need it. */
+export const staleNotice = (row: Row, nowMs: number): string | undefined => {
+  const after = STALE_AFTER_MS[row.state];
+  const since = Date.parse(stateSinceOf(row));
+  if (after === undefined || nowMs - since < after) return undefined;
+  const note = row.note ? `: ${row.note.trim().replace(/[.\s]+$/, "")}` : "";
+  const noPoll = "don't schedule a wake or read `release_queue` to check.";
+  return row.state === "queued"
+    ? `release: your PR #${row.pr} has been queued for ${ago(since, nowMs)}, not merged yet${note}. If it waits on you (red checks, a conflict), fix that and tell the release manager with \`t3_handoff\`; otherwise nothing to do - ${noPoll}`
+    : `release: your PR #${row.pr} has been on staging for ${ago(since, nowMs)}${note}. Verify it there if you haven't; \`shipped:\` comes when it is live - ${noPoll}`;
+};
 
 /**
- * Owners whose PR row has not changed for 2 hours hear where it is, once per change, so they
- * stop setting wakes to check for `shipped:` (783 of 840 owner wakes in 98 h, AI-93).
+ * Owners whose PR has sat queued or on staging too long hear where it is, once per state, so
+ * they stop setting wakes to check for `shipped:` (783 of 840 owner wakes in 98 h, AI-93).
  */
 export const sweepStale = Effect.gen(function* () {
   const store = yield* T4Store.T4Store;
@@ -167,11 +185,12 @@ export const sweepStale = Effect.gen(function* () {
   const now = yield* Clock.currentTimeMillis;
   const rows = yield* store.releaseQueue();
   for (const row of rows) {
-    if (row.state === "shipped" || row.state === "failed" || row.ownerThreadId === null) continue;
-    if (now - Date.parse(row.updatedAt) < STALE_MS) continue;
+    if (row.ownerThreadId === null) continue;
+    const text = staleNotice(row, now);
+    if (text === undefined) continue;
     const pinged = yield* store.meta(pingedKey(row)).pipe(Effect.orElseSucceed(() => undefined));
-    if (pinged === row.updatedAt) continue;
-    yield* store.setMeta(pingedKey(row), row.updatedAt);
+    if (pinged === pingedValue(row)) continue;
+    yield* store.setMeta(pingedKey(row), pingedValue(row));
     const owner = yield* threads
       .getThreadShell(ThreadId.make(row.ownerThreadId))
       .pipe(Effect.orElseSucceed(() => null));
@@ -179,7 +198,7 @@ export const sweepStale = Effect.gen(function* () {
     yield* delivery
       .deliver({
         target: owner,
-        text: staleNotice(row, now),
+        text,
         force: true,
         patient: true,
         notice: true,

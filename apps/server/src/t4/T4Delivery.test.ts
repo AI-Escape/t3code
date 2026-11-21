@@ -19,18 +19,18 @@ import {
 
 describe("deliveryNotes", () => {
   it("tells a settled thread the message reopened it", () => {
-    assert.deepEqual(deliveryNotes({ settled: true, questions: [], claudeRunning: false }), [
+    assert.deepEqual(deliveryNotes({ settled: true, questions: [], cutsApproval: false }), [
       REOPENED_SETTLED_NOTE,
     ]);
   });
 
   it("adds nothing for an open, idle thread with no question", () => {
-    assert.deepEqual(deliveryNotes({ settled: false, questions: [], claudeRunning: false }), []);
+    assert.deepEqual(deliveryNotes({ settled: false, questions: [], cutsApproval: false }), []);
   });
 
   it("orders the reopened note before the question and cancelled-tool notes", () => {
     assert.deepEqual(
-      deliveryNotes({ settled: true, questions: ["Ship it?"], claudeRunning: true }),
+      deliveryNotes({ settled: true, questions: ["Ship it?"], cutsApproval: true }),
       [REOPENED_SETTLED_NOTE, UNANSWERED_QUESTION_NOTE(["Ship it?"]), CANCELLED_TOOL_NOTE],
     );
   });
@@ -42,12 +42,19 @@ const running = {
   providerInstanceId: CLAUDE,
   modelSelection: { instanceId: CLAUDE, model: "claude-opus-5-5" },
 };
+// Held on a command approval, which a steer cancels.
+const approving = {
+  ...running,
+  id: ThreadId.make("t4-approving"),
+  pendingRuntimeRequest: { id: "req-approval", kind: "command", createdAt: running.createdAt },
+} as never;
 const sent: Array<{ mode: string; text: string }> = [];
 const deliveryLayer = T4Delivery.layer.pipe(
   Layer.provide(
     Layer.mergeAll(
       Layer.mock(ThreadManagement.ThreadManagementService)({
-        getThreadShell: () => Effect.succeed(running),
+        getThreadShell: (threadId) =>
+          Effect.succeed(threadId === ThreadId.make("t4-approving") ? approving : running),
         sendToThread: (input) =>
           Effect.sync(() => {
             sent.push({ mode: input.mode, text: input.text });
@@ -79,12 +86,15 @@ describe("deliver", () => {
         patient: true,
         interrupt: true,
       });
+      yield* delivery.deliver({ target: approving, text: "done" });
       assert.deepEqual(
         sent.map((entry) => entry.mode),
-        ["queue", "auto", "restart"],
+        ["queue", "auto", "restart", "auto"],
       );
+      // Claude holds a steer until its command returns: only a pending approval is cut (AI-125).
       assert.notInclude(sent[0]!.text, CANCELLED_TOOL_NOTE);
-      assert.include(sent[1]!.text, CANCELLED_TOOL_NOTE);
+      assert.notInclude(sent[1]!.text, CANCELLED_TOOL_NOTE);
+      assert.include(sent[3]!.text, CANCELLED_TOOL_NOTE);
       assert.include(patient.how, "waits until that turn ends");
       assert.equal(urgent.delivery, "steered");
       assert.equal(restart.delivery, "steered");
