@@ -32,6 +32,7 @@ import * as HttpApiBuilder from "effect/http-api/HttpApiBuilder";
 import { OtlpTracer, OtlpSerialization } from "effect/observability";
 
 import * as ServerConfig from "./config.ts";
+import { T4_SPA_FRAME_HEADERS } from "./t4/frameAncestors.ts";
 import { ASSET_ROUTE_PREFIX, readMcpAppHtml, resolveAsset } from "./assets/AssetAccess.ts";
 import { sourceControlMediaResponse } from "./assets/sourceControlMediaResponse.ts";
 import { statMediaFile, streamMediaFile, type OpenMediaFile } from "./assets/MediaFile.ts";
@@ -621,10 +622,8 @@ const streamStaticFile = (file: FileSystem.File, size: bigint) =>
   );
 
 // The app can approve agents and start threads in one click, so no other site may frame it.
-const SPA_FRAME_HEADERS = {
-  "Content-Security-Policy": "frame-ancestors 'none'",
-  "X-Frame-Options": "DENY",
-};
+// t4: except the origins in T4_FRAME_ANCESTORS - the t4 dashboard frames T3 on a phone (AI-131).
+const SPA_FRAME_HEADERS = T4_SPA_FRAME_HEADERS;
 
 const handleStaticAndDevRequest = Effect.fn("handleStaticAndDevRequest")(
   function* (immutableBuildAssets: ReadonlySet<string>) {
