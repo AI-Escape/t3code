@@ -10,6 +10,7 @@ import * as Layer from "effect/Layer";
 import * as Option from "effect/Option";
 import * as Path from "effect/Path";
 import * as PlatformError from "effect/PlatformError";
+import * as Predicate from "effect/Predicate";
 import * as Schema from "effect/Schema";
 
 import * as WorkspacePaths from "../workspace/WorkspacePaths.ts";
@@ -130,6 +131,12 @@ function extractIconHref(source: string): string | null {
   return null;
 }
 
+// t4 fork: a file where the path needs a folder (an empty `.idea` file) means the path is absent too.
+const isNotDirectory = (error: PlatformError.PlatformError) =>
+  error.reason._tag === "BadResource" &&
+  Predicate.hasProperty(error.reason.cause, "code") &&
+  error.reason.cause.code === "ENOTDIR";
+
 export const optionOnNotFound = <A, R>(
   effect: Effect.Effect<A, PlatformError.PlatformError, R>,
 ): Effect.Effect<Option.Option<A>, PlatformError.PlatformError, R> =>
@@ -137,7 +144,9 @@ export const optionOnNotFound = <A, R>(
     Effect.asSome,
     Effect.catchTags({
       PlatformError: (error) =>
-        error.reason._tag === "NotFound" ? Effect.succeed(Option.none<A>()) : Effect.fail(error),
+        error.reason._tag === "NotFound" || isNotDirectory(error)
+          ? Effect.succeed(Option.none<A>())
+          : Effect.fail(error),
     }),
   );
 
