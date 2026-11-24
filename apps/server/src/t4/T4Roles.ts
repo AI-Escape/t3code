@@ -533,7 +533,7 @@ export const setReleaseManagerCompaction = Effect.fn("t4.T4Roles.setRmCompaction
 // ---------------------------------------------------------------- compaction
 
 /** Rebuilds the per-thread compaction table from the roles and release managers. */
-export const syncCompaction = Effect.gen(function* () {
+const syncCompaction = Effect.gen(function* () {
   const store = yield* T4Store.T4Store;
   const rms = yield* store.releaseManagers();
   const rows = yield* store.roles();

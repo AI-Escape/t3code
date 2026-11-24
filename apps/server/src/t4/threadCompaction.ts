@@ -7,7 +7,7 @@
  */
 
 /** Claude Code compacts this many tokens short of its `autoCompactWindow`. */
-export const CLAUDE_AUTO_COMPACT_RESERVE_TOKENS = 33_000;
+const CLAUDE_AUTO_COMPACT_RESERVE_TOKENS = 33_000;
 
 let table: ReadonlyMap<string, number> = new Map();
 
