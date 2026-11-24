@@ -1,15 +1,7 @@
 // @effect-diagnostics processEnvInEffect:off -- t4 settings come from the client container's env.
-/**
- * Who may frame T3's web app (AI-131).
- *
- * Upstream v0.1.11 (#36395) answers every HTML page with `frame-ancestors
- * 'none'` and `X-Frame-Options: DENY`, so no site can frame it. The t4
- * dashboard opens T3 in a full-screen frame on a phone (`T3Frame.tsx`), and
- * after the v0.1.11 rollout that frame was a white screen. `T4_FRAME_ANCESTORS`
- * (compose) lists the origins allowed to frame T3 - the dashboard's - and every
- * other site is still refused. X-Frame-Options has no allow-list, so it is left
- * out when origins are named; browsers that read `frame-ancestors` ignore it.
- */
+// t4 fork: upstream sends `frame-ancestors 'none'`, which blanks the t4 dashboard's phone frame.
+// T4_FRAME_ANCESTORS names the origins allowed to frame T3; every other site is still refused.
+// X-Frame-Options has no allow-list, so it is left out when origins are named.
 
 const ORIGIN = /^https?:\/\/[a-z0-9.-]+(?::\d{1,5})?$/i;
 

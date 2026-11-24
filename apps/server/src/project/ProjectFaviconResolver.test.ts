@@ -65,6 +65,19 @@ it.layer(layerTest)("ProjectFaviconResolverLive", (it) => {
       }),
     );
 
+    it.effect("skips a candidate under a file where its folder should be", () =>
+      Effect.gen(function* () {
+        const resolver = yield* ProjectFaviconResolver.ProjectFaviconResolver;
+        const path = yield* Path.Path;
+        const cwd = yield* makeTempDir;
+        // An empty `.idea` file: stat of `.idea/icon.svg` fails with ENOTDIR.
+        yield* writeTextFile(cwd, ".idea", "");
+        yield* writeTextFile(cwd, "AppIcon.icns", "icon");
+
+        expect(yield* resolver.resolvePath(cwd)).toBe(path.join(cwd, "AppIcon.icns"));
+      }),
+    );
+
     it.effect("falls back at once when a cached favicon is deleted", () =>
       Effect.gen(function* () {
         const fileSystem = yield* FileSystem.FileSystem;
