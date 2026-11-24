@@ -665,7 +665,9 @@ export const layer = Layer.mergeAll(
   route("POST", "/api/t4/roles/release-manager", AuthOrchestrationOperateScope, () =>
     Effect.gen(function* () {
       const input = yield* body(T4Roles.RmCompactionBody);
-      return json({ releaseManager: yield* T4Roles.setReleaseManagerCompaction(input.compactAtTokens) });
+      return json({
+        releaseManager: yield* T4Roles.setReleaseManagerCompaction(input.compactAtTokens),
+      });
     }),
   ),
   route("POST", "/api/t4/roles/:id/delete", AuthOrchestrationOperateScope, (params) =>

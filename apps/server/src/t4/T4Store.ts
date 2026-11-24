@@ -877,19 +877,17 @@ const make = Effect.gen(function* () {
       readonly updated_at: string;
     }>`SELECT * FROM t4_roles ORDER BY created_at`.pipe(
       Effect.map((rows) =>
-        rows.map(
-          (row): T4RoleRow => ({
-            id: row.id,
-            kind: row.kind,
-            title: row.title,
-            projectId: row.project_id,
-            threadId: row.thread_id,
-            enabled: row.enabled === 1,
-            configJson: row.config_json,
-            createdAt: row.created_at,
-            updatedAt: row.updated_at,
-          }),
-        ),
+        rows.map((row): T4RoleRow => ({
+          id: row.id,
+          kind: row.kind,
+          title: row.title,
+          projectId: row.project_id,
+          threadId: row.thread_id,
+          enabled: row.enabled === 1,
+          configJson: row.config_json,
+          createdAt: row.created_at,
+          updatedAt: row.updated_at,
+        })),
       ),
     );
 

@@ -421,7 +421,8 @@ export const layer = McpToolAccess.toLayer(ThreadToolkit, {
             });
           }
           // AI-140: a standing role stays visible as the release manager does.
-          const role = world === null ? undefined : T4Ledger.standingRoleOf(world, projection.thread.id);
+          const role =
+            world === null ? undefined : T4Ledger.standingRoleOf(world, projection.thread.id);
           if (role !== undefined) {
             return yield* new OrchestratorMcpFailure({
               code: "invalid_request",

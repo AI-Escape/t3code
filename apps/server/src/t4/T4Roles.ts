@@ -1,22 +1,8 @@
 // @effect-diagnostics processEnvInEffect:off -- trigger commands run with the container's env.
 /**
- * t4 fork (AI-140): standing roles. A role is a persistent, pinned thread per client - like the
- * release manager it never settles, snoozes or archives (T4Ledger.standingRoleOf) - that acts in
- * a set way (its brief and its kind's `role-<kind>` skill) and wakes on:
- *
- * - check-ins: T3 scheduled tasks bound to its thread on t4's cron (server time zone, Pacific);
- * - triggers: commands t4 runs every N minutes in the project's main checkout, which print the
- *   items that are new since their last run (`t4-probe`, or any command; contract below). New
- *   items are deduped per trigger, gathered for `batchMinutes`, and delivered as one message
- *   when the thread is idle, outside quiet hours and under the daily cap - no tokens are spent
- *   while nothing is new. A trigger's first run only records what it sees.
- *
- * Trigger command contract: `bash -c <command>` with T4_PROBE_STATE (the last run's `state`),
- * T4_PROBE_SINCE (ISO time of the last good run), T4_ROLE_ID, T4_ROLE_KIND, T4_TRIGGER_ID; stdout
- * `{"items":[{"id","title","url"?,"detail"?}],"state"?}`; non-zero exit or bad JSON = failed.
- *
- * It also keeps the per-thread compaction table (threadCompaction.ts) for roles and release
- * managers: usa-rs's release manager carried ~286k tokens into every request.
+ * t4 fork (AI-140): standing roles - pinned threads that never settle, woken by check-ins
+ * (scheduled tasks bound to the thread) and by triggers: commands printing new items as
+ * `{"items":[{id,title,url?,detail?}],"state"?}`, deduped, batched and delivered as one message.
  */
 import {
   CommandId,
@@ -45,8 +31,6 @@ import * as T4Delivery from "./T4Delivery.ts";
 import * as T4Store from "./T4Store.ts";
 import { isRunning, stateOf } from "./T4Threads.ts";
 import { setThreadCompaction } from "./threadCompaction.ts";
-
-// ---------------------------------------------------------------- schemas
 
 const CheckIn = Schema.Struct({
   id: Schema.String,
@@ -130,8 +114,6 @@ const CheckInIds = Schema.fromJsonString(Schema.Record(Schema.String, Schema.Str
 const decodeCheckInIds = Schema.decodeEffect(CheckInIds);
 const encodeCheckInIds = Schema.encodeEffect(CheckInIds);
 
-// ---------------------------------------------------------------- constants and pure helpers
-
 const SEEN_MAX = 1000;
 const PENDING_MAX = 200;
 const ITEMS_PER_MESSAGE = 30;
@@ -171,7 +153,10 @@ const pacificParts = (ms: number) => {
     hourCycle: "h23",
   }).formatToParts(ms);
   const get = (type: string) => parts.find((part) => part.type === type)?.value ?? "00";
-  return { day: `${get("year")}-${get("month")}-${get("day")}`, minutes: Number(get("hour")) * 60 + Number(get("minute")) };
+  return {
+    day: `${get("year")}-${get("month")}-${get("day")}`,
+    minutes: Number(get("hour")) * 60 + Number(get("minute")),
+  };
 };
 
 const minutesOf = (hhmm: string) => {
@@ -222,7 +207,8 @@ export const triggerMessage = (
       const title = item.url ? `[${item.title}](${item.url})` : item.title;
       return `- ${title}${item.detail ? ` - ${item.detail}` : ""}`;
     });
-    const more = items.length > ITEMS_PER_MESSAGE ? [`- and ${items.length - ITEMS_PER_MESSAGE} more`] : [];
+    const more =
+      items.length > ITEMS_PER_MESSAGE ? [`- and ${items.length - ITEMS_PER_MESSAGE} more`] : [];
     return [`t4 role trigger - **${label}**: ${items.length} new`, ...lines, ...more].join("\n");
   });
   return `${sections.join("\n\n")}\n\nHandle them as your role skill says. If none needs anything, end your turn in one line.`;
@@ -231,7 +217,9 @@ export const triggerMessage = (
 const roleIntro = (role: T4Store.T4RoleRow, config: RoleConfig) => {
   const checkIns = config.checkIns.map((c) => `- ${c.label}: \`${c.cron}\``).join("\n") || "- none";
   const triggers =
-    config.triggers.map((t) => `- ${t.label}: \`${t.command}\` every ${t.everyMinutes} min`).join("\n") || "- none";
+    config.triggers
+      .map((t) => `- ${t.label}: \`${t.command}\` every ${t.everyMinutes} min`)
+      .join("\n") || "- none";
   return [
     `You are the standing role **${role.title}** (role id \`${role.id}\`, kind \`${role.kind}\`) for this client: a persistent thread that never settles.`,
     `Load the \`standing-role\` skill and the \`role-${role.kind}\` skill if there is one, and follow them. You run in the project's main checkout. Your notebook is \`~/.config/t4/roles/${role.id}.md\`.`,
@@ -250,11 +238,11 @@ const roleIntro = (role: T4Store.T4RoleRow, config: RoleConfig) => {
   ].join("\n");
 };
 
-// ---------------------------------------------------------------- reads
-
 const readTriggerState = (store: T4Store.T4StoreShape, roleId: string, triggerId: string) =>
   store.meta(triggerKey(roleId, triggerId)).pipe(
-    Effect.flatMap((text) => (text === undefined ? Effect.succeed(emptyTriggerState()) : decodeTriggerState(text))),
+    Effect.flatMap((text) =>
+      text === undefined ? Effect.succeed(emptyTriggerState()) : decodeTriggerState(text),
+    ),
     Effect.orElseSucceed(emptyTriggerState),
   );
 const writeTriggerState = (
@@ -270,9 +258,8 @@ const writeTriggerState = (
 
 const readCheckInIds = (store: T4Store.T4StoreShape, roleId: string) =>
   store.meta(checkInsKey(roleId)).pipe(
-    Effect.flatMap(
-      (text): Effect.Effect<Record<string, string>, unknown> =>
-        text === undefined ? Effect.succeed({}) : decodeCheckInIds(text),
+    Effect.flatMap((text): Effect.Effect<Record<string, string>, unknown> =>
+      text === undefined ? Effect.succeed({}) : decodeCheckInIds(text),
     ),
     Effect.orElseSucceed((): Record<string, string> => ({})),
   );
@@ -315,7 +302,9 @@ export const listRoles = Effect.fn("t4.T4Roles.list")(function* () {
     const shell =
       row.threadId === null
         ? null
-        : yield* threads.getThreadShell(ThreadId.make(row.threadId)).pipe(Effect.orElseSucceed(() => null));
+        : yield* threads
+            .getThreadShell(ThreadId.make(row.threadId))
+            .pipe(Effect.orElseSucceed(() => null));
     const ids = yield* readCheckInIds(store, row.id);
     const triggerStatus = [];
     for (const trigger of config.triggers) {
@@ -355,8 +344,6 @@ export const listRoles = Effect.fn("t4.T4Roles.list")(function* () {
   }
   return { roles, releaseManager: yield* rmCompaction };
 });
-
-// ---------------------------------------------------------------- writes
 
 const pinCommand = (type: "thread.pin" | "thread.unpin", threadId: string, uuid: string) => ({
   type,
@@ -418,17 +405,19 @@ export const saveRole = Effect.fn("t4.T4Roles.save")(function* (input: SaveRoleB
   const title = input.title.trim();
   if (title === "") return { error: "a role needs a title" } as const;
   const project = Option.getOrUndefined(
-    yield* projects.getById(ProjectId.make(input.projectId)).pipe(Effect.orElseSucceed(() => Option.none())),
+    yield* projects
+      .getById(ProjectId.make(input.projectId))
+      .pipe(Effect.orElseSucceed(() => Option.none())),
   );
   if (project === undefined) return { error: "project not found" } as const;
   for (const trigger of input.config.triggers) {
-    if (!(trigger.everyMinutes >= 1)) return { error: `trigger "${trigger.label}" must run at most once a minute` } as const;
+    if (!(trigger.everyMinutes >= 1))
+      return { error: `trigger "${trigger.label}" must run at most once a minute` } as const;
   }
   const rows = yield* store.roles();
   const previous = input.id === undefined ? undefined : rows.find((row) => row.id === input.id);
   if (input.id !== undefined && previous === undefined) return { error: "role not found" } as const;
-  const modelSelection =
-    input.config.model ?? (yield* clientDefaultModelSelection(project.id));
+  const modelSelection = input.config.model ?? (yield* clientDefaultModelSelection(project.id));
   if (modelSelection === undefined || modelSelection === null) {
     return { error: "this client has no default model set - choose a model" } as const;
   }
@@ -436,7 +425,9 @@ export const saveRole = Effect.fn("t4.T4Roles.save")(function* (input: SaveRoleB
   let threadId = previous?.threadId ?? null;
   // A role thread that was deleted is made again.
   if (threadId !== null) {
-    const shell = yield* threads.getThreadShell(ThreadId.make(threadId)).pipe(Effect.orElseSucceed(() => null));
+    const shell = yield* threads
+      .getThreadShell(ThreadId.make(threadId))
+      .pipe(Effect.orElseSucceed(() => null));
     if (shell === null || shell.deletedAt !== null) threadId = null;
   }
   let row: T4Store.T4RoleRow = {
@@ -475,7 +466,9 @@ export const saveRole = Effect.fn("t4.T4Roles.save")(function* (input: SaveRoleB
   yield* store.upsertRole(row);
   if (threadId !== null) {
     const uuid = yield* crypto.uuidV4().pipe(Effect.orDie);
-    yield* threads.dispatch(pinCommand(row.enabled ? "thread.pin" : "thread.unpin", threadId, uuid)).pipe(Effect.ignore);
+    yield* threads
+      .dispatch(pinCommand(row.enabled ? "thread.pin" : "thread.unpin", threadId, uuid))
+      .pipe(Effect.ignore);
     if (previous !== undefined && previous.title !== title) {
       yield* threads
         .dispatch({
@@ -492,7 +485,8 @@ export const saveRole = Effect.fn("t4.T4Roles.save")(function* (input: SaveRoleB
   const kept = new Set(input.config.triggers.map((trigger) => trigger.id));
   const before = previous === undefined ? undefined : yield* configOf(previous);
   for (const trigger of before?.triggers ?? []) {
-    if (!kept.has(trigger.id)) yield* store.deleteMeta(triggerKey(id, trigger.id)).pipe(Effect.ignore);
+    if (!kept.has(trigger.id))
+      yield* store.deleteMeta(triggerKey(id, trigger.id)).pipe(Effect.ignore);
   }
   yield* syncCompaction;
   return { role: { ...row, config: input.config } } as const;
@@ -524,13 +518,12 @@ export const setReleaseManagerCompaction = Effect.fn("t4.T4Roles.setRmCompaction
   compactAtTokens: number | null,
 ) {
   const store = yield* T4Store.T4Store;
-  const value = compactAtTokens !== null && compactAtTokens > 0 ? String(Math.round(compactAtTokens)) : "";
+  const value =
+    compactAtTokens !== null && compactAtTokens > 0 ? String(Math.round(compactAtTokens)) : "";
   yield* store.setMeta(RM_COMPACT_KEY, value);
   yield* syncCompaction;
   return yield* rmCompaction;
 });
-
-// ---------------------------------------------------------------- compaction
 
 /** Rebuilds the per-thread compaction table from the roles and release managers. */
 const syncCompaction = Effect.gen(function* () {
@@ -550,8 +543,6 @@ const syncCompaction = Effect.gen(function* () {
   }
   setThreadCompaction(table);
 }).pipe(Effect.ignoreCause({ log: true }));
-
-// ---------------------------------------------------------------- triggers
 
 const runProbe = Effect.fn("t4.T4Roles.runProbe")(function* (
   row: T4Store.T4RoleRow,
@@ -592,10 +583,14 @@ const runProbe = Effect.fn("t4.T4Roles.runProbe")(function* (
   const out = result.success;
   if (out.timedOut) return { next: failed("timed out after 60 s"), added: 0 };
   if (out.code !== 0) {
-    return { next: failed(`exit ${out.code}: ${out.stderr.trim() || out.stdout.trim()}`), added: 0 };
+    return {
+      next: failed(`exit ${out.code}: ${out.stderr.trim() || out.stdout.trim()}`),
+      added: 0,
+    };
   }
   const parsed = yield* decodeProbe(out.stdout.trim()).pipe(Effect.result);
-  if (Result.isFailure(parsed)) return { next: failed(`not the trigger JSON: ${out.stdout.trim().slice(0, 200)}`), added: 0 };
+  if (Result.isFailure(parsed))
+    return { next: failed(`not the trigger JSON: ${out.stdout.trim().slice(0, 200)}`), added: 0 };
   const merged = mergeItems(previous, parsed.success.items, nowMs);
   return {
     next: {
@@ -651,7 +646,8 @@ const tickRole = Effect.fn("t4.T4Roles.tickRole")(function* (
   // Failing triggers: one note after a few failures in a row, at most every 6 h.
   for (const trigger of config.triggers) {
     const state = states.get(trigger.id)!;
-    if (state.failures < FAIL_NOTE_AFTER || now - msOf(state.lastFailNoteAt) < FAIL_NOTE_EVERY_MS) continue;
+    if (state.failures < FAIL_NOTE_AFTER || now - msOf(state.lastFailNoteAt) < FAIL_NOTE_EVERY_MS)
+      continue;
     yield* delivery
       .deliver({
         target: shell,
@@ -692,7 +688,10 @@ const tickRole = Effect.fn("t4.T4Roles.tickRole")(function* (
     if (inQuietHours(config.quietHours, now)) return 0;
     if ((yield* turnsToday(store, row.id, now)) >= config.maxTriggerTurnsPerDay) return 0;
   }
-  const batches = ready.map((trigger) => ({ label: trigger.label, items: states.get(trigger.id)!.pending }));
+  const batches = ready.map((trigger) => ({
+    label: trigger.label,
+    items: states.get(trigger.id)!.pending,
+  }));
   const delivered = yield* delivery
     .deliver({
       target: shell,
@@ -702,7 +701,10 @@ const tickRole = Effect.fn("t4.T4Roles.tickRole")(function* (
       createdBy: "system",
       creationSource: "server",
     })
-    .pipe(Effect.as(true), Effect.orElseSucceed(() => false));
+    .pipe(
+      Effect.as(true),
+      Effect.orElseSucceed(() => false),
+    );
   if (!delivered) return 0;
   let count = 0;
   for (const trigger of ready) {
@@ -731,7 +733,9 @@ const runtimes = Effect.gen(function* () {
     const config = yield* configOf(row);
     if (config === undefined) continue;
     const project = Option.getOrUndefined(
-      yield* projects.getById(ProjectId.make(row.projectId)).pipe(Effect.orElseSucceed(() => Option.none())),
+      yield* projects
+        .getById(ProjectId.make(row.projectId))
+        .pipe(Effect.orElseSucceed(() => Option.none())),
     );
     if (project === undefined) continue;
     out.push({ row, config, cwd: project.workspaceRoot });
@@ -775,4 +779,3 @@ export const standingRolesForState = Effect.gen(function* () {
   }
   return out;
 }).pipe(Effect.orElseSucceed(() => ({})));
-

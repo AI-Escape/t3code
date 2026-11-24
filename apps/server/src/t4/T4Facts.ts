@@ -65,7 +65,12 @@ export const factsFor = Effect.fn("t4.factsFor")(function* (
     facts.set(id, {
       state: stateOf(thread, now),
       isReleaseManager: f.isReleaseManager,
-      role: roleOf(thread, f.isReleaseManager, roles, T4Ledger.standingRoleOf(world, id) !== undefined),
+      role: roleOf(
+        thread,
+        f.isReleaseManager,
+        roles,
+        T4Ledger.standingRoleOf(world, id) !== undefined,
+      ),
       roleKind: T4Ledger.standingRoleOf(world, id)?.kind ?? null,
       roleTitle: T4Ledger.standingRoleOf(world, id)?.title ?? null,
       parentThreadId: parents.get(id) ?? null,

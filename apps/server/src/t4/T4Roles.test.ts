@@ -2,7 +2,11 @@ import { assert, describe, it } from "@effect/vitest";
 
 import { roleOf } from "./T4Facts.ts";
 import { inQuietHours, mergeItems, triggerMessage } from "./T4Roles.ts";
-import { claudeAutoCompactWindowFor, compactAtTokensFor, setThreadCompaction } from "./threadCompaction.ts";
+import {
+  claudeAutoCompactWindowFor,
+  compactAtTokensFor,
+  setThreadCompaction,
+} from "./threadCompaction.ts";
 
 const empty = {
   state: "",
@@ -63,12 +67,17 @@ describe("t4 roles", () => {
     assert.isTrue(inQuietHours(quiet, Date.parse("2026-11-24T14:59:00.000Z")));
     assert.isFalse(inQuietHours(quiet, Date.parse("2026-11-24T15:00:00.000Z")));
     assert.isFalse(inQuietHours(null, Date.parse("2026-11-24T06:30:00.000Z")));
-    assert.isTrue(inQuietHours({ start: "12:00", end: "13:00" }, Date.parse("2026-11-23T20:30:00.000Z")));
+    assert.isTrue(
+      inQuietHours({ start: "12:00", end: "13:00" }, Date.parse("2026-11-23T20:30:00.000Z")),
+    );
   });
 
   it("gives a standing role thread the role role", () => {
     assert.equal(roleOf({ id: "t", title: "Sentry watch PM" }, false, new Map(), true), "role");
-    assert.equal(roleOf({ id: "t", title: "Release manager" }, true, new Map(), true), "release-manager");
+    assert.equal(
+      roleOf({ id: "t", title: "Release manager" }, true, new Map(), true),
+      "release-manager",
+    );
   });
 
   it("keeps a compaction point per thread", () => {
