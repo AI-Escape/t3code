@@ -195,6 +195,7 @@ describe("t4 watch_workflow_run", () => {
       yield* h.use((w) => w.watchCommit({ ...input, commit: "def5678" }));
 
       // A decision succeeds and another is cancelled while staging runs: no wake.
+      // (Cancelled with no failed job waits for the stage like a success.)
       h.runs.set("21", { ...h.runs.get("21"), status: "completed", conclusion: "success" });
       h.runs.set("23", {
         commit: "def5678",
@@ -216,7 +217,7 @@ describe("t4 watch_workflow_run", () => {
       expect(h.delivered).toHaveLength(1);
       expect(h.delivered[0]!.text).toContain("train decision #21: success");
       expect(h.delivered[0]!.text).toContain("dashboard #22: failure");
-      expect(h.delivered[0]!.text).toContain("(1 more skipped or cancelled.)");
+      expect(h.delivered[0]!.text).toContain("train decision #23: cancelled");
       expect(h.delivered[0]!.text).toContain("Still running: staging #20");
 
       h.runs.set("20", { ...h.runs.get("20"), status: "completed", conclusion: "success" });
@@ -224,6 +225,104 @@ describe("t4 watch_workflow_run", () => {
       expect(h.delivered).toHaveLength(2);
       expect(h.delivered[1]!.text).toContain("staging #20: success");
       expect(h.delivered[1]!.text).not.toContain("#21");
+    }),
+  );
+
+  it.effect("posts a cancelled run at once when a job in it failed (AI-148)", () =>
+    Effect.gen(function* () {
+      const h = harness();
+      h.runs.set("50", {
+        commit: "fff6666",
+        displayTitle: "Keep each state's certificate",
+        status: "in_progress",
+        jobs: [],
+      });
+      yield* h.use((w) =>
+        w.watchCommit({ ...input, threadId: "t4-owner", commit: "fff6666", note: "hand off" }),
+      );
+      // usa-rs USA-3143: a shard cancelled at its time limit, the PR gate failed.
+      h.runs.set("50", {
+        ...h.runs.get("50"),
+        status: "completed",
+        conclusion: "cancelled",
+        jobs: [
+          { name: "Tests (Shard 2/2)", conclusion: "success" },
+          { name: "Tests (Shard 1/2)", conclusion: "cancelled" },
+          { name: "PR Gate", conclusion: "failure" },
+        ],
+      });
+      yield* h.use((w) => w.sweep);
+      expect(h.delivered).toHaveLength(1);
+      expect(h.delivered[0]!.threadId).toBe("t4-owner");
+      expect(h.delivered[0]!.text).toContain(
+        "Keep each state's certificate #50: cancelled (failed: PR Gate; cancelled: Tests (Shard 1/2))",
+      );
+      expect(h.delivered[0]!.text).toContain("not green until it passes");
+      expect(h.delivered[0]!.text).toContain("Your note: hand off");
+
+      yield* TestClock.adjust("21 minutes");
+      yield* h.use((w) => w.sweep);
+      expect(h.delivered).toHaveLength(1);
+      expect(JSON.parse(h.meta.get("workflow-commit-watches")!)).toEqual([]);
+    }),
+  );
+
+  it.effect("posts a cancelled run with no failed job once nothing else runs", () =>
+    Effect.gen(function* () {
+      const h = harness();
+      h.runs.set("51", { commit: "fff7777", displayTitle: "PR checks", status: "in_progress" });
+      yield* h.use((w) => w.watchCommit({ ...input, commit: "fff7777" }));
+      h.runs.set("51", {
+        ...h.runs.get("51"),
+        status: "completed",
+        conclusion: "cancelled",
+        jobs: [{ name: "Tests", conclusion: "cancelled" }],
+      });
+      yield* h.use((w) => w.sweep);
+      expect(h.delivered).toHaveLength(1);
+      expect(h.delivered[0]!.text).toContain("PR checks #51: cancelled (cancelled: Tests)");
+    }),
+  );
+
+  it.effect("stays quiet about a run a newer push of the same thread cancelled", () =>
+    Effect.gen(function* () {
+      const h = harness();
+      h.runs.set("60", { commit: "aaa0001", displayTitle: "PR checks", status: "in_progress" });
+      yield* h.use((w) => w.watchCommit({ ...input, commit: "aaa0001" }));
+      yield* TestClock.adjust("2 minutes");
+      h.runs.set("61", { commit: "aaa0002", displayTitle: "PR checks", status: "in_progress" });
+      yield* h.use((w) => w.watchCommit({ ...input, commit: "aaa0002" }));
+      h.runs.set("60", { ...h.runs.get("60"), status: "completed", conclusion: "cancelled" });
+      yield* h.use((w) => w.sweep);
+      expect(h.delivered).toEqual([]);
+
+      h.runs.set("61", { ...h.runs.get("61"), status: "completed", conclusion: "success" });
+      yield* h.use((w) => w.sweep);
+      expect(h.delivered).toHaveLength(1);
+      expect(h.delivered[0]!.text).toContain("for commit aaa0002000");
+      expect(h.delivered[0]!.text).toContain("PR checks #61: success");
+    }),
+  );
+
+  it.effect("tells the thread when every run for the commit was skipped", () =>
+    Effect.gen(function* () {
+      const h = harness();
+      h.runs.set("70", { commit: "abc0070", displayTitle: "checks", status: "in_progress" });
+      yield* h.use((w) => w.watchCommit({ ...input, commit: "abc0070", note: "then hand off" }));
+      h.runs.set("70", { ...h.runs.get("70"), status: "completed", conclusion: "skipped" });
+      yield* h.use((w) => w.sweep);
+      expect(h.delivered).toHaveLength(1);
+      expect(h.delivered[0]!.text).toContain(
+        "WORKFLOW RUNS finished for commit abc0070000: 1 skipped or cancelled, none passed or failed.",
+      );
+      expect(h.delivered[0]!.text).toContain("Your note: then hand off");
+
+      // Said once; the watch then ends quietly.
+      yield* h.use((w) => w.sweep);
+      yield* TestClock.adjust("21 minutes");
+      yield* h.use((w) => w.sweep);
+      expect(h.delivered).toHaveLength(1);
+      expect(JSON.parse(h.meta.get("workflow-commit-watches")!)).toEqual([]);
     }),
   );
 

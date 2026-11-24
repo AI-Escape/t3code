@@ -65,8 +65,10 @@ const CommitWatch = Schema.Struct({
    * "still running" (2026-10-30).
    */
   held: Schema.optional(Schema.Array(Schema.String)),
-  /** Skipped or cancelled runs folded into the next message as a count. */
+  /** Skipped runs (and cancelled ones a newer push replaced) folded into the next message as a count. */
   quietRuns: Schema.optional(Schema.Number),
+  /** Whether this watch has posted to its thread yet. */
+  posted: Schema.optional(Schema.Boolean),
 });
 type CommitWatch = typeof CommitWatch.Type;
 const CommitWatches = Schema.fromJsonString(Schema.Array(CommitWatch));
@@ -112,6 +114,7 @@ export interface WorkflowRun {
   readonly status: string;
   readonly conclusion: string;
   readonly failedJobs: ReadonlyArray<string>;
+  readonly cancelledJobs: ReadonlyArray<string>;
 }
 
 const RunView = Schema.Struct({
@@ -135,7 +138,27 @@ const decodeRunView = Schema.decodeUnknownEffect(Schema.fromJsonString(RunView))
 
 const FAILED = new Set(["failure", "timed_out", "startup_failure", "action_required"]);
 /** Runs that did nothing worth reading on their own (a train decision that declined). */
-const QUIET = new Set(["skipped", "cancelled", "neutral", "stale"]);
+const QUIET = new Set(["skipped", "neutral", "stale"]);
+/**
+ * A cancelled run is a result: a job hit its time limit or someone stopped it,
+ * and a PR's checks are not green. It counted as quiet until AI-148: usa-rs
+ * USA-3143's only run for its push ended cancelled (a test shard at its
+ * 25-minute limit), the watch posted nothing and ended, and the thread slept
+ * 7 hours (2026-11-24). Quiet only when the thread has since watched a newer
+ * commit in the same checkout - the cancel of a run a new push replaced.
+ */
+const CANCELLED_NOTE =
+  "A cancelled job usually hit its time limit or was stopped by hand (`ci logs` shows which). If these are a PR's checks, they are not green until it passes.";
+
+/** " (failed: a; cancelled: b)" for a run's jobs, or "". */
+const jobsDetail = (run: WorkflowRun | null) => {
+  if (run === null) return "";
+  const parts = [
+    run.failedJobs.length > 0 ? `failed: ${run.failedJobs.join(", ")}` : null,
+    run.cancelledJobs.length > 0 ? `cancelled: ${run.cancelledJobs.join(", ")}` : null,
+  ].filter((part) => part !== null);
+  return parts.length > 0 ? ` (${parts.join("; ")})` : "";
+};
 
 /** The message a finished run posts into its thread. */
 const finishedMessage = (watch: Watch, run: WorkflowRun) =>
@@ -144,6 +167,8 @@ const finishedMessage = (watch: Watch, run: WorkflowRun) =>
     run.title ? `"${run.title}"` : null,
     run.url || null,
     run.failedJobs.length > 0 ? `Failed jobs: ${run.failedJobs.join(", ")}.` : null,
+    run.cancelledJobs.length > 0 ? `Cancelled jobs: ${run.cancelledJobs.join(", ")}.` : null,
+    run.conclusion === "cancelled" ? CANCELLED_NOTE : null,
     watch.note ? `Your note: ${watch.note}` : null,
   ]
     .filter((line) => line !== null)
@@ -258,6 +283,9 @@ const make = Effect.gen(function* () {
       conclusion: run.conclusion ?? "",
       failedJobs: (run.jobs ?? [])
         .filter((job) => FAILED.has(job.conclusion ?? ""))
+        .map((job) => job.name ?? "job"),
+      cancelledJobs: (run.jobs ?? [])
+        .filter((job) => job.conclusion === "cancelled")
         .map((job) => job.name ?? "job"),
     } satisfies WorkflowRun;
   });
@@ -396,10 +424,20 @@ const make = Effect.gen(function* () {
       const held = [...(w.held ?? [])];
       let quietRuns = w.quietRuns ?? 0;
       let failed = false;
+      let cancelled = false;
+      // A newer commit this thread watches in the same checkout replaced this one.
+      const replaced = list.some(
+        (other) =>
+          other.threadId === w.threadId &&
+          other.commit !== w.commit &&
+          other.since > w.since &&
+          other.repository === w.repository &&
+          other.cwd === w.cwd,
+      );
       if (finished.length > 0) lastActivity = now;
       for (const run of finished) {
         const conclusion = run.conclusion || "completed";
-        if (QUIET.has(conclusion)) {
+        if (QUIET.has(conclusion) || (conclusion === "cancelled" && replaced)) {
           quietRuns += 1;
           continue;
         }
@@ -409,22 +447,30 @@ const make = Effect.gen(function* () {
             : yield* view(String(run.databaseId), w.repository, w.cwd).pipe(
                 Effect.orElseSucceed(() => null),
               );
-        if (conclusion !== "success") failed = true;
+        // A cancelled run posts at once when a job in it failed (a PR gate);
+        // otherwise it waits like a success for the stage to end.
+        if (conclusion === "cancelled") {
+          cancelled = true;
+          if (detail !== null && detail.failedJobs.length > 0) failed = true;
+        } else if (conclusion !== "success") failed = true;
         held.push(
-          `- ${run.displayTitle || run.name || run.workflowName} #${run.databaseId}${run.attempt !== undefined && run.attempt > 1 ? ` (re-run, attempt ${run.attempt})` : ""}: ${conclusion}${detail && detail.failedJobs.length > 0 ? ` (failed: ${detail.failedJobs.join(", ")})` : ""} ${run.url ?? ""}`.trim(),
+          `- ${run.displayTitle || run.name || run.workflowName} #${run.databaseId}${run.attempt !== undefined && run.attempt > 1 ? ` (re-run, attempt ${run.attempt})` : ""}: ${conclusion}${jobsDetail(detail)} ${run.url ?? ""}`.trim(),
         );
       }
       const reported = [...w.reported, ...finished.map(runKey)];
       const expired = now - w.since > MAX_AGE_MS;
+      let posted = w.posted ?? false;
       // Post on a failure, or once nothing for the commit is running (a
       // stage of the release is over); hold everything in between.
       if (held.length > 0 && (failed || running.length === 0 || expired)) {
+        posted = true;
         yield* post(
           w.threadId,
           [
             `WORKFLOW RUNS finished for commit ${w.commit.slice(0, 10)}:`,
             ...held,
             quietRuns > 0 ? `(${quietRuns} more skipped or cancelled.)` : null,
+            cancelled ? CANCELLED_NOTE : null,
             running.length > 0
               ? `Still running: ${running.map((run) => `${run.displayTitle || run.name} #${run.databaseId}`).join("; ")} - you will be woken when they finish or one fails.`
               : expired
@@ -436,6 +482,23 @@ const make = Effect.gen(function* () {
             .join("\n"),
         );
         held.length = 0;
+        quietRuns = 0;
+      }
+      // Every run skipped and nothing posted yet: the thread still waits on
+      // this watch, so say so rather than end without a word (AI-148). Not for
+      // a commit a newer push replaced - that watch wakes the thread.
+      if (!posted && !replaced && held.length === 0 && quietRuns > 0 && running.length === 0) {
+        posted = true;
+        yield* post(
+          w.threadId,
+          [
+            `WORKFLOW RUNS finished for commit ${w.commit.slice(0, 10)}: ${quietRuns} skipped or cancelled, none passed or failed.`,
+            "Nothing ran to completion for this commit; `ci` shows the runs. A run it triggers later is still watched for 20 minutes.",
+            w.note ? `Your note: ${w.note}` : null,
+          ]
+            .filter((line) => line !== null)
+            .join("\n"),
+        );
         quietRuns = 0;
       }
       const quiet = running.length === 0 && now - lastActivity > COMMIT_QUIET_MS;
@@ -457,6 +520,7 @@ const make = Effect.gen(function* () {
         reported,
         held,
         quietRuns,
+        posted,
         lastActivity: running.length > 0 ? now : lastActivity,
       });
     }
