@@ -16,6 +16,7 @@ import {
   ThreadId,
   TurnItemId,
 } from "@t3tools/contracts";
+import { sentMessageFromToolItem } from "@t3tools/shared/toolOutput";
 import * as Clock from "effect/Clock";
 import * as SecureRandom from "effect/crypto/SecureRandom";
 import * as DateTime from "effect/DateTime";
@@ -55,6 +56,7 @@ import {
   resumePace,
   takeResumeSlot,
 } from "./limitResumePace.ts";
+import { questionBrief, type QuestionMessage } from "./questionBrief.ts";
 import { isSettled, shortId } from "./T4Threads.ts";
 
 type Shell = OrchestrationV2ThreadShell;
@@ -761,19 +763,57 @@ export const layer = Layer.mergeAll(
                 Effect.map((r) => r.messages),
                 Effect.orElseSucceed(() => []),
               );
-      const said = messages.filter((m) => m.role !== "system" && m.text.trim().length > 0);
+      // AI-154: what the agent posted with `send_to_user` is a tool call, not a
+      // message; the user saw it in the thread, so the window shows it too.
+      const sentItems =
+        runIds.length === 0
+          ? []
+          : yield* threads
+              .getProjectThreadRecords({ projectId: thread.projectId, threadId }, ["turnItems"], {
+                turnItemTypes: ["dynamic_tool"],
+                turnItemRunIds: runIds,
+              })
+              .pipe(
+                Effect.map((r) => r.turnItems),
+                Effect.orElseSucceed(() => []),
+              );
+      const sent = sentItems.flatMap((candidate) => {
+        if (candidate.type !== "dynamic_tool" || candidate.status !== "completed") return [];
+        const text = sentMessageFromToolItem(candidate);
+        if (text === undefined || text.trim().length === 0) return [];
+        const at = candidate.completedAt ?? candidate.startedAt ?? candidate.updatedAt;
+        return [
+          {
+            role: "assistant",
+            text,
+            createdAt: DateTime.toEpochMillis(at),
+            runId: candidate.runId,
+            sent: true,
+          },
+        ];
+      });
+      const said = [
+        ...messages
+          .filter((m) => m.role !== "system" && m.text.trim().length > 0)
+          .map((m) => ({
+            role: m.role as string,
+            text: m.text,
+            createdAt: DateTime.toEpochMillis(m.createdAt),
+            runId: m.runId,
+          })),
+        ...sent,
+      ].toSorted((a, b) => a.createdAt - b.createdAt);
       // AI-116: the brief is kept apart, so later messages (handoffs, the agent's
-      // replies) never push it out of the window. Claude asks first and writes the
-      // brief right after (message-mode questions); Codex writes it before asking.
-      const askedAt = DateTime.toEpochMillis(open.createdAt);
-      const ownRun = said.filter((m) => m.role === "assistant" && m.runId === item.runId);
-      const brief =
-        ownRun.find((m) => DateTime.toEpochMillis(m.createdAt) >= askedAt) ??
-        ownRun.filter((m) => DateTime.toEpochMillis(m.createdAt) < askedAt).at(-1);
-      const shown = (m: (typeof said)[number]) => ({
+      // replies) never push it out of the window.
+      const brief = questionBrief({
+        said,
+        askedAt: DateTime.toEpochMillis(open.createdAt),
+        askedRunId: item.runId,
+      });
+      const shown = (m: QuestionMessage<(typeof said)[number]["runId"]>) => ({
         role: m.role,
         text: m.text,
-        createdAt: DateTime.formatIso(m.createdAt),
+        createdAt: DateTime.formatIso(DateTime.makeUnsafe(m.createdAt)),
         runId: m.runId,
       });
       return json({
@@ -790,7 +830,13 @@ export const layer = Layer.mergeAll(
           multiSelect: q.multiSelect === true,
           options: q.options.map((o) => ({ label: o.label, description: o.description })),
         })),
-        brief: brief === undefined ? null : shown(brief),
+        brief:
+          brief === undefined
+            ? null
+            : {
+                ...shown(brief),
+                ...(brief.parts === undefined ? {} : { parts: brief.parts.map(shown) }),
+              },
         messages: said.slice(-12).map(shown),
       });
     }),

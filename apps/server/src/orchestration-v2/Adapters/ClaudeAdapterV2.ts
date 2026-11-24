@@ -177,7 +177,11 @@ import {
   readClaudeSettingsEnv,
 } from "../../provider/Drivers/ClaudeSkills.ts";
 // t4 fork: questionsAsMessages, declineSafetyChecks.
-import { QUESTION_POSTED_NOTE, t4QuestionsAsMessages } from "../../t4/questionsAsMessages.ts";
+import {
+  QUESTION_POSTED_NOTE,
+  T4_CLAUDE_SEND_TO_USER_INSTRUCTIONS,
+  t4QuestionsAsMessages,
+} from "../../t4/questionsAsMessages.ts";
 import { awaitsOnItsOwn } from "../../t4/autoAwait.ts";
 import { claudeAutoCompactWindowFor, compactAtTokensFor } from "../../t4/threadCompaction.ts";
 import {
@@ -2451,7 +2455,10 @@ export function makeClaudeQueryOptions(input: {
             ? ""
             : T3_CODE_ORCHESTRATION_INSTRUCTIONS +
               CLAUDE_BACKGROUND_WAIT_INSTRUCTIONS +
-              CLAUDE_SEND_TO_USER_INSTRUCTIONS +
+              // t4 fork: a question's brief goes in the final reply (AI-154).
+              (t4QuestionsAsMessages()
+                ? T4_CLAUDE_SEND_TO_USER_INSTRUCTIONS
+                : CLAUDE_SEND_TO_USER_INSTRUCTIONS) +
               (deviceInstructions
                 ? `\n${T3_CODE_DEVICE_TOOL_INSTRUCTIONS_WITH_TOOL_SEARCH}\n`
                 : "")),
