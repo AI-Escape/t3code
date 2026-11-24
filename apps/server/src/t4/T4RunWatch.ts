@@ -140,12 +140,9 @@ const FAILED = new Set(["failure", "timed_out", "startup_failure", "action_requi
 /** Runs that did nothing worth reading on their own (a train decision that declined). */
 const QUIET = new Set(["skipped", "neutral", "stale"]);
 /**
- * A cancelled run is a result: a job hit its time limit or someone stopped it,
- * and a PR's checks are not green. It counted as quiet until AI-148: usa-rs
- * USA-3143's only run for its push ended cancelled (a test shard at its
- * 25-minute limit), the watch posted nothing and ended, and the thread slept
- * 7 hours (2026-11-24). Quiet only when the thread has since watched a newer
- * commit in the same checkout - the cancel of a run a new push replaced.
+ * A cancelled run is a result, not quiet (AI-148: usa-rs USA-3143's only run
+ * ended cancelled, nothing was posted, the thread slept 7 hours). Quiet only
+ * when the thread has since watched a newer commit in the same checkout.
  */
 const CANCELLED_NOTE =
   "A cancelled job usually hit its time limit or was stopped by hand (`ci logs` shows which). If these are a PR's checks, they are not green until it passes.";
