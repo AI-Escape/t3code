@@ -121,6 +121,17 @@ const FAIL_NOTE_AFTER = 3;
 const FAIL_NOTE_EVERY_MS = 6 * 3600_000;
 const PROBE_TIMEOUT = "60 seconds";
 const RM_COMPACT_KEY = "rm-compact-at";
+/** A project's release manager is a standing role of this kind (made by `ensureReleaseManagerRoles`). */
+const RELEASE_MANAGER_KIND = "release-manager";
+const rmRoleId = (projectId: string) => `role-rm-${projectId}`;
+const RM_DEPLOY_TRIGGER = {
+  id: "deploy-failed",
+  label: "Production deploy failed",
+  command: "t4-probe gh-main-red --name-match deploy",
+  everyMinutes: 5,
+  batchMinutes: 0,
+  enabled: true,
+} as const;
 const triggerKey = (roleId: string, triggerId: string) => `role-trigger:${roleId}:${triggerId}`;
 const checkInsKey = (roleId: string) => `role-checkins:${roleId}`;
 const turnsKey = (roleId: string) => `role-turns:${roleId}`;
@@ -199,8 +210,12 @@ export const mergeItems = (
   };
 };
 
+const roleFooter = (role: { readonly id: string; readonly title: string }) =>
+  `(Standing role "${role.title}" - notebook \`~/.config/t4/roles/${role.id}.md\`.)`;
+
 export const triggerMessage = (
   batches: ReadonlyArray<{ readonly label: string; readonly items: ReadonlyArray<Item> }>,
+  role: { readonly id: string; readonly title: string },
 ): string => {
   const sections = batches.map(({ label, items }) => {
     const lines = items.slice(0, ITEMS_PER_MESSAGE).map((item) => {
@@ -211,7 +226,7 @@ export const triggerMessage = (
       items.length > ITEMS_PER_MESSAGE ? [`- and ${items.length - ITEMS_PER_MESSAGE} more`] : [];
     return [`t4 role trigger - **${label}**: ${items.length} new`, ...lines, ...more].join("\n");
   });
-  return `${sections.join("\n\n")}\n\nHandle them as your role skill says. If none needs anything, end your turn in one line.`;
+  return `${sections.join("\n\n")}\n\nHandle them as your role skill says. If none needs anything, end your turn in one line.\n${roleFooter(role)}`;
 };
 
 const roleIntro = (role: T4Store.T4RoleRow, config: RoleConfig) => {
@@ -369,7 +384,7 @@ const syncCheckIns = Effect.fn("t4.T4Roles.syncCheckIns")(function* (
       .upsert({
         ...(existing === undefined ? {} : { id: ScheduledTaskId.make(existing) }),
         title: `${row.title}: ${checkIn.label || "check-in"}`,
-        prompt: `Scheduled check-in - **${checkIn.label || "check-in"}** (${row.title}).\n\n${checkIn.prompt.trim()}`,
+        prompt: `Scheduled check-in - **${checkIn.label || "check-in"}** (${row.title}).\n\n${checkIn.prompt.trim()}\n\n${roleFooter(row)}`,
         enabled: true,
         schedule: { type: "cron", expression: checkIn.cron.trim() },
         projectId: ProjectId.make(row.projectId),
@@ -417,7 +432,17 @@ export const saveRole = Effect.fn("t4.T4Roles.save")(function* (input: SaveRoleB
   const rows = yield* store.roles();
   const previous = input.id === undefined ? undefined : rows.find((row) => row.id === input.id);
   if (input.id !== undefined && previous === undefined) return { error: "role not found" } as const;
-  const modelSelection = input.config.model ?? (yield* clientDefaultModelSelection(project.id));
+  const isRm = previous?.kind === RELEASE_MANAGER_KIND;
+  if (!isRm && input.kind.trim() === RELEASE_MANAGER_KIND) {
+    return {
+      error: "a project's release manager role is made with its release manager - edit that one",
+    } as const;
+  }
+  const serverConfig = yield* T4Config.T4ServerConfig;
+  const modelSelection =
+    input.config.model ??
+    (isRm ? serverConfig.releaseManagerModel : null) ??
+    (yield* clientDefaultModelSelection(project.id));
   if (modelSelection === undefined || modelSelection === null) {
     return { error: "this client has no default model set - choose a model" } as const;
   }
@@ -432,16 +457,17 @@ export const saveRole = Effect.fn("t4.T4Roles.save")(function* (input: SaveRoleB
   }
   let row: T4Store.T4RoleRow = {
     id,
-    kind: input.kind.trim() || "custom",
+    // A release manager stays one: its thread, project and on state are the release flow's.
+    kind: isRm ? RELEASE_MANAGER_KIND : input.kind.trim() || "custom",
     title,
-    projectId: project.id,
-    threadId,
-    enabled: input.enabled,
+    projectId: isRm ? previous!.projectId : project.id,
+    threadId: isRm ? previous!.threadId : threadId,
+    enabled: isRm ? true : input.enabled,
     configJson: yield* encodeConfig(input.config).pipe(Effect.orDie),
     createdAt: previous?.createdAt ?? iso(now),
     updatedAt: iso(now),
   };
-  if (row.enabled && threadId === null) {
+  if (!isRm && row.enabled && threadId === null) {
     const uuid = yield* crypto.uuidV4().pipe(Effect.orDie);
     const launched = yield* launches.launch({
       commandId: CommandId.make(`t4:role:${uuid}`),
@@ -463,6 +489,7 @@ export const saveRole = Effect.fn("t4.T4Roles.save")(function* (input: SaveRoleB
     threadId = launched.projection.thread.id;
     row = { ...row, threadId };
   }
+  threadId = row.threadId;
   yield* store.upsertRole(row);
   if (threadId !== null) {
     const uuid = yield* crypto.uuidV4().pipe(Effect.orDie);
@@ -499,6 +526,9 @@ export const deleteRole = Effect.fn("t4.T4Roles.delete")(function* (id: string) 
   const crypto = yield* SecureRandom.SecureRandom;
   const row = (yield* store.roles()).find((r) => r.id === id);
   if (row === undefined) return { error: "role not found" } as const;
+  if (row.kind === RELEASE_MANAGER_KIND) {
+    return { error: "a release manager can't be removed - releases depend on it" } as const;
+  }
   for (const taskId of Object.values(yield* readCheckInIds(store, id))) {
     yield* scheduled.delete({ id: ScheduledTaskId.make(taskId) }).pipe(Effect.ignore);
   }
@@ -695,7 +725,7 @@ const tickRole = Effect.fn("t4.T4Roles.tickRole")(function* (
   const delivered = yield* delivery
     .deliver({
       target: shell,
-      text: triggerMessage(batches),
+      text: triggerMessage(batches, row),
       force: true,
       patient: true,
       createdBy: "system",
@@ -743,8 +773,56 @@ const runtimes = Effect.gen(function* () {
   return out;
 });
 
-/** Every minute: compaction table, then each enabled role's due triggers. */
+/**
+ * Every project's release manager is a standing role: a row bound to its recorded thread, made with
+ * the release manager's compaction point and a failed-deploy trigger, kept on its current thread.
+ */
+const ensureReleaseManagerRoles = Effect.gen(function* () {
+  const store = yield* T4Store.T4Store;
+  const threads = yield* ThreadManagementService.ThreadManagementService;
+  const serverConfig = yield* T4Config.T4ServerConfig;
+  const now = yield* Clock.currentTimeMillis;
+  const rms = yield* store.releaseManagers();
+  const rows = yield* store.roles();
+  const rm = yield* rmCompaction;
+  for (const [projectId, threadId] of rms) {
+    const existing = rows.find((r) => r.kind === RELEASE_MANAGER_KIND && r.projectId === projectId);
+    if (existing !== undefined) {
+      if (existing.threadId !== threadId || !existing.enabled) {
+        yield* store.upsertRole({ ...existing, threadId, enabled: true, updatedAt: iso(now) });
+      }
+      continue;
+    }
+    const shell = yield* threads
+      .getThreadShell(ThreadId.make(threadId))
+      .pipe(Effect.orElseSucceed(() => null));
+    const config: RoleConfig = {
+      brief: "",
+      model: serverConfig.releaseManagerModel,
+      compactAtTokens: rm.compactAtTokens ?? rm.defaultCompactAtTokens,
+      checkIns: [],
+      triggers: [RM_DEPLOY_TRIGGER],
+      quietHours: null,
+      maxTriggerTurnsPerDay: 24,
+    };
+    yield* store.upsertRole({
+      id: rmRoleId(projectId),
+      kind: RELEASE_MANAGER_KIND,
+      title: shell?.title ?? serverConfig.releaseManagerTitlePrefix,
+      projectId,
+      threadId,
+      enabled: true,
+      configJson: yield* encodeConfig(config).pipe(Effect.orDie),
+      createdAt: iso(now),
+      updatedAt: iso(now),
+    });
+    yield* Effect.logInfo("t4: release manager is now a standing role", { projectId });
+  }
+}).pipe(Effect.ignoreCause({ log: true }));
+
+/** Every minute: release managers' roles, the compaction table, then each enabled role's due triggers. */
 export const sweep = Effect.gen(function* () {
+  yield* ensureReleaseManagerRoles;
   yield* syncCompaction;
   const roles = yield* runtimes;
   yield* Effect.forEach(

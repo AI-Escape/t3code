@@ -49,15 +49,19 @@ describe("t4 roles", () => {
 
   it("writes one message for several triggers, capped per trigger", () => {
     const many = Array.from({ length: 33 }, (_, i) => item(String(i)));
-    const text = triggerMessage([
-      { label: "New Sentry issues", items: [item("x")] },
-      { label: "Red main", items: many },
-    ]);
+    const text = triggerMessage(
+      [
+        { label: "New Sentry issues", items: [item("x")] },
+        { label: "Red main", items: many },
+      ],
+      { id: "role-1", title: "Sentry watch - usa-rs" },
+    );
     assert.include(text, "**New Sentry issues**: 1 new");
     assert.include(text, "- [issue x](https://x/x)");
     assert.include(text, "**Red main**: 33 new");
     assert.include(text, "- and 3 more");
     assert.include(text, "end your turn in one line");
+    assert.include(text, "~/.config/t4/roles/role-1.md");
   });
 
   it("knows quiet hours in Pacific time, across midnight", () => {
