@@ -169,11 +169,31 @@ const Migration0004 = Effect.gen(function* () {
   yield* sql`CREATE INDEX IF NOT EXISTS t4_tool_calls_thread ON t4_tool_calls (thread_id)`;
 });
 
+// Standing roles (AI-140): persistent, pinned threads that wake on check-ins and
+// on polled triggers. A role's trigger state and check-in task ids live in t4_meta.
+const Migration0005 = Effect.gen(function* () {
+  const sql = yield* SqlClient.SqlClient;
+  yield* sql`
+    CREATE TABLE IF NOT EXISTS t4_roles (
+      id TEXT PRIMARY KEY,
+      kind TEXT NOT NULL,
+      title TEXT NOT NULL,
+      project_id TEXT NOT NULL,
+      thread_id TEXT,
+      enabled INTEGER NOT NULL,
+      config_json TEXT NOT NULL,
+      created_at TEXT NOT NULL,
+      updated_at TEXT NOT NULL
+    ) WITHOUT ROWID
+  `;
+});
+
 const t4MigrationEntries = [
   [1, "T4SessionTooling", Migration0001],
   [2, "T4ThreadRoles", Migration0002],
   [3, "T4ReleaseQueue", Migration0003],
   [4, "T4WaitersAndToolCalls", Migration0004],
+  [5, "T4Roles", Migration0005],
 ] as const;
 
 const run = Migrator.make({});

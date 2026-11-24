@@ -42,6 +42,7 @@ import * as T4Delivery from "./T4Delivery.ts";
 import { factsFor } from "./T4Facts.ts";
 import * as T4Ledger from "./T4Ledger.ts";
 import * as T4RunWatch from "./T4RunWatch.ts";
+import * as T4Roles from "./T4Roles.ts";
 import * as T4Schedules from "./T4Schedules.ts";
 import * as T4Spawn from "./T4Spawn.ts";
 import { clientDefaultModelSelection } from "./T4DefaultModel.ts";
@@ -226,6 +227,8 @@ export const layer = Layer.mergeAll(
         // dashboard's roles and By PM view.
         roles: Object.fromEntries(yield* store.threadRoles()),
         parents: Object.fromEntries(yield* store.spawnParents()),
+        // Standing roles' threads (AI-140): badge and Roles group on the dashboard.
+        standingRoles: yield* T4Roles.standingRolesForState,
         issueLinks: yield* store.issueLinks(),
         settleRequests: Object.fromEntries(yield* store.settleRequests()),
         // Release managers' queues (AI-71): the dashboard's "on staging" list,
@@ -641,6 +644,40 @@ export const layer = Layer.mergeAll(
       const scheduled = yield* ScheduledTasks.ScheduledTaskService;
       const result = yield* scheduled.runNow({ id: ScheduledTaskId.make(params.id ?? "") });
       return json({ threadId: result.threadId });
+    }),
+  ),
+
+  // Standing roles (t4/T4Roles.ts, AI-140), managed from the dashboard's Roles tab.
+  route("GET", "/api/t4/roles", AuthOrchestrationReadScope, () =>
+    T4Roles.listRoles().pipe(Effect.map((result) => json(result))),
+  ),
+  route("POST", "/api/t4/roles", AuthOrchestrationOperateScope, () =>
+    Effect.gen(function* () {
+      const input = yield* body(T4Roles.SaveRoleBody);
+      const saved = yield* T4Roles.saveRole(input).pipe(
+        Effect.catch((error) =>
+          Effect.succeed({ error: String((error as { message?: unknown }).message ?? error) }),
+        ),
+      );
+      return "error" in saved ? json({ error: saved.error }, 400) : json({ role: saved.role });
+    }),
+  ),
+  route("POST", "/api/t4/roles/release-manager", AuthOrchestrationOperateScope, () =>
+    Effect.gen(function* () {
+      const input = yield* body(T4Roles.RmCompactionBody);
+      return json({ releaseManager: yield* T4Roles.setReleaseManagerCompaction(input.compactAtTokens) });
+    }),
+  ),
+  route("POST", "/api/t4/roles/:id/delete", AuthOrchestrationOperateScope, (params) =>
+    T4Roles.deleteRole(params.id ?? "").pipe(
+      Effect.map((result) => ("error" in result ? json(result, 404) : json(result))),
+    ),
+  ),
+  route("POST", "/api/t4/roles/:id/run", AuthOrchestrationOperateScope, (params) =>
+    Effect.gen(function* () {
+      const input = yield* body(T4Roles.RunRoleBody);
+      const result = yield* T4Roles.runRole(params.id ?? "", input.triggerId);
+      return "error" in result ? json(result, 404) : json(result);
     }),
   ),
 

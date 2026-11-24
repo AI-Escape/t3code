@@ -182,6 +182,19 @@ const BOOT_ID = `${process.pid}-${process.hrtime.bigint().toString(36)}`;
 let callSeq = 0;
 /** A unique id for a logged tool call. */
 export const newToolCallId = () => `call:${BOOT_ID}:${(callSeq += 1)}`;
+/** A standing role (AI-140); `configJson` is T4Roles' RoleConfig. */
+export interface T4RoleRow {
+  readonly id: string;
+  readonly kind: string;
+  readonly title: string;
+  readonly projectId: string;
+  readonly threadId: string | null;
+  readonly enabled: boolean;
+  readonly configJson: string;
+  readonly createdAt: string;
+  readonly updatedAt: string;
+}
+
 /** The result a call cut by a restart is left with. */
 export const CUT_RESULT = "cut by a restart";
 
@@ -305,6 +318,10 @@ export interface T4StoreShape {
 
   readonly meta: (key: string) => Effect.Effect<string | undefined, StoreError>;
   readonly setMeta: (key: string, value: string) => Effect.Effect<void, StoreError>;
+  readonly deleteMeta: (keyPrefix: string) => Effect.Effect<void, StoreError>;
+  readonly roles: () => Effect.Effect<ReadonlyArray<T4RoleRow>, StoreError>;
+  readonly upsertRole: (row: T4RoleRow) => Effect.Effect<void, StoreError>;
+  readonly deleteRole: (id: string) => Effect.Effect<void, StoreError>;
 }
 
 export class T4Store extends Context.Service<T4Store, T4StoreShape>()("t3/t4/T4Store") {}
@@ -842,6 +859,53 @@ const make = Effect.gen(function* () {
       ON CONFLICT (key) DO UPDATE SET value = excluded.value
     `.pipe(Effect.asVoid);
 
+  const deleteMeta: T4StoreShape["deleteMeta"] = (keyPrefix) =>
+    sql`DELETE FROM t4_meta WHERE substr(key, 1, ${keyPrefix.length}) = ${keyPrefix}`.pipe(
+      Effect.asVoid,
+    );
+
+  const roles: T4StoreShape["roles"] = () =>
+    sql<{
+      readonly id: string;
+      readonly kind: string;
+      readonly title: string;
+      readonly project_id: string;
+      readonly thread_id: string | null;
+      readonly enabled: number;
+      readonly config_json: string;
+      readonly created_at: string;
+      readonly updated_at: string;
+    }>`SELECT * FROM t4_roles ORDER BY created_at`.pipe(
+      Effect.map((rows) =>
+        rows.map(
+          (row): T4RoleRow => ({
+            id: row.id,
+            kind: row.kind,
+            title: row.title,
+            projectId: row.project_id,
+            threadId: row.thread_id,
+            enabled: row.enabled === 1,
+            configJson: row.config_json,
+            createdAt: row.created_at,
+            updatedAt: row.updated_at,
+          }),
+        ),
+      ),
+    );
+
+  const upsertRole: T4StoreShape["upsertRole"] = (row) =>
+    sql`
+      INSERT INTO t4_roles (id, kind, title, project_id, thread_id, enabled, config_json, created_at, updated_at)
+      VALUES (${row.id}, ${row.kind}, ${row.title}, ${row.projectId}, ${row.threadId},
+        ${row.enabled ? 1 : 0}, ${row.configJson}, ${row.createdAt}, ${row.updatedAt})
+      ON CONFLICT (id) DO UPDATE SET kind = excluded.kind, title = excluded.title,
+        project_id = excluded.project_id, thread_id = excluded.thread_id, enabled = excluded.enabled,
+        config_json = excluded.config_json, updated_at = excluded.updated_at
+    `.pipe(Effect.asVoid);
+
+  const deleteRole: T4StoreShape["deleteRole"] = (id) =>
+    sql`DELETE FROM t4_roles WHERE id = ${id}`.pipe(Effect.asVoid);
+
   return T4Store.of({
     openHandoffs,
     allHandoffs,
@@ -882,6 +946,10 @@ const make = Effect.gen(function* () {
     takeRestartToolCalls,
     meta,
     setMeta,
+    deleteMeta,
+    roles,
+    upsertRole,
+    deleteRole,
   });
 });
 

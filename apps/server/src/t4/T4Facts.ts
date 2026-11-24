@@ -11,7 +11,7 @@ import * as T4Ledger from "./T4Ledger.ts";
 import * as T4Store from "./T4Store.ts";
 import { stateOf } from "./T4Threads.ts";
 
-export type T4Role = "owner" | "pm" | "release-manager";
+export type T4Role = "owner" | "pm" | "release-manager" | "role";
 
 /**
  * A thread's role (AI-58): a release manager by the project's record or title;
@@ -23,8 +23,10 @@ export const roleOf = (
   thread: { readonly id: string; readonly title: string },
   isReleaseManager: boolean,
   given: ReadonlyMap<string, string>,
+  standing = false,
 ): T4Role => {
   if (isReleaseManager) return "release-manager";
+  if (standing) return "role";
   const set = given.get(thread.id);
   if (set === "pm" || set === "owner") return set;
   return /\bPM\b/.test(thread.title) ? "pm" : "owner";
@@ -34,6 +36,9 @@ export interface T4ThreadFacts {
   readonly state: string;
   readonly isReleaseManager: boolean;
   readonly role: T4Role;
+  /** A standing role's kind and title (AI-140), when `role` is "role". */
+  readonly roleKind: string | null;
+  readonly roleTitle: string | null;
   readonly parentThreadId: string | null;
   readonly owes: number;
   readonly owedBy: number;
@@ -60,7 +65,9 @@ export const factsFor = Effect.fn("t4.factsFor")(function* (
     facts.set(id, {
       state: stateOf(thread, now),
       isReleaseManager: f.isReleaseManager,
-      role: roleOf(thread, f.isReleaseManager, roles),
+      role: roleOf(thread, f.isReleaseManager, roles, T4Ledger.standingRoleOf(world, id) !== undefined),
+      roleKind: T4Ledger.standingRoleOf(world, id)?.kind ?? null,
+      roleTitle: T4Ledger.standingRoleOf(world, id)?.title ?? null,
       parentThreadId: parents.get(id) ?? null,
       owes: f.owes,
       owedBy: f.owedBy,

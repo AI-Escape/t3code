@@ -162,6 +162,7 @@ import {
 } from "@t3tools/provider-core/server/subagentProjection";
 import * as IdAllocator from "@t3tools/provider-core/server/IdAllocator";
 import * as ProviderAdapter from "@t3tools/provider-core/server/ProviderAdapter";
+import { compactAtTokensFor } from "../../t4/threadCompaction.ts";
 
 const CODEX_PROVIDER = ProviderDriverKind.make("codex");
 const CODEX_CAPACITY_MAX_RETRIES = 5;
@@ -1549,6 +1550,10 @@ function codexThreadRuntimeParams(input: {
     config: {
       ...CODEX_THREAD_CONFIG,
       // One app-server serves many threads, so the id goes in per-thread shell config, not its env.
+      // t4 fork (AI-140): a standing role's or release manager's compaction point.
+      ...(compactAtTokensFor(input.threadId) === undefined
+        ? {}
+        : { model_auto_compact_token_limit: compactAtTokensFor(input.threadId)! }),
       ...(input.threadId === null
         ? {}
         : {

@@ -179,6 +179,7 @@ import {
 // t4 fork: questionsAsMessages, declineSafetyChecks.
 import { QUESTION_POSTED_NOTE, t4QuestionsAsMessages } from "../../t4/questionsAsMessages.ts";
 import { awaitsOnItsOwn } from "../../t4/autoAwait.ts";
+import { claudeAutoCompactWindowFor, compactAtTokensFor } from "../../t4/threadCompaction.ts";
 import {
   safetyCheckDeclinedNote,
   safetyCheckKind,
@@ -294,6 +295,15 @@ const CLAUDE_AUTO_COMPACT_RESERVE_TOKENS = 33_000;
 // Claude Code's isEnvTruthy.
 function isClaudeEnvTruthy(value: string | undefined): boolean {
   return value !== undefined && ["1", "true", "yes", "on"].includes(value.trim().toLowerCase());
+}
+
+function withT4Compaction(
+  settings: ClaudeSettings | undefined,
+  threadId: string,
+): ClaudeSettings | undefined {
+  const compactAt = compactAtTokensFor(threadId);
+  if (compactAt === undefined || settings === undefined) return settings;
+  return { ...settings, autoCompactWindow: claudeAutoCompactWindowFor(compactAt) };
 }
 
 function claudeAutoCompactThreshold(autoCompactWindow: string, maxTokens: number | null) {
@@ -13199,7 +13209,8 @@ export const makeClaudeAdapterV2 = Effect.fn("makeClaudeAdapterV2")(function* (
             existing.queryPolicyKey === queryPolicyKey &&
             !existing.stopping;
           const readLaunchSettings = readClaudeLaunchArgSettings({
-            settings: adapterOptions.settings,
+            // t4 fork (AI-140): a standing role's or release manager's compaction point.
+            settings: withT4Compaction(adapterOptions.settings, turnInput.threadId),
             cwd: turnInput.runtimePolicy.cwd,
             fileSystem,
             path,

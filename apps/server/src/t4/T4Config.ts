@@ -19,6 +19,8 @@ export const T4ServerConfigJson = Schema.Struct({
     Schema.Struct({
       titlePrefix: Schema.optional(Schema.String),
       model: Schema.optional(Schema.NullOr(ModelSelection)),
+      /** AI-140: compact a release manager's provider session at this many tokens (null: provider default). */
+      compactAtTokens: Schema.optional(Schema.NullOr(Schema.Number)),
     }),
   ),
   /** `issueId`: worktrees at `<worktrees>/<issue id or slug>` (t4); `branch`: upstream. */
@@ -42,6 +44,7 @@ export type T4ServerConfigJson = typeof T4ServerConfigJson.Type;
 export interface T4ServerConfigShape {
   readonly releaseManagerTitlePrefix: string;
   readonly releaseManagerModel: ModelSelection | null;
+  readonly releaseManagerCompactAtTokens: number | null;
   readonly worktreeNaming: "branch" | "issueId";
   readonly launchPresets: Readonly<Record<string, ModelSelection>>;
   readonly stallRecovery: {
@@ -56,6 +59,7 @@ export interface T4ServerConfigShape {
 export const defaultT4ServerConfig: T4ServerConfigShape = {
   releaseManagerTitlePrefix: "Release manager",
   releaseManagerModel: null,
+  releaseManagerCompactAtTokens: null,
   worktreeNaming: "branch",
   launchPresets: {},
   stallRecovery: { enabled: false, silenceMinutes: 15, repeatHours: 6 },
@@ -68,6 +72,8 @@ function resolveT4ServerConfig(json: T4ServerConfigJson): T4ServerConfigShape {
   return {
     releaseManagerTitlePrefix: json.releaseManager?.titlePrefix ?? d.releaseManagerTitlePrefix,
     releaseManagerModel: json.releaseManager?.model ?? d.releaseManagerModel,
+    releaseManagerCompactAtTokens:
+      json.releaseManager?.compactAtTokens ?? d.releaseManagerCompactAtTokens,
     worktreeNaming: json.worktreeNaming ?? d.worktreeNaming,
     launchPresets: json.launchPresets ?? d.launchPresets,
     stallRecovery: {

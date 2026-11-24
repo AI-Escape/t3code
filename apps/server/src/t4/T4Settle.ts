@@ -61,6 +61,10 @@ const make = Effect.gen(function* () {
       if (ledger.isReleaseManager(world, thread)) {
         return "release managers never settle - say 'nothing queued, nothing in flight' in one line and stop";
       }
+      const role = T4Ledger.standingRoleOf(world, thread.id);
+      if (role !== undefined) {
+        return `this thread is the standing role "${role.title}" and never settles - end your turn in one line; the user turns roles off in the dashboard (Settings -> Roles)`;
+      }
       const owing = world.live.filter((entry) => entry.toThreadId === thread.id);
       if (owing.length > 0) {
         const names = owing

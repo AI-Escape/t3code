@@ -69,7 +69,9 @@ export const sweep = Effect.gen(function* () {
   const now = yield* Clock.currentTimeMillis;
   const targets = toArchive(
     world.threads,
-    (thread) => ledger.isReleaseManager(world, thread),
+    (thread) =>
+      ledger.isReleaseManager(world, thread) ||
+      T4Ledger.standingRoleOf(world, thread.id) !== undefined,
     now,
     ARCHIVE_SETTLED_MS,
   );
