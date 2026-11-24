@@ -14,3 +14,15 @@ export const QUESTION_POSTED_NOTE =
   "write before a tool call can reach them only as a short summary. It replaces any earlier " +
   "question of yours still open, so it must hold every decision still open. Don't ask it " +
   "again in this turn unless it left one out.";
+
+/**
+ * Upstream's send_to_user instructions name "what a question you're about to ask refers to" as a
+ * use. With message-mode questions the brief belongs in the final reply after asking: the
+ * dashboard's card reads it from there, and usa-rs USA-3219's plan went out with send_to_user and
+ * ended "The plan ... is in the message above" (AI-154).
+ */
+export const T4_CLAUDE_SEND_TO_USER_INSTRUCTIONS = `
+### Text the user must read mid-turn
+
+Text you write before a tool call may reach the user only as a one-line summary. When the user must read something in full before your turn ends, such as a draft or a code block, send it with \`send_to_user\`. What a question you ask refers to is not that: ask it, then end the turn with it all as your final reply. Put everything else in your final reply.
+`;
