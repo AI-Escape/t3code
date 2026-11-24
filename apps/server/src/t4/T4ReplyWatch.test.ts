@@ -59,7 +59,7 @@ const dolma = {
   threadId: "t-triage",
   who: "Dolma",
   about: "USA-3097 early-pay terms",
-  check: "usars chat USA-3097 replies --since 2026-11-23T20:09:43Z --from Dolma",
+  check: "usars chat replies USA-3097 --since 2026-11-23T20:09:43Z --from Dolma",
   via: "chat",
   cwd: "/srv/Code/usa-rs",
   deadlineMs: 3_600_000,

@@ -1,7 +1,7 @@
 /**
  * t4 fork (AI-143): wake a thread when a customer, supplier or staff member answers it. The thread
  * names who it waits on and a check - any shell command that prints the reply once it exists and
- * nothing before (`email replies --since ... --from ...`, usa-rs's `usars chat ... replies --since
+ * nothing before (`email replies --since ... --from ...`, usa-rs's `usars chat replies ... --since
  * ...`) - and t4 runs the check itself on an interval, at no AI cost, posting one message when it
  * prints something or when the deadline passes. Before this a thread waiting on Dolma's answer in
  * usa-rs's issue chat scheduled three wakes to look (2026-11-23), each a turn, and sat on the

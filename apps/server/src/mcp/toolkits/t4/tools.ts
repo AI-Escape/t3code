@@ -286,7 +286,7 @@ const WaitForReplyTool = Tool.make("wait_for_reply", {
     check: Schema.optional(
       Schema.String.annotate({
         description:
-          "A shell command that prints the reply once it exists and nothing before (exit 0 either way), e.g. `usars chat USA-3097 replies --since 2026-11-23T20:09:43Z --from Dolma`. It must return at once, never wait.",
+          "A shell command that prints the reply once it exists and nothing before (exit 0 either way), e.g. `usars chat replies USA-3097 --since 2026-11-23T20:09:43Z --from Dolma`. It must return at once, never wait.",
       }),
     ),
     email: Schema.optional(
