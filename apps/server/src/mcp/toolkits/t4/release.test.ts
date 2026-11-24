@@ -14,6 +14,7 @@ import * as Project from "../../../project/ProjectService.ts";
 import * as T4Config from "../../../t4/T4Config.ts";
 import * as T4Delivery from "../../../t4/T4Delivery.ts";
 import * as T4Ledger from "../../../t4/T4Ledger.ts";
+import * as T4ReplyWatch from "../../../t4/T4ReplyWatch.ts";
 import * as T4RunWatch from "../../../t4/T4RunWatch.ts";
 import * as T4Releases from "../../../t4/T4Releases.ts";
 import * as T4Sql from "../../../t4/T4Sql.ts";
@@ -201,6 +202,7 @@ const layer = McpHttpServer.layerT4Toolkit.pipe(
       }),
       Layer.mock(ThreadLaunch.ThreadLaunchService)({}),
       Layer.mock(T4RunWatch.T4RunWatch)({}),
+      Layer.mock(T4ReplyWatch.T4ReplyWatch)({}),
       Layer.succeed(T4Config.T4ServerConfig, T4Config.defaultT4ServerConfig),
     ),
   ),

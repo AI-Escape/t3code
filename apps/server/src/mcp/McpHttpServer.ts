@@ -1220,6 +1220,7 @@ export const T4_ALWAYS_LOAD = new Set([
   "t3_thread_update",
   "schedule_task",
   "watch_workflow_run",
+  "wait_for_reply",
   "release_queue",
   "request_secret",
   "link_pull_request",
