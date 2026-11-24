@@ -92,7 +92,7 @@ const clip = (text: string, cap: number) =>
 
 const label = (w: Watch) => `${w.who}${w.about ? ` (${w.about})` : ""}`;
 
-export const replyMessage = (w: Watch, output: string) =>
+const replyMessage = (w: Watch, output: string) =>
   [
     `REPLY from ${label(w)} - your wait_for_reply check found it:`,
     "",
@@ -101,14 +101,14 @@ export const replyMessage = (w: Watch, output: string) =>
     "The watch has ended. Act on the reply now; to wait for another answer, call wait_for_reply again.",
   ].join("\n");
 
-export const deadlineMessage = (w: Watch) =>
+const deadlineMessage = (w: Watch) =>
   [
     `NO REPLY from ${label(w)} by ${pacific(w.deadline)} (asked ${pacific(w.since)}); the watch has ended.`,
     `Check: \`${w.check}\``,
     "Decide what's next: follow up with them and wait again, or bring it to the user as a card (wait longer, or go ahead without the answer).",
   ].join("\n");
 
-export const failingMessage = (w: Watch) =>
+const failingMessage = (w: Watch) =>
   [
     `The wait_for_reply check for ${label(w)} failed ${MAX_FAILURES} times in a row, so the watch has ended.`,
     `Check: \`${w.check}\``,
