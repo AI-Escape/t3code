@@ -5203,6 +5203,10 @@ interface ActiveClaudeTurnContext {
     readonly type: string | null;
     readonly resetAt: string | null;
   } | null;
+  // t4 fork (AI-151): the Claude account whose process sent this turn's limit evidence. A wake
+  // buffer outlives a process replaced for the same session, so a continuation on the next
+  // account can replay the old account's refusal; the old account is the one used up.
+  t4LimitAccount: string | null;
   // Set while this turn's latest compaction status reports a failure, with
   // Claude's error text when it sent one.
   compactionFailure: { readonly message: string | undefined } | null;
@@ -6147,6 +6151,8 @@ export const makeClaudeAdapterV2 = Effect.fn("makeClaudeAdapterV2")(function* (
         );
         // A gateway's relative reset counts from the result's arrival, not its replay.
         const bufferedResultArrivals = new WeakMap<SDKMessage, DateTime.Utc>();
+        // t4 fork (AI-151): the Claude account of the process that sent a buffered frame.
+        const bufferedFrameAccounts = new WeakMap<SDKMessage, string>();
         const wakeBuffers = yield* Ref.make(
           new Map<
             string,
@@ -10241,6 +10247,10 @@ export const makeClaudeAdapterV2 = Effect.fn("makeClaudeAdapterV2")(function* (
           if (message.type === "result") {
             bufferedResultArrivals.set(message, yield* DateTime.now);
           }
+          const bufferingAccount = (yield* Ref.get(queryContext))?.t4Account;
+          if (bufferingAccount !== undefined && !bufferedFrameAccounts.has(message)) {
+            bufferedFrameAccounts.set(message, bufferingAccount);
+          }
           if (isClaudeRootTurnFrame(message)) {
             yield* forgetAbsorbedWake(wakeInput.nativeThreadId);
           }
@@ -10825,6 +10835,7 @@ export const makeClaudeAdapterV2 = Effect.fn("makeClaudeAdapterV2")(function* (
             const blocked = rateLimitInfo.status === "rejected" && !overageAllowed;
             const limitType = rateLimitInfo.rateLimitType ?? "unknown";
             if (blocked) {
+              context.t4LimitAccount = bufferedFrameAccounts.get(message) ?? liveQuery.t4Account;
               context.rejectedRateLimitTypes.add(limitType);
               context.rateLimitResetTimes.set(
                 limitType,
@@ -10849,7 +10860,7 @@ export const makeClaudeAdapterV2 = Effect.fn("makeClaudeAdapterV2")(function* (
                 const notice =
                   t4Live !== null &&
                   anotherClaudeAccountFree(
-                    t4Live.t4Account,
+                    context.t4LimitAccount ?? t4Live.t4Account,
                     DateTime.toEpochMillis(now),
                     process.env,
                     limitType === FABLE_RATE_LIMIT_TYPE ? t4Live.selection.apiModelId : null,
@@ -11199,6 +11210,9 @@ export const makeClaudeAdapterV2 = Effect.fn("makeClaudeAdapterV2")(function* (
               context.nativeMessageCursor = message.uuid;
               context.latestAssistantRateLimit =
                 message.error === "rate_limit" ? { type: null, resetAt: null } : null;
+              if (message.error === "rate_limit") {
+                context.t4LimitAccount = bufferedFrameAccounts.get(message) ?? liveQuery.t4Account;
+              }
               if (message.error === "rate_limit" && isClaudeBlockedAssistantRateLimit(message)) {
                 const info = message.api_error_params.rate_limit_info;
                 const overageAllowed =
@@ -12267,10 +12281,12 @@ export const makeClaudeAdapterV2 = Effect.fn("makeClaudeAdapterV2")(function* (
               [...t4LimitTypes].every((type) => type === FABLE_RATE_LIMIT_TYPE)
                 ? ("fable" as const)
                 : ("all" as const);
+            const t4LimitAccount =
+              context.t4LimitAccount ?? bufferedFrameAccounts.get(message) ?? liveQuery.t4Account;
             const t4ResumeAtMs =
               usageLimited && !interrupted
                 ? markClaudeAccountExhausted(
-                    liveQuery.t4Account,
+                    t4LimitAccount,
                     claudeResetAt === null ? null : Date.parse(claudeResetAt),
                     DateTime.toEpochMillis(completedAt),
                     process.env,
@@ -12280,7 +12296,10 @@ export const makeClaudeAdapterV2 = Effect.fn("makeClaudeAdapterV2")(function* (
             if (t4ResumeAtMs !== undefined) {
               yield* Effect.logInfo("t4.claude-account-limit", {
                 threadId: context.input.threadId,
-                account: liveQuery.t4Account,
+                account: t4LimitAccount,
+                ...(t4LimitAccount === liveQuery.t4Account
+                  ? {}
+                  : { processAccount: liveQuery.t4Account }),
                 scope: t4LimitScope,
                 resetAt: claudeResetAt,
               });
@@ -12303,7 +12322,7 @@ export const makeClaudeAdapterV2 = Effect.fn("makeClaudeAdapterV2")(function* (
                 if (terminalFailure?.class === "usage_limit") {
                   next.set(liveQuery.nativeThreadId, {
                     failure: terminalFailure,
-                    account: liveQuery.t4Account,
+                    account: t4LimitAccount,
                     claudeResetAt,
                     scope: t4LimitScope,
                   });
@@ -13769,6 +13788,7 @@ export const makeClaudeAdapterV2 = Effect.fn("makeClaudeAdapterV2")(function* (
               rejectedRateLimitTypes: new Set(),
               rateLimitResetTimes: new Map(),
               latestAssistantRateLimit: null,
+              t4LimitAccount: null,
               compactionFailure: null,
               nativeSessionTitle: null,
               steeredSegmentUsage: [],

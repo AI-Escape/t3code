@@ -12767,6 +12767,130 @@ describe("ClaudeAdapterV2 background wake turns", () => {
       ),
   );
 
+  // t4 fork (AI-151): usa-rs USA-3134 (2026-11-24). Account 1 hit its 5-hour limit, and its
+  // process answered a background notice with the same refusal after the turn had ended; that
+  // sat in the wake buffer. The thread moved to account 2, and the next wake replayed the old
+  // refusal there - and marked account 2 used up, though it had 83% left.
+  it.effect("marks a replayed refusal on the account that sent it, not the next one", () =>
+    Effect.gen(function* () {
+      const dir = NodeFS.mkdtempSync(NodePath.join(process.env.TMPDIR ?? "/tmp", "t4-acct-"));
+      NodeFS.writeFileSync(NodePath.join(dir, "1.token"), "token-one\n");
+      NodeFS.writeFileSync(NodePath.join(dir, "2.token"), "token-two\n");
+      const saved = process.env.T4_CLAUDE_ACCOUNTS;
+      process.env.T4_CLAUDE_ACCOUNTS = `${dir}/1.token,${dir}/2.token`;
+      resetClaudeAccountState();
+      yield* Effect.addFinalizer(() =>
+        Effect.sync(() => {
+          if (saved === undefined) delete process.env.T4_CLAUDE_ACCOUNTS;
+          else process.env.T4_CLAUDE_ACCOUNTS = saved;
+          resetClaudeAccountState();
+        }),
+      );
+      const readState = () =>
+        JSON.parse(NodeFS.readFileSync(NodePath.join(dir, "state.json"), "utf8")) as {
+          readonly exhaustedUntil: Record<string, number>;
+        };
+      const harness = yield* makeWakeHarnessWithOptions({ freshQueueOnReopen: true });
+      const now = yield* DateTime.now;
+      const resetsAt = Math.floor(DateTime.toEpochMillis(now) / 1000) + 3 * 3_600;
+      const refusal = (uuid: string) =>
+        makeAssistantErrorFrame({
+          uuid,
+          error: "rate_limit",
+          text: "You've hit your 5-hour limit",
+          apiErrorParams: {
+            rate_limit_info: { status: "rejected", rateLimitType: "five_hour", resetsAt },
+          },
+        });
+
+      // Account 1: the turn starts a background check and hits the limit.
+      yield* harness.runtime.startTurn(
+        makeClaudeTestTurnInput({
+          threadId: harness.threadId,
+          providerThread: harness.providerThread,
+          now,
+          attemptId: RunAttemptId.make("attempt-t4-replayed-limit-1"),
+          text: "Run the check in the background.",
+          attachments: [],
+        }),
+      );
+      yield* Queue.offerAll(harness.sdkMessages, [
+        wakeTaskStarted,
+        refusal("00000000-0000-4000-8000-000000000b01"),
+        makeResultFrame({
+          uuid: "00000000-0000-4000-8000-000000000b02",
+          result: "You've hit your 5-hour limit",
+          isError: true,
+          apiErrorStatus: 429,
+          terminalReason: "api_error",
+        }),
+      ]);
+      const first = yield* Queue.take(harness.terminalReceipts);
+      assert.equal(first.status, "failed");
+      assert.deepEqual(Object.keys(readState().exhaustedUntil), ["1"]);
+
+      // Account 1's process answers the background notice with the refusal again: buffered.
+      yield* harness.offerAndWait(wakeNotification);
+      yield* harness.offerAndWait(refusal("00000000-0000-4000-8000-000000000b03"));
+      yield* harness.offerAndWait(
+        makeResultFrame({
+          uuid: "00000000-0000-4000-8000-000000000b04",
+          result: "You've hit your 5-hour limit",
+          isError: true,
+          apiErrorStatus: 429,
+          terminalReason: "api_error",
+          origin: { kind: "task-notification" },
+        }),
+      );
+
+      // The user's next turn opens a process on account 2, which works.
+      yield* harness.runtime.startTurn(
+        makeClaudeTestTurnInput({
+          threadId: harness.threadId,
+          providerThread: harness.providerThread,
+          now,
+          attemptId: RunAttemptId.make("attempt-t4-replayed-limit-2"),
+          text: "Continue where you left off.",
+          attachments: [],
+          providerTurnOrdinal: 2,
+        }),
+      );
+      assert.lengthOf(harness.processQueues, 2);
+      yield* harness.offerAndWait(
+        makeResultFrame({ uuid: "00000000-0000-4000-8000-000000000b05", result: "Done." }),
+      );
+      const second = yield* Queue.take(harness.terminalReceipts);
+      assert.equal(second.status, "completed");
+
+      // The next wake drains the buffer on account 2's process.
+      yield* harness.runtime.startTurn(
+        makeClaudeTestTurnInput({
+          threadId: harness.threadId,
+          providerThread: harness.providerThread,
+          now,
+          attemptId: RunAttemptId.make("attempt-t4-replayed-limit-3"),
+          text: "Background task completed.",
+          attachments: [],
+          providerTurnOrdinal: 3,
+          messageCreatedBy: "agent",
+          messageCreationSource: "provider",
+        }),
+      );
+      yield* Queue.take(harness.terminalReceipts);
+      assert.deepEqual(Object.keys(readState().exhaustedUntil), ["1"]);
+    }).pipe(
+      Effect.scoped,
+      Effect.provide(
+        Layer.mergeAll(
+          IdAllocator.layer,
+          McpProviderSessions.layer,
+          NodeServices.layer,
+          NodeCrypto.layer,
+        ),
+      ),
+    ),
+  );
+
   const providerThreadRosterEvents = (
     events: ReadonlyArray<ProviderAdapter.ProviderAdapterV2Event>,
   ) =>
