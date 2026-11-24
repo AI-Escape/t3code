@@ -1,12 +1,7 @@
 /**
- * t4 fork (AI-143): wake a thread when a customer, supplier or staff member answers it. The thread
- * names who it waits on and a check - any shell command that prints the reply once it exists and
- * nothing before (`email replies --since ... --from ...`, usa-rs's `usars chat replies ... --since
- * ...`) - and t4 runs the check itself on an interval, at no AI cost, posting one message when it
- * prints something or when the deadline passes. Before this a thread waiting on Dolma's answer in
- * usa-rs's issue chat scheduled three wakes to look (2026-11-23), each a turn, and sat on the
- * dashboard looking idle while it asked the user "Anything else?". Watches live in t4_meta;
- * `/api/t4/state` lists them so the dashboard shows "Waiting on Dolma".
+ * t4 fork (AI-143): wake a thread when someone outside t4 answers. t4 runs the thread's check (a
+ * command that prints the reply once it exists) on an interval and posts one message on the
+ * reply, at the deadline, or when the check keeps failing. Watches live in t4_meta.
  */
 import { ThreadId } from "@t3tools/contracts";
 import * as Clock from "effect/Clock";
@@ -222,8 +217,10 @@ const make = Effect.gen(function* () {
             : result.code !== 0
               ? ({
                   kind: "failed",
-                  error:
-                    `exit ${result.code}: ${(result.stderr || result.stdout).trim()}`.slice(0, 600),
+                  error: `exit ${result.code}: ${(result.stderr || result.stdout).trim()}`.slice(
+                    0,
+                    600,
+                  ),
                 } as const)
               : result.stdout.trim().length > 0
                 ? ({ kind: "reply", output: result.stdout } as const)
@@ -322,9 +319,7 @@ const make = Effect.gen(function* () {
         const endedKeys = new Set([...ended].map(key));
         const updates = new Map([...updated].map(([before, after]) => [key(before), after]));
         yield* save(
-          latest
-            .filter((w) => !endedKeys.has(key(w)))
-            .map((w) => updates.get(key(w)) ?? w),
+          latest.filter((w) => !endedKeys.has(key(w))).map((w) => updates.get(key(w)) ?? w),
         );
       }),
     );

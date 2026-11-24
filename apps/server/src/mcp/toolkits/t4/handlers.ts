@@ -1013,7 +1013,9 @@ export const layer = McpToolAccess.toLayer(T4Toolkit, {
         const from = input.email.from?.trim() ?? "";
         const thread = input.email.thread?.trim() ?? "";
         if (from.length === 0 && thread.length === 0)
-          return yield* invalid("`email` needs `from` (their address) and/or `thread` (a message id)");
+          return yield* invalid(
+            "`email` needs `from` (their address) and/or `thread` (a message id)",
+          );
         const quote = (text: string) => `'${text.replaceAll("'", "'\\''")}'`;
         check = [
           "email replies",

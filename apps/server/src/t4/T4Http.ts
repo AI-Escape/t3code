@@ -256,7 +256,8 @@ export const layer = Layer.mergeAll(
               via: w.via,
               since: DateTime.formatIso(DateTime.makeUnsafe(w.since)),
               deadline: DateTime.formatIso(DateTime.makeUnsafe(w.deadline)),
-              lastCheck: w.lastCheck > 0 ? DateTime.formatIso(DateTime.makeUnsafe(w.lastCheck)) : null,
+              lastCheck:
+                w.lastCheck > 0 ? DateTime.formatIso(DateTime.makeUnsafe(w.lastCheck)) : null,
               failing: w.failures > 0 ? w.lastError : null,
             })),
           ),

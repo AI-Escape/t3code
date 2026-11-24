@@ -82,7 +82,8 @@ describe("t4 wait_for_reply", () => {
       yield* h.use((w) => w.sweep);
       expect(h.ran).toHaveLength(1);
 
-      h.answer.stdout = "2026-11-23 12:49 Dolma: Dexter, Vollrath and Vulcan are all JLA and net 30.\n";
+      h.answer.stdout =
+        "2026-11-23 12:49 Dolma: Dexter, Vollrath and Vulcan are all JLA and net 30.\n";
       yield* TestClock.adjust("40 seconds");
       yield* h.use((w) => w.sweep);
       expect(h.ran).toHaveLength(2);
@@ -107,7 +108,9 @@ describe("t4 wait_for_reply", () => {
       yield* TestClock.adjust("5 minutes");
       yield* h.use((w) => w.sweep);
       expect(h.delivered).toHaveLength(1);
-      expect(h.delivered[0]!.text).toContain("NO REPLY from Dolma (USA-3097 early-pay terms) by Mon 12:15 PM PT");
+      expect(h.delivered[0]!.text).toContain(
+        "NO REPLY from Dolma (USA-3097 early-pay terms) by Mon 12:15 PM PT",
+      );
       expect(yield* h.use((w) => w.watches)).toEqual([]);
     }),
   );

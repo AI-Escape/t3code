@@ -278,10 +278,12 @@ const WaitForReplyTool = Tool.make("wait_for_reply", {
     "After you ask a customer, supplier or staff member something (an email, the client's own chat - the client's AGENTS.md says where each answers), be woken when they reply instead of scheduling wakes to look, then END YOUR TURN. t4 runs `check` in your checkout every minute or so at no AI cost; the first time it prints anything you get one message with that output, or one saying nobody replied by `deadline`. `email` builds the check from the user's mailbox (`email replies`). The dashboard shows you as waiting on `who`. Same `who` again replaces that watch; `cancel: true` ends it (for instance when the answer reached you another way).",
   parameters: Schema.Struct({
     who: Schema.String.annotate({
-      description: "Who you wait on, as the user knows them: \"Dolma\", \"Korin at Vollrath\".",
+      description: 'Who you wait on, as the user knows them: "Dolma", "Korin at Vollrath".',
     }),
     about: Schema.optional(
-      Schema.String.annotate({ description: "A few words: what you asked (\"USA-3097 early-pay terms\")." }),
+      Schema.String.annotate({
+        description: 'A few words: what you asked ("USA-3097 early-pay terms").',
+      }),
     ),
     check: Schema.optional(
       Schema.String.annotate({
@@ -295,9 +297,13 @@ const WaitForReplyTool = Tool.make("wait_for_reply", {
           Schema.String.annotate({ description: "Their address(es), comma-separated." }),
         ),
         thread: Schema.optional(
-          Schema.String.annotate({ description: "A message id in the conversation (from `email`)." }),
+          Schema.String.annotate({
+            description: "A message id in the conversation (from `email`).",
+          }),
         ),
-      }).annotate({ description: "Wait for mail from them and/or in that conversation, instead of `check`." }),
+      }).annotate({
+        description: "Wait for mail from them and/or in that conversation, instead of `check`.",
+      }),
     ),
     deadline: Schema.optional(
       Schema.String.annotate({
