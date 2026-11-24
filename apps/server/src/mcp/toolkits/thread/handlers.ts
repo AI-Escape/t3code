@@ -420,6 +420,15 @@ export const layer = McpToolAccess.toLayer(ThreadToolkit, {
               message: `a release manager is never ${input.action}d - it stays visible to the user. To hold a release until a time, \`schedule_task\` a wake into this thread for then and end your turn.`,
             });
           }
+          // AI-140: a standing role stays visible as the release manager does.
+          const role =
+            world === null ? undefined : T4Ledger.standingRoleOf(world, projection.thread.id);
+          if (role !== undefined) {
+            return yield* new OrchestratorMcpFailure({
+              code: "invalid_request",
+              message: `"${role.title}" is a standing role and is never ${input.action}d - it stays visible to the user. Its check-ins and triggers wake it; the user changes them in the dashboard (Settings -> Roles).`,
+            });
+          }
         }
       }
       let command: OrchestrationV2Command;

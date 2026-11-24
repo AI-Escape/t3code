@@ -41,6 +41,10 @@ function liveEntries(
   return entries.filter((entry) => entry.settledAt === null && !requesterClosed(entry, byId));
 }
 
+/** The standing role a thread holds (AI-140), if any. */
+export const standingRoleOf = (world: T4World, threadId: string): T4StandingRole | undefined =>
+  world.standingRoles?.get(threadId);
+
 export interface T4ThreadLedgerFacts {
   readonly isReleaseManager: boolean;
   /** Live entries this thread owes (open handoffs to it). */
@@ -49,10 +53,19 @@ export interface T4ThreadLedgerFacts {
   readonly owedBy: number;
 }
 
+/** A thread that is an enabled standing role's (AI-140). */
+export interface T4StandingRole {
+  readonly roleId: string;
+  readonly kind: string;
+  readonly title: string;
+}
+
 export interface T4World {
   readonly threads: ReadonlyArray<Shell>;
   readonly byId: ReadonlyMap<string, Shell>;
   readonly releaseManagers: ReadonlySet<string>;
+  /** Thread id -> its standing role (AI-140); absent in older fixtures. */
+  readonly standingRoles?: ReadonlyMap<string, T4StandingRole>;
   readonly open: ReadonlyArray<T4Store.T4Handoff>;
   readonly live: ReadonlyArray<T4Store.T4Handoff>;
 }
@@ -94,10 +107,18 @@ const make = Effect.gen(function* () {
     const byId = new Map(threads.map((thread) => [thread.id as string, thread]));
     const rms = yield* store.releaseManagers();
     const open = yield* store.openHandoffs();
+    const roles = yield* store.roles();
     return {
       threads,
       byId,
       releaseManagers: new Set(rms.values()),
+      standingRoles: new Map(
+        roles.flatMap((role) =>
+          role.enabled && role.threadId !== null
+            ? [[role.threadId, { roleId: role.id, kind: role.kind, title: role.title }] as const]
+            : [],
+        ),
+      ),
       open,
       live: liveEntries(open, byId),
     };

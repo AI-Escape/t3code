@@ -14,6 +14,7 @@ import * as T4LegacyImport from "./T4LegacyImport.ts";
 import * as T4AutoArchive from "./T4AutoArchive.ts";
 import * as T4ReleaseGuard from "./T4ReleaseGuard.ts";
 import * as T4Releases from "./T4Releases.ts";
+import * as T4Roles from "./T4Roles.ts";
 import * as T4Schedules from "./T4Schedules.ts";
 import * as T4ReplyWatch from "./T4ReplyWatch.ts";
 import * as T4RunWatch from "./T4RunWatch.ts";
@@ -51,6 +52,7 @@ export const layer = Layer.effectDiscard(
     yield* scheduler.register("t4-release-guard", yield* throttled(120_000, T4ReleaseGuard.sweep));
     yield* scheduler.register("t4-release-stale", yield* throttled(600_000, T4Releases.sweepStale));
     yield* scheduler.register("t4-auto-archive", yield* throttled(600_000, T4AutoArchive.sweep));
+    yield* scheduler.register("t4-roles", yield* throttled(60_000, T4Roles.sweep));
     yield* scheduler.register(
       "t4-schedule-models",
       yield* throttled(60_000, T4Schedules.syncDefaultModels),
