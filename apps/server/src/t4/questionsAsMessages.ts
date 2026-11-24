@@ -16,10 +16,8 @@ export const QUESTION_POSTED_NOTE =
   "again in this turn unless it left one out.";
 
 /**
- * Upstream's send_to_user instructions name "what a question you're about to ask refers to" as a
- * use. With message-mode questions the brief belongs in the final reply after asking: the
- * dashboard's card reads it from there, and usa-rs USA-3219's plan went out with send_to_user and
- * ended "The plan ... is in the message above" (AI-154).
+ * Upstream names a question's subject as a use of send_to_user; with message-mode questions the
+ * brief belongs in the final reply, where the dashboard's card reads it (AI-154).
  */
 export const T4_CLAUDE_SEND_TO_USER_INSTRUCTIONS = `
 ### Text the user must read mid-turn

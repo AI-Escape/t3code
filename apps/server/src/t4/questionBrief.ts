@@ -1,11 +1,7 @@
 /**
- * t4 fork (AI-116, AI-154): what the agent wrote for an open question - its brief - for the
- * dashboard's card and question window.
- *
- * Claude asks first and writes the brief right after (message-mode questions); Codex writes it
- * before asking. Text an agent posts with `send_to_user` is a tool call, not a message, so it is
- * passed in here as a message marked `sent`: usa-rs USA-3219 posted its plan that way, ended with
- * "The plan ... is in the message above", and the card showed only that line.
+ * t4 fork (AI-116, AI-154): an open question's brief. Claude writes it right after asking, Codex
+ * before. `send_to_user` text is a tool call, passed in marked `sent`: USA-3219 sent its plan that
+ * way and the card showed only "The plan ... is in the message above".
  */
 export interface QuestionMessage<RunId = string> {
   readonly role: string;
