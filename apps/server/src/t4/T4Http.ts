@@ -41,6 +41,7 @@ import * as T4Config from "./T4Config.ts";
 import * as T4Delivery from "./T4Delivery.ts";
 import { factsFor } from "./T4Facts.ts";
 import * as T4Ledger from "./T4Ledger.ts";
+import * as T4ReplyWatch from "./T4ReplyWatch.ts";
 import * as T4RunWatch from "./T4RunWatch.ts";
 import * as T4Schedules from "./T4Schedules.ts";
 import * as T4Spawn from "./T4Spawn.ts";
@@ -240,6 +241,25 @@ export const layer = Layer.mergeAll(
         runWatches: yield* Effect.serviceOption(T4RunWatch.T4RunWatch).pipe(
           Effect.flatMap((service) =>
             service._tag === "Some" ? service.value.watches : Effect.succeed([]),
+          ),
+        ),
+        // Who a thread waits on outside t4 (wait_for_reply, AI-143): "Waiting on Dolma".
+        replyWatches: yield* Effect.serviceOption(T4ReplyWatch.T4ReplyWatch).pipe(
+          Effect.flatMap((service) =>
+            service._tag === "Some" ? service.value.watches : Effect.succeed([]),
+          ),
+          Effect.map((list) =>
+            list.map((w) => ({
+              threadId: w.threadId,
+              who: w.who,
+              about: w.about,
+              via: w.via,
+              since: DateTime.formatIso(DateTime.makeUnsafe(w.since)),
+              deadline: DateTime.formatIso(DateTime.makeUnsafe(w.deadline)),
+              lastCheck:
+                w.lastCheck > 0 ? DateTime.formatIso(DateTime.makeUnsafe(w.lastCheck)) : null,
+              failing: w.failures > 0 ? w.lastError : null,
+            })),
           ),
         ),
       });

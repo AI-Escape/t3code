@@ -17,6 +17,7 @@ import * as Project from "../../../project/ProjectService.ts";
 import * as T4Config from "../../../t4/T4Config.ts";
 import * as T4Delivery from "../../../t4/T4Delivery.ts";
 import * as T4Ledger from "../../../t4/T4Ledger.ts";
+import * as T4ReplyWatch from "../../../t4/T4ReplyWatch.ts";
 import * as T4RunWatch from "../../../t4/T4RunWatch.ts";
 import * as T4Store from "../../../t4/T4Store.ts";
 
@@ -269,6 +270,65 @@ const WatchWorkflowRunTool = Tool.make("watch_workflow_run", {
   // t4 fork: acts as the calling thread, so outside clients never see it.
   .annotate(McpSchema.EnabledWhen, McpInvocationContext.hiddenFromOutsideClients);
 
+// t4 fork (AI-143): a thread waiting on someone outside t4 - a customer, supplier or staff member.
+const WaitForReplyTool = Tool.make("wait_for_reply", {
+  ...common,
+  dependencies: [...common.dependencies, T4ReplyWatch.T4ReplyWatch],
+  description:
+    "After you ask a customer, supplier or staff member something (an email, the client's own chat - the client's AGENTS.md says where each answers), be woken when they reply instead of scheduling wakes to look, then END YOUR TURN. t4 runs `check` in your checkout every minute or so at no AI cost; the first time it prints anything you get one message with that output, or one saying nobody replied by `deadline`. `email` builds the check from the user's mailbox (`email replies`). The dashboard shows you as waiting on `who`. Same `who` again replaces that watch; `cancel: true` ends it (for instance when the answer reached you another way).",
+  parameters: Schema.Struct({
+    who: Schema.String.annotate({
+      description: 'Who you wait on, as the user knows them: "Dolma", "Korin at Vollrath".',
+    }),
+    about: Schema.optional(
+      Schema.String.annotate({
+        description: 'A few words: what you asked ("USA-3097 early-pay terms").',
+      }),
+    ),
+    check: Schema.optional(
+      Schema.String.annotate({
+        description:
+          "A shell command that prints the reply once it exists and nothing before (exit 0 either way), e.g. `usars chat replies USA-3097 --since 2026-11-23T20:09:43Z --from Dolma`. It must return at once, never wait.",
+      }),
+    ),
+    email: Schema.optional(
+      Schema.Struct({
+        from: Schema.optional(
+          Schema.String.annotate({ description: "Their address(es), comma-separated." }),
+        ),
+        thread: Schema.optional(
+          Schema.String.annotate({
+            description: "A message id in the conversation (from `email`).",
+          }),
+        ),
+      }).annotate({
+        description: "Wait for mail from them and/or in that conversation, instead of `check`.",
+      }),
+    ),
+    deadline: Schema.optional(
+      Schema.String.annotate({
+        description:
+          "How long to wait: 5m, 1h, 2d (up to 14d). Default 1h for `check`, 2d for `email`; the client's AGENTS.md may set it by urgency.",
+      }),
+    ),
+    every: Schema.optional(
+      Schema.String.annotate({
+        description: "How often to check (1m-60m). Default 1m for waits of 3h or less, else 5m.",
+      }),
+    ),
+    cancel: Schema.optional(Schema.Boolean),
+  }),
+  success: Schema.Struct({
+    waiting: Schema.Boolean,
+    who: Schema.String,
+    check: Schema.String,
+    deadline: Schema.String,
+    next: Schema.String,
+  }),
+})
+  .annotate(Tool.Destructive, false)
+  .annotate(McpSchema.EnabledWhen, McpInvocationContext.hiddenFromOutsideClients);
+
 const ReleaseState = Schema.Literals(T4Store.RELEASE_STATES);
 
 const ReleaseEntry = Schema.Struct({
@@ -365,5 +425,6 @@ export const T4Toolkit = Toolkit.make(
   ListThreadIssuesTool,
   SetThreadRoleTool,
   WatchWorkflowRunTool,
+  WaitForReplyTool,
   ReleaseQueueTool,
 );

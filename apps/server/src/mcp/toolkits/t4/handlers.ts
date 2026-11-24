@@ -29,6 +29,7 @@ import * as T4Delivery from "../../../t4/T4Delivery.ts";
 import * as FyiDigest from "../../../t4/fyiDigest.ts";
 import * as T4Ledger from "../../../t4/T4Ledger.ts";
 import * as T4Releases from "../../../t4/T4Releases.ts";
+import * as T4ReplyWatch from "../../../t4/T4ReplyWatch.ts";
 import * as T4RunWatch from "../../../t4/T4RunWatch.ts";
 import * as T4Store from "../../../t4/T4Store.ts";
 import * as ToolCallLog from "../../../t4/toolCallLog.ts";
@@ -981,6 +982,96 @@ export const layer = McpToolAccess.toLayer(T4Toolkit, {
         next: watching
           ? "End your turn now. A message arrives here when the run finishes (checked every 30 s); handoffs reach you meanwhile."
           : "The run already finished; act on its conclusion now.",
+      };
+    }),
+  ),
+
+  wait_for_reply: McpToolAccess.actsAsCaller((input) =>
+    Effect.gen(function* () {
+      const me = yield* callerThread;
+      const replyWatch = yield* T4ReplyWatch.T4ReplyWatch;
+      const who = input.who.trim();
+      if (who.length === 0) return yield* invalid("`who` is required: who you wait on");
+      if (input.cancel === true) {
+        const gone = yield* replyWatch.cancel(me.id, who);
+        return {
+          waiting: false,
+          who,
+          check: gone[0]?.check ?? "",
+          deadline: "",
+          next:
+            gone.length > 0
+              ? `Stopped waiting on ${who}.`
+              : `You weren't waiting on ${who}; nothing to cancel.`,
+        };
+      }
+      const now = yield* Clock.currentTimeMillis;
+      let check = input.check?.trim() ?? "";
+      let via: string | null = null;
+      if (input.email !== undefined) {
+        if (check.length > 0) return yield* invalid("give `check` or `email`, not both");
+        const from = input.email.from?.trim() ?? "";
+        const thread = input.email.thread?.trim() ?? "";
+        if (from.length === 0 && thread.length === 0)
+          return yield* invalid(
+            "`email` needs `from` (their address) and/or `thread` (a message id)",
+          );
+        const quote = (text: string) => `'${text.replaceAll("'", "'\\''")}'`;
+        check = [
+          "email replies",
+          `--since ${DateTime.formatIso(DateTime.makeUnsafe(now))}`,
+          from.length > 0 ? `--from ${quote(from)}` : null,
+          thread.length > 0 ? `--thread ${quote(thread)}` : null,
+        ]
+          .filter((part) => part !== null)
+          .join(" ");
+        via = "email";
+      }
+      if (check.length === 0)
+        return yield* invalid(
+          "give `check` (a command that prints their reply once it exists) or `email` ({from} / {thread})",
+        );
+      const deadlineMs = T4ReplyWatch.parseDuration(
+        input.deadline ?? (via === "email" ? "2d" : "1h"),
+      );
+      if (deadlineMs === null || deadlineMs < 60_000 || deadlineMs > T4ReplyWatch.MAX_DEADLINE_MS)
+        return yield* invalid("`deadline` is a time from 1m to 14d, like 30m, 2h or 3d");
+      const everyMs =
+        input.every === undefined
+          ? T4ReplyWatch.defaultEvery(deadlineMs)
+          : T4ReplyWatch.parseDuration(input.every);
+      if (
+        everyMs === null ||
+        everyMs < T4ReplyWatch.MIN_EVERY_MS ||
+        everyMs > T4ReplyWatch.MAX_EVERY_MS
+      )
+        return yield* invalid("`every` is 1m to 60m");
+      const project =
+        me.worktreePath === null
+          ? yield* Project.ProjectService.pipe(
+              Effect.flatMap((projects) => projects.getById(me.projectId)),
+              Effect.map(Option.getOrUndefined),
+              Effect.orElseSucceed(() => undefined),
+            )
+          : undefined;
+      const { watch, replaced } = yield* replyWatch
+        .watch({
+          threadId: me.id,
+          who,
+          about: input.about?.trim() || null,
+          check,
+          via: via ?? (/^\s*usars\s+chat\b/.test(check) ? "chat" : null),
+          cwd: me.worktreePath ?? project?.workspaceRoot ?? null,
+          deadlineMs,
+          everyMs,
+        })
+        .pipe(Effect.mapError((error) => invalid(error.message)));
+      return {
+        waiting: true,
+        who,
+        check,
+        deadline: T4ReplyWatch.pacific(watch.deadline),
+        next: `${replaced ? "Replaced your earlier watch on " + who + ". " : ""}End your turn now. You get one message when ${who} replies (checked every ${Math.round(everyMs / 60_000)} min) or at ${T4ReplyWatch.pacific(watch.deadline)} if nobody has; the dashboard shows you as waiting on ${who}. Don't post the user a card while you wait.`,
       };
     }),
   ),

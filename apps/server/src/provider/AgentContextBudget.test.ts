@@ -50,6 +50,7 @@ import { VcsStatusBroadcaster } from "../vcs/VcsStatusBroadcaster.ts";
 import { T4ServerConfig, defaultT4ServerConfig } from "../t4/T4Config.ts";
 import { T4Delivery } from "../t4/T4Delivery.ts";
 import { T4Ledger } from "../t4/T4Ledger.ts";
+import { T4ReplyWatch } from "../t4/T4ReplyWatch.ts";
 import { T4RunWatch } from "../t4/T4RunWatch.ts";
 import { T4Store } from "../t4/T4Store.ts";
 import { buildCodexAdditionalContext } from "./CodexDeveloperInstructions.ts";
@@ -80,6 +81,7 @@ const toolHandlerServices = Layer.mergeAll(
   // t4 fork: t3_decisions reads T3's database (t4/T4Decisions.ts).
   NodeSqliteClient.layer({ filename: ":memory:" }),
   Layer.mock(T4RunWatch)({}),
+  Layer.mock(T4ReplyWatch)({}),
   Layer.succeed(T4ServerConfig, defaultT4ServerConfig),
   Layer.mock(PeerLinkRequests)({}),
   Layer.mock(PeerLinks)({}),
