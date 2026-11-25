@@ -151,6 +151,23 @@ describe("evaluatePullRequestWatch", () => {
     );
   });
 
+  it.each([false, true])(
+    "reports checks that passed before the first read when CI ran at the start (required: %s)",
+    (required) => {
+      // t4 (AI-158): a docs-only PR's CI finished before the watch's first read.
+      const green = detail({ checks: [{ ...check("test", "success"), required }] });
+      const first = evaluatePullRequestWatch(
+        watch({ awaitingBaseline: "all", checksPending: true }),
+        green,
+        noRemarks,
+      );
+      assert.deepEqual(first.changes, [{ kind: "checks-passed", count: 1, required }]);
+      assert.isTrue(first.next.passed);
+      assert.isFalse(first.next.checksPending);
+      assert.deepEqual(evaluatePullRequestWatch(first.next, green, noRemarks).changes, []);
+    },
+  );
+
   it("baselines existing failures and conflicts, then reports new ones", () => {
     const broken = detail({
       checks: [check("lint", "failure"), check("test", "pending")],

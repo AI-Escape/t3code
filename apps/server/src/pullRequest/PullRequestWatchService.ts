@@ -144,7 +144,11 @@ const make = Effect.gen(function* () {
           Effect.flatMap((summary) =>
             summary.state === "merged"
               ? Effect.fail(new PullRequestNotOpenError({ state: "merged" }))
-              : Effect.succeed(summary.checksState === "pending"),
+              : // t4 (AI-158): no checks yet counts as pending - a new PR's CI often registers
+                // after the watch starts, and a docs-only run can finish before the first read.
+                Effect.succeed(
+                  summary.checksState !== "passing" && summary.checksState !== "failing",
+                ),
           ),
           Effect.catchTags({
             // Host and transport errors can recover while the watch is active.

@@ -158,7 +158,10 @@ export function evaluatePullRequestWatch(
       checks.every((check) => check.status !== "pending");
     owedChecks = owed;
     if (passedNow && (!passed || gateGrew)) {
-      if (!checksBaseline) {
+      // Like a failure, a pass the baseline read finds is news when CI was still running (or
+      // not yet reported) as the watch started (t4, AI-158: usa-rs #4181 went green before the
+      // first read and its thread waited 25 h for a wake).
+      if (!checksBaseline || watch.checksPending === true) {
         changes.push({ kind: "checks-passed", count: gate.length, required: required.length > 0 });
       }
       owedChecks =

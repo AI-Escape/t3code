@@ -171,7 +171,9 @@ describe("PullRequestWatchService", () => {
       const cases: ReadonlyArray<readonly [HarnessOptions, boolean | undefined]> = [
         [{ readChecksState: "pending" }, true],
         [{ readChecksState: "failing" }, false],
-        [{}, false],
+        [{ readChecksState: "passing" }, false],
+        // t4 (AI-158): no checks reported yet - CI may still register and finish before the first read.
+        [{}, true],
         [
           {
             readFailure: new PullRequestOperationError({
