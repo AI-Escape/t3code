@@ -2,7 +2,7 @@
  * t4 fork: what release managers, owners and waiters are told about the release queue, so none
  * of them polls it: a release manager's handoffs and wakes carry its queue and debts.
  */
-import { ThreadId } from "@t3tools/contracts";
+import { type OrchestrationV2ThreadShell, ThreadId } from "@t3tools/contracts";
 import * as Clock from "effect/Clock";
 import * as Effect from "effect/Effect";
 
@@ -212,3 +212,70 @@ export const sweepStale = Effect.gen(function* () {
       .pipe(Effect.ignore);
   }
 }).pipe(Effect.ignoreCause({ log: true }));
+
+/*
+ * A PR merged into a feature branch. Only the release manager merges, so every child PR of a PM's
+ * feature branch goes through it, and its `merged` reached only the PR's owner: a usa-rs PM never
+ * heard two children land and sat 12 h waiting on them.
+ */
+
+/** The branch a PR targets, from its owner's linked PR (T3 keeps the snapshot current). */
+export const baseBranchOf = (
+  owner: Pick<OrchestrationV2ThreadShell, "pullRequests"> | undefined,
+  pr: number,
+): string | undefined =>
+  owner?.pullRequests?.find((link) => link.number === pr && link.snapshot !== null)?.snapshot
+    ?.baseBranch;
+
+/** A base that is not the release branch: the release manager's checkout sits on that one. */
+export const isFeatureBranch = (base: string, releaseBranch: string | null): boolean =>
+  base !== releaseBranch && base !== "main" && base !== "master";
+
+/** The open threads working on `branch` in its project, in a worktree of their own. */
+export const branchThreads = <
+  T extends Pick<
+    OrchestrationV2ThreadShell,
+    "id" | "projectId" | "branch" | "worktreePath" | "archivedAt" | "deletedAt"
+  >,
+>(
+  threads: ReadonlyArray<T>,
+  projectId: string,
+  branch: string,
+): ReadonlyArray<T> =>
+  threads.filter(
+    (thread) =>
+      thread.projectId === projectId &&
+      thread.branch === branch &&
+      thread.worktreePath !== null &&
+      thread.archivedAt === null &&
+      thread.deletedAt === null,
+  );
+
+type MergedRow = Pick<Row, "pr" | "title" | "commitSha">;
+
+const mergedList = (rows: ReadonlyArray<MergedRow>) =>
+  rows
+    .map(
+      (row) =>
+        `PR #${row.pr}${row.title ? ` ("${row.title.slice(0, 80)}")` : ""}${row.commitSha ? ` at ${row.commitSha.slice(0, 10)}` : ""}`,
+    )
+    .join("; ");
+
+/** What the owner, the branch's own thread and a waiter each hear of a feature-branch merge. */
+export const featureMergeNotice = (
+  to: "owner" | "branch" | "waiter",
+  rows: ReadonlyArray<MergedRow>,
+  base: string,
+  note: string | null,
+): string => {
+  const list = mergedList(rows);
+  const tail = note ? ` ${note}` : "";
+  switch (to) {
+    case "owner":
+      return `merged: ${list} into \`${base}\` - no release ride. Stay; your issue closes when that branch ships.${tail}`;
+    case "branch":
+      return `merged into your branch \`${base}\`: ${list}. Bring it into your checkout. Its owner stays until your branch ships.${tail}`;
+    case "waiter":
+      return `release: ${list}, which you are waiting on, merged into \`${base}\`. It reaches production when that branch ships.`;
+  }
+};

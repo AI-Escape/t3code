@@ -370,7 +370,7 @@ const ReleaseQueueTool = Tool.make("release_queue", {
     "The release manager's queue, kept by t4 (the dashboard shows it as what is on staging). Without `prs`: the PRs not yet shipped, oldest first, as compact rows (`changed` marks rows changed since your last read; `detail` for full rows). A release manager sees its whole queue; any other thread sees its own PRs and those it waits on (`all`: the whole project, plus PRs shipped in the last 7 days). Owners hear `staging:` and `shipped:` without reading it, and a PR queued 2 h or staged 4 h gets its owner a note - no wakes to check.",
     "`waitFor` a PR (any project) blocking your work: you get its staging and shipped notices too; `stopWaiting` undoes it.",
     "With `prs` (release manager only): record each PR's state: queued (handed off, not merged), merged (on the release branch), staging, held (waiting on the user, e.g. a promotion they gate), shipped (live), failed, dropped (won't ship from here: withdrawn, cancelled, transferred; removes it). An owner's handoff naming its PR queues it. A write returns only its rows and a count.",
-    "Moving a PR to staging, shipped, failed or dropped notifies its owner (staging: fyi; shipped, dropped: done + fyi; failed: done + ask, `note` as the cause) and its waiters - one message per owner per call; `notify: false` records only.",
+    "Moving a PR to staging, shipped, failed or dropped notifies its owner (staging: fyi; shipped, dropped: done + fyi; failed: done + ask, `note` as the cause) and its waiters - one message per owner per call; `merged` into a feature branch tells its owner, the thread on that branch and its waiters; `notify: false` records only.",
   ].join(" "),
   parameters: Schema.Struct({
     prs: Schema.optional(

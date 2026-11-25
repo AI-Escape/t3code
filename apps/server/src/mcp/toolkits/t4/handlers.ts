@@ -26,6 +26,7 @@ import { threadPullRequestsOf } from "../../../sourceControl/threadPullRequests.
 import * as T4Config from "../../../t4/T4Config.ts";
 import * as T4Decisions from "../../../t4/T4Decisions.ts";
 import * as T4Delivery from "../../../t4/T4Delivery.ts";
+import * as T4Facts from "../../../t4/T4Facts.ts";
 import * as FyiDigest from "../../../t4/fyiDigest.ts";
 import * as T4Ledger from "../../../t4/T4Ledger.ts";
 import * as T4Releases from "../../../t4/T4Releases.ts";
@@ -1251,6 +1252,138 @@ export const layer = McpToolAccess.toLayer(T4Toolkit, {
                 .pipe(Effect.mapError(ledgerUnavailable));
             }
             notified.push(`${state}: "${target.title}" (${prs.map((pr) => `#${pr}`).join(", ")})`);
+          }
+          // A PR merged into a feature branch: its owner, the thread working on that
+          // branch (a PM) and its waiters hear it. Only the release manager merges, so nobody
+          // else would tell the PM its child landed.
+          const merges = new Map<string, Array<T4Store.T4ReleaseRow>>();
+          for (const row of changed) {
+            if (row.state !== "merged") continue;
+            const owner =
+              row.ownerThreadId === null ? undefined : world.byId.get(row.ownerThreadId);
+            const base = T4Releases.baseBranchOf(owner, row.pr);
+            if (base === undefined || !T4Releases.isFeatureBranch(base, me.branch)) continue;
+            merges.set(base, [...(merges.get(base) ?? []), row]);
+          }
+          if (merges.size > 0) {
+            const parents = yield* store
+              .spawnParents()
+              .pipe(Effect.orElseSucceed(() => new Map<string, string>()));
+            const given = yield* store
+              .threadRoles()
+              .pipe(Effect.orElseSucceed(() => new Map<string, T4Store.T4SetRole>()));
+            const live = (id: string | null | undefined) => {
+              const thread = id == null ? undefined : world.byId.get(id);
+              return thread === undefined || isRetired(thread) ? undefined : thread;
+            };
+            // No thread on the branch: the nearest PM above the owner in who launched whom.
+            const pmAbove = (threadId: string) => {
+              let id = parents.get(threadId);
+              for (let hops = 0; id !== undefined && hops < 6; hops++) {
+                const thread = live(id);
+                if (
+                  thread !== undefined &&
+                  T4Facts.roleOf(thread, ledger.isReleaseManager(world, thread), given) === "pm"
+                ) {
+                  return thread;
+                }
+                id = parents.get(id);
+              }
+              return undefined;
+            };
+            const send = (target: Shell, text: string, label: string) =>
+              delivery
+                .deliver({ target, text, senderThreadId: me.id, patient: true, notice: true })
+                .pipe(
+                  Effect.result,
+                  Effect.map((sent) => {
+                    if (Result.isSuccess(sent)) notified.push(label);
+                    else notes.push(`couldn't reach "${target.title}": ${sent.failure.message}`);
+                  }),
+                );
+            for (const [base, rows] of merges) {
+              const told = new Set<string>([me.id]);
+              const noteOf = (list: ReadonlyArray<T4Store.T4ReleaseRow>) =>
+                list
+                  .map((row) => row.note)
+                  .filter((note): note is string => note !== null)
+                  .join(" ") || null;
+              const byOwner = new Map<string, Array<T4Store.T4ReleaseRow>>();
+              for (const row of rows) {
+                if (row.ownerThreadId === null) {
+                  notes.push(
+                    `PR #${row.pr} has no owner recorded - pass \`owner\` so it hears it merged`,
+                  );
+                  continue;
+                }
+                byOwner.set(row.ownerThreadId, [...(byOwner.get(row.ownerThreadId) ?? []), row]);
+              }
+              for (const [ownerId, ownerRows] of byOwner) {
+                const target = live(ownerId);
+                const prs = ownerRows.map((row) => `#${row.pr}`).join(", ");
+                if (target === undefined) {
+                  notes.push(
+                    `"${ownerRows[0]!.ownerTitle ?? ownerId}" is archived or gone - no merged notice for ${prs}`,
+                  );
+                  continue;
+                }
+                told.add(target.id);
+                yield* store
+                  .settleHandoffs({ fromThreadId: target.id, toThreadId: me.id })
+                  .pipe(Effect.mapError(ledgerUnavailable));
+                yield* send(
+                  target,
+                  handoffHeader(me, ["answers your handoff", "no reply needed"]) +
+                    T4Releases.featureMergeNotice("owner", ownerRows, base, noteOf(ownerRows)),
+                  `merged: "${target.title}" (${prs})`,
+                );
+              }
+              let onBranch: ReadonlyArray<Shell> = T4Releases.branchThreads(
+                world.threads,
+                me.projectId,
+                base,
+              ).filter(
+                (thread) =>
+                  !told.has(thread.id) &&
+                  !isRetired(thread) &&
+                  !ledger.isReleaseManager(world, thread),
+              );
+              if (onBranch.length === 0) {
+                const above = new Map<string, Shell>();
+                for (const ownerId of byOwner.keys()) {
+                  const pm = pmAbove(ownerId);
+                  if (pm !== undefined && !told.has(pm.id)) above.set(pm.id, pm);
+                }
+                onBranch = [...above.values()];
+              }
+              if (onBranch.length === 0) {
+                notes.push(`no open thread works on \`${base}\` - tell its PM yourself`);
+              }
+              for (const target of onBranch) {
+                told.add(target.id);
+                yield* send(
+                  target,
+                  handoffHeader(me, ["no reply needed"]) +
+                    T4Releases.featureMergeNotice("branch", rows, base, noteOf(rows)),
+                  `merged into ${base}: "${target.title}" (${rows.map((row) => `#${row.pr}`).join(", ")})`,
+                );
+              }
+              for (const row of rows) {
+                const waiters = yield* store
+                  .releaseWaiters({ projectId: row.projectId, pr: row.pr })
+                  .pipe(Effect.orElseSucceed(() => []));
+                for (const waiter of waiters) {
+                  const target = live(waiter.threadId);
+                  if (target === undefined || told.has(target.id)) continue;
+                  told.add(target.id);
+                  yield* send(
+                    target,
+                    T4Releases.featureMergeNotice("waiter", [row], base, null),
+                    `merged (waiting): "${target.title}" (#${row.pr})`,
+                  );
+                }
+              }
+            }
           }
           // Threads waiting on these PRs hear it too, never twice with their owner's notice.
           const projectTitle =

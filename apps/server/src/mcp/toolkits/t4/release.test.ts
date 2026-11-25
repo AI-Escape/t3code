@@ -79,6 +79,20 @@ const OWNER = ThreadId.make("t4-owner-0001");
 const OTHER = ThreadId.make("t4-owner-0002");
 const WAITER = ThreadId.make("t4-waiter-0001");
 const RM = ThreadId.make("t4-rm-0001");
+const CHILD = ThreadId.make("t4-child-0001");
+const BRANCH_PM = ThreadId.make("t4-pm-0001");
+const CHILD2 = ThreadId.make("t4-child-0002");
+const LAUNCHER_PM = ThreadId.make("t4-pm-0002");
+const linkedTo = (number: number, baseBranch: string) => ({
+  host: "github.com",
+  repository: "acme/app",
+  number,
+  url: `https://github.com/acme/app/pull/${number}`,
+  source: "agent",
+  linkedAt: "2026-11-24T00:00:00.000Z",
+  snapshot: { baseBranch },
+  stack: null,
+});
 const shells = new Map([
   [
     OWNER,
@@ -102,6 +116,40 @@ const shells = new Map([
   ],
   [OTHER, { ...McpToolAccessTestkit.liveThreadShell(OTHER), title: "USA-10 Other" }],
   [WAITER, { ...McpToolAccessTestkit.liveThreadShell(WAITER), title: "USA-455 Waits" }],
+  [
+    CHILD,
+    {
+      ...McpToolAccessTestkit.liveThreadShell(CHILD),
+      title: "USA-3188 Viewer",
+      pullRequests: [linkedTo(4257, "feature/edi")],
+    } as never,
+  ],
+  [
+    BRANCH_PM,
+    {
+      ...McpToolAccessTestkit.liveThreadShell(BRANCH_PM),
+      title: "USA-3133 EDI",
+      branch: "feature/edi",
+      worktreePath: "/t3/worktrees/edi",
+    },
+  ],
+  [
+    CHILD2,
+    {
+      ...McpToolAccessTestkit.liveThreadShell(CHILD2),
+      title: "USA-20 Piece",
+      pullRequests: [linkedTo(4300, "feature/other")],
+    } as never,
+  ],
+  [
+    LAUNCHER_PM,
+    {
+      ...McpToolAccessTestkit.liveThreadShell(LAUNCHER_PM),
+      title: "PM: USA-19 Program",
+      branch: "session/program",
+      worktreePath: "/t3/worktrees/program",
+    },
+  ],
   [
     RM,
     {
@@ -391,5 +439,61 @@ it.effect(
       expect(keyed.isError).toBe(false);
       expect(keyedAgain.body.notes[0]).toMatch(/clientRequestId - not sent again$/);
       expect(delivered).toHaveLength(2);
+    }).pipe(Effect.provide(layer)),
+);
+
+it.effect(
+  "a PR merged into a feature branch reaches its owner, the thread on that branch and waiters",
+  () =>
+    Effect.gen(function* () {
+      const store = yield* T4Store.T4Store;
+      delivered.length = 0;
+      yield* call(CHILD, "t3_handoff", { message: "PR #4257 green, into feature/edi (USA-3188)" });
+      yield* call(WAITER, "release_queue", { waitFor: { pr: 4257 } });
+      delivered.length = 0;
+      const merged = yield* call(RM, "release_queue", {
+        prs: [{ pr: 4257, state: "merged", commit: "c0c4dbae54aa", note: "Squash merged." }],
+      });
+      expect(merged.body.notified).toEqual([
+        'merged: "USA-3188 Viewer" (#4257)',
+        'merged into feature/edi: "USA-3133 EDI" (#4257)',
+        'merged (waiting): "USA-455 Waits" (#4257)',
+      ]);
+      expect(delivered.map((d) => d.to)).toEqual([CHILD, BRANCH_PM, WAITER]);
+      expect(delivered[0]!.text).toContain(
+        'merged: PR #4257 ("USA-3188 Viewer") at c0c4dbae54 into `feature/edi` - no release ride.',
+      );
+      expect(delivered[0]!.text).toContain("answers your handoff");
+      expect(delivered[1]!.text).toContain(
+        'merged into your branch `feature/edi`: PR #4257 ("USA-3188 Viewer") at c0c4dbae54. Bring it into your checkout.',
+      );
+      expect(delivered[2]!.text).toContain("which you are waiting on, merged into `feature/edi`");
+      // The owner's handoff is answered: the release manager no longer owes it.
+      expect((yield* store.openHandoffs()).some((h) => h.fromThreadId === CHILD)).toBe(false);
+
+      // No thread on the branch: the PM that launched the owner hears it instead.
+      yield* store.recordHandoff({
+        kind: "spawn",
+        fromThreadId: LAUNCHER_PM,
+        fromTitle: "PM: USA-19 Program",
+        toThreadId: CHILD2,
+        projectId: McpToolAccessTestkit.liveThreadShell(CHILD2).projectId,
+        summary: "Own USA-20",
+      });
+      delivered.length = 0;
+      const fallback = yield* call(RM, "release_queue", {
+        prs: [{ pr: 4300, state: "merged", owner: "USA-20 Piece" }],
+      });
+      expect(fallback.body.notified).toEqual([
+        'merged: "USA-20 Piece" (#4300)',
+        'merged into feature/other: "PM: USA-19 Program" (#4300)',
+      ]);
+
+      // A merge into the release branch tells no one yet: staging and shipped do.
+      delivered.length = 0;
+      yield* call(RM, "release_queue", {
+        prs: [{ pr: 4301, state: "merged", owner: "USA-9 Fix" }],
+      });
+      expect(delivered).toEqual([]);
     }).pipe(Effect.provide(layer)),
 );
